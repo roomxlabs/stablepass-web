@@ -354,6 +354,39 @@ test("W9 account screen renders (Subscription + Profile + Notifications, no Devi
   }
 });
 
+test("W10 checkout screen renders (order summary + graceful no-Stripe-keys placeholder)", async ({ page }) => {
+  const email = `w10-harness-${Date.now()}@stablepass.test`;
+  const password = "harness-password-123!";
+  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+  // Seed a confirmed local-Supabase user — the createUser trigger provisions
+  // the trial subscription the checkout gate/copy reads. No real Stripe keys
+  // exist in this environment, so /api/subscription/checkout resolves 502
+  // stripe_unavailable and the screen renders its graceful placeholder — that
+  // gap is expected/disclosed (see .rx/review notes), not a bug.
+  const { data: userData, error: userError } = await admin.auth.admin.createUser({ email, password, email_confirm: true });
+  if (userError) throw userError;
+
+  try {
+    await page.goto("/signin");
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password").fill(password);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.waitForURL("**/explore");
+
+    await page.goto("/checkout");
+    await expect(page.getByText("Order summary")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Continue your access." })).toBeVisible();
+    await expect(page.getByText(/connect a Stripe key to enable checkout/i)).toBeVisible();
+
+    await page.screenshot({ path: ".rx/review/w10-checkout.png", fullPage: true });
+  } finally {
+    if (userData?.user?.id) {
+      await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});
+    }
+  }
+});
+
 test("W7 horses browse list renders", async ({ page }) => {
   const email = `w7-list-harness-${Date.now()}@stablepass.test`;
   const password = "harness-password-123!";
