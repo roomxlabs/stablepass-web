@@ -414,3 +414,101 @@ a { color: inherit; text-decoration: none; }
 .onboarding-foot-web .count { font-size: 13.5px; color: var(--muted); }
 .onboarding-empty { text-align: center; color: var(--muted); padding: 60px 0; }
 @media (max-width: 900px) { .onboarding-grid-web { grid-template-columns: repeat(2, 1fr); } }
+
+/* ====================================================================
+   SHARED MEMBER COMPONENTS (W4) — post card, media, reactions, cards
+   From 06-explore.html / 07-horse-profile.html / style.css
+   ==================================================================== */
+.post-web { background: var(--white); border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; margin-bottom: 24px; }
+.post-head-web { display: flex; align-items: center; gap: 12px; padding: 16px 22px 14px; }
+.post-avatar-web {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--brand-green-light), var(--brand-green));
+  display: flex; align-items: center; justify-content: center;
+  color: var(--cream); font-family: var(--font-serif); font-size: 18px; font-weight: 600; flex-shrink: 0;
+}
+.post-meta-web { flex: 1; min-width: 0; }
+.post-meta-web .post-horse { font-family: var(--font-serif); font-size: 18px; font-weight: 600; margin: 0; line-height: 1.2; }
+.post-meta-web .post-byline { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.post-meta-web .post-byline .by-trainer { color: var(--brand-green); font-weight: 500; }
+.post-more-web { color: var(--muted); background: none; border: none; cursor: pointer; padding: 4px; }
+
+.post-media-web { position: relative; background: var(--brand-green-dark); aspect-ratio: 16/9; overflow: hidden; }
+.post-media-web img, .post-media-web video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.post-media-web.tall { aspect-ratio: 4/5; }
+.post-media-web.square { aspect-ratio: 1/1; }
+.post-media-web .media-play {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 64px; height: 64px; border-radius: 50%; background: rgba(255,255,255,0.95);
+  display: flex; align-items: center; justify-content: center; color: var(--brand-green-dark);
+  border: none; cursor: pointer;
+}
+.post-media-web .media-play .ic { width: 22px; height: 22px; margin-left: 3px; }
+.post-media-web .media-duration {
+  position: absolute; bottom: 14px; left: 14px;
+  background: rgba(0,0,0,0.6); color: #fff; font-size: 11.5px; font-weight: 500;
+  padding: 4px 9px; border-radius: var(--radius-pill); font-variant-numeric: tabular-nums;
+}
+
+/* Brand + forensic viewer-id overlay (deterrence only; asset never modified). */
+.post-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.post-overlay .brand-mark {
+  position: absolute; bottom: 14px; right: 16px;
+  font-family: var(--font-serif); font-size: 18px; font-weight: 600;
+  color: rgba(250,247,242,0.85); text-shadow: 0 1px 4px rgba(0,0,0,0.4); letter-spacing: -0.01em;
+}
+.post-overlay .viewer-id {
+  position: absolute; top: 12px; left: 14px;
+  font-family: var(--font-sans); font-size: 10px; letter-spacing: 0.14em;
+  color: rgba(250,247,242,0.28); text-transform: uppercase; user-select: none;
+}
+
+.post-body-web { padding: 16px 22px; font-size: 15px; line-height: 1.55; color: var(--ink); }
+.post-actions-web { display: flex; align-items: center; gap: 18px; padding: 0 22px 18px; }
+.action-web { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; background: none; border: none; padding: 0; font-family: var(--font-sans); }
+.action-web .ic { width: 18px; height: 18px; }
+.action-web.liked { color: var(--brand-green); font-weight: 600; }
+.action-web.liked .ic { fill: var(--brand-green); stroke: var(--brand-green); }
+.action-web.bookmarked .ic { fill: var(--brand-green); stroke: var(--brand-green); }
+.action-spacer-web { flex: 1; }
+.reactions-web { display: flex; margin-left: -4px; }
+.reactions-web button, .reactions-web span {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; font-size: 14px; line-height: 1;
+  background: var(--white); border: 1px solid var(--line); border-radius: 50%;
+  margin-left: -4px; cursor: pointer; padding: 0;
+}
+.reactions-web button:hover { border-color: var(--brand-green); }
+.reactions-web button.on { background: var(--brand-green-soft); border-color: var(--brand-green); }
+
+.race-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--brand-green); color: var(--cream);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 5px 11px; border-radius: var(--radius-pill); margin-bottom: 8px;
+}
+.race-badge::before { content: ''; width: 6px; height: 6px; background: var(--cream); border-radius: 50%; }
+.race-badge.result { background: var(--gold); color: var(--ink); }
+.race-badge.result::before { background: var(--ink); }
+
+/* Aside cards + race-day band + trainer/horse rows */
+.aside-card { background: var(--white); border: 1px solid var(--line); border-radius: var(--radius-md); padding: 22px; }
+.aside-card h3 { font-family: var(--font-serif); font-size: 18px; font-weight: 600; margin: 0 0 16px; }
+.aside-races { display: flex; flex-direction: column; gap: 14px; }
+.aside-race { padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.aside-race:last-child { border-bottom: none; padding-bottom: 0; }
+.aside-race .horse-name { font-family: var(--font-serif); font-size: 17px; font-weight: 600; margin: 0 0 2px; display: flex; align-items: center; gap: 8px; }
+.aside-race .horse-name .ic { width: 12px; height: 12px; color: var(--brand-green); }
+.aside-race .race-info { font-size: 12.5px; color: var(--muted); }
+.aside-race .race-time { font-size: 12px; font-weight: 600; color: var(--brand-green); margin-top: 4px; }
+.aside-trainer-list { display: flex; flex-direction: column; gap: 12px; }
+.aside-trainer-row { display: flex; align-items: center; gap: 10px; }
+.trainer-avatar-mini {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--brand-green-light), var(--brand-green));
+  display: flex; align-items: center; justify-content: center;
+  color: var(--cream); font-family: var(--font-serif); font-size: 13px; font-weight: 600; flex-shrink: 0;
+}
+.trainer-info { flex: 1; min-width: 0; }
+.trainer-info .name { font-family: var(--font-serif); font-size: 14.5px; font-weight: 600; margin: 0; line-height: 1.2; }
+.trainer-info .horses { font-size: 12px; color: var(--muted); }

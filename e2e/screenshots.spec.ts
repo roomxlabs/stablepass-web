@@ -96,3 +96,10 @@ test("onboarding screen renders", async ({ page }) => {
     }
   }
 });
+
+test("W4 shared component preview gallery renders", async ({ page }) => {
+  await page.goto("/preview/components");
+  await expect(page.getByRole("heading", { name: "W4 shared component preview" })).toBeVisible();
+  await expect(page.getByTestId("post-overlay")).toBeVisible();
+  await page.screenshot({ path: ".rx/review/w4-components.png", fullPage: true });
+});
