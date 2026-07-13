@@ -679,3 +679,71 @@ a { color: inherit; text-decoration: none; }
   margin: 0 0 18px;
   letter-spacing: -0.005em;
 }
+
+/* ====================================================================
+   ACCOUNT / SUBSCRIPTION PAGE (W9 / ENG-198) — 09-account.html,
+   ported from mockups/web/style.css ~1674-1778. Devices & sessions is
+   intentionally NOT ported — single-device guardrail, no devices UI.
+   ==================================================================== */
+.settings-page { padding: 40px 40px 80px; max-width: 880px; margin: 0 auto; }
+.settings-h { font-family: var(--font-serif); font-size: 38px; font-weight: 600; margin: 0 0 4px; }
+.settings-sub { color: var(--muted); margin: 0 0 36px; }
+.settings-card { background: var(--white); border: 1px solid var(--line); border-radius: var(--radius-md); margin-bottom: 22px; }
+.settings-card-head {
+  padding: 22px 26px 14px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+.settings-card-head h3 { font-family: var(--font-serif); font-size: 22px; font-weight: 600; margin: 0 0 4px; }
+.settings-card-head .sub { font-size: 13.5px; color: var(--muted); }
+.settings-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 26px;
+  border-bottom: 1px solid var(--line);
+  font-size: 14.5px;
+}
+.settings-row:last-child { border-bottom: none; }
+.settings-row .label { color: var(--muted); }
+.settings-row .value { color: var(--ink); font-weight: 500; }
+.plan-card-inner { padding: 22px 26px 26px; }
+.plan-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px;
+  background: var(--brand-green-soft);
+  border-radius: var(--radius-md);
+  margin-bottom: 18px;
+}
+.plan-row .plan-name { font-family: var(--font-serif); font-size: 19px; font-weight: 600; margin: 0; }
+.plan-row .plan-price { font-family: var(--font-serif); font-size: 19px; font-weight: 600; }
+.plan-row .plan-meta { font-size: 12.5px; color: var(--brand-green); font-weight: 500; }
+.toggle {
+  width: 46px; height: 28px;
+  background: var(--line);
+  border-radius: 14px;
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 24px; height: 24px;
+  background: var(--white);
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+  transition: left 0.2s;
+}
+.toggle.on { background: var(--brand-green); }
+.toggle.on::after { left: 20px; }
+
+.notif-row { padding: 18px 26px; }
+.notif-row .notif-title { font-size: 15px; font-weight: 500; margin: 0 0 3px; }
+.notif-row .notif-sub { font-size: 12.5px; color: var(--muted); }

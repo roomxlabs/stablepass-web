@@ -321,6 +321,39 @@ test("W7 horse profile renders the real horse (Mahogany, stats, posts)", async (
   }
 });
 
+test("W9 account screen renders (Subscription + Profile + Notifications, no Devices card)", async ({ page }) => {
+  const email = `w9-harness-${Date.now()}@stablepass.test`;
+  const password = "harness-password-123!";
+  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+  // Seed a confirmed local-Supabase user — the createUser trigger provisions
+  // the trial subscription the Subscription card reads.
+  const { data: userData, error: userError } = await admin.auth.admin.createUser({ email, password, email_confirm: true });
+  if (userError) throw userError;
+
+  try {
+    await page.goto("/signin");
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password").fill(password);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.waitForURL("**/explore");
+
+    await page.goto("/account");
+    await expect(page.getByRole("heading", { name: "Account" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Subscription" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Profile" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Notifications" })).toBeVisible();
+    await expect(page.getByRole("switch")).toHaveCount(4);
+    await expect(page.getByText(/devices/i)).toHaveCount(0);
+
+    await page.screenshot({ path: ".rx/review/w9-account.png", fullPage: true });
+  } finally {
+    if (userData?.user?.id) {
+      await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});
+    }
+  }
+});
+
 test("W7 horses browse list renders", async ({ page }) => {
   const email = `w7-list-harness-${Date.now()}@stablepass.test`;
   const password = "harness-password-123!";
