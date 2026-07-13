@@ -361,3 +361,56 @@ a { color: inherit; text-decoration: none; }
 
 /* Generic content wrapper for member pages that don't set their own. */
 .page-pad { padding: 32px 40px 60px; max-width: var(--content-max); width: 100%; }
+
+/* ====================================================================
+   ONBOARDING (full-page, no sidebar) — 05-onboarding.html
+   ==================================================================== */
+.onboarding-nav {
+  position: sticky; top: 0; z-index: 20;
+  background: var(--cream);
+  border-bottom: 1px solid var(--line);
+  padding: 18px 48px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.onboarding-nav .brand { font-family: var(--font-serif); font-size: 24px; font-weight: 600; color: var(--brand-green); letter-spacing: -0.01em; }
+.onboarding-nav .welcome { font-size: 13px; color: var(--muted); }
+.onboarding-web { min-height: 100vh; padding: 60px 32px; }
+.onboarding-container { max-width: 1000px; margin: 0 auto; }
+.onboarding-topline { display: flex; align-items: center; justify-content: space-between; }
+.onboarding-progress {
+  font-size: 11px; font-weight: 600; color: var(--brand-green);
+  letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 12px;
+}
+.select-all-btn { font-size: 13.5px; color: var(--brand-green); font-weight: 600; background: none; border: none; cursor: pointer; }
+.select-all-btn:disabled { color: var(--muted-light); cursor: default; }
+.onboarding-h {
+  font-family: var(--font-serif); font-size: 44px; font-weight: 600;
+  margin: 0 0 8px; line-height: 1.05; letter-spacing: -0.01em;
+}
+.onboarding-sub { color: var(--muted); font-size: 16px; margin: 0 0 40px; }
+.onboarding-grid-web { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin-bottom: 40px; }
+.horse-card-web {
+  background: var(--white); border: 1px solid var(--line); border-radius: var(--radius-md);
+  padding: 14px; position: relative; cursor: pointer; text-align: left;
+  font-family: var(--font-sans); width: 100%;
+}
+.horse-card-web.selected { border-color: var(--brand-green); border-width: 2px; padding: 13px; }
+.horse-card-web .horse-thumb {
+  width: 100%; aspect-ratio: 1; border-radius: 10px; margin-bottom: 12px; overflow: hidden;
+  background: linear-gradient(135deg, var(--brand-green-light), var(--brand-green-dark));
+  display: flex; align-items: center; justify-content: center;
+  color: var(--cream); font-family: var(--font-serif); font-size: 40px; font-weight: 600;
+}
+.horse-card-web .horse-name { font-family: var(--font-serif); font-size: 17px; font-weight: 600; margin: 0 0 2px; line-height: 1.15; }
+.horse-card-web .horse-trainer { font-size: 12px; color: var(--muted); margin: 0; }
+.horse-card-web .check {
+  position: absolute; top: 10px; right: 10px; width: 24px; height: 24px; border-radius: 50%;
+  background: var(--white); border: 1.5px solid var(--line);
+  display: flex; align-items: center; justify-content: center; color: transparent;
+}
+.horse-card-web.selected .check { background: var(--brand-green); border-color: var(--brand-green); color: var(--cream); }
+.horse-card-web.selected .check .ic { stroke: var(--cream); stroke-width: 3; width: 14px; height: 14px; }
+.onboarding-foot-web { display: flex; justify-content: space-between; align-items: center; padding-top: 24px; border-top: 1px solid var(--line); }
+.onboarding-foot-web .count { font-size: 13.5px; color: var(--muted); }
+.onboarding-empty { text-align: center; color: var(--muted); padding: 60px 0; }
+@media (max-width: 900px) { .onboarding-grid-web { grid-template-columns: repeat(2, 1fr); } }
