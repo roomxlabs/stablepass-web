@@ -521,3 +521,161 @@ a { color: inherit; text-decoration: none; }
 .trainer-info { flex: 1; min-width: 0; }
 .trainer-info .name { font-family: var(--font-serif); font-size: 14.5px; font-weight: 600; margin: 0; line-height: 1.2; }
 .trainer-info .horses { font-size: 12px; color: var(--muted); }
+
+/* Horse profile — web (W7 / ENG-200). Ported from mockups/web/style.css
+   ~1252-1404. The cover has no image field on `horse`, so `.profile-cover-web`
+   itself carries a green-gradient placeholder background (the ported `img` +
+   `.gradient` rules stay in case a real cover photo lands later). */
+.profile-page {
+  background: var(--cream);
+}
+.profile-cover-web {
+  height: 360px;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, var(--brand-green-light), var(--brand-green-darker));
+}
+.profile-cover-web img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+}
+.profile-cover-web .gradient {
+  position: absolute; inset: 0;
+  background: linear-gradient(180deg, transparent 30%, rgba(0,0,0,0.4) 100%);
+}
+.profile-main {
+  max-width: 1080px;
+  margin: -80px auto 0;
+  padding: 0 40px 60px;
+  position: relative;
+  z-index: 2;
+}
+.profile-header-web {
+  background: var(--cream);
+  padding: 30px 36px 24px;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 10px 40px rgba(0,0,0,0.06);
+  border: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 32px;
+  align-items: end;
+}
+.profile-head-left .status-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.tag {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--cream-dark);
+  color: var(--muted);
+}
+.tag.race-day { background: var(--brand-green); color: var(--cream); }
+.tag.active { background: var(--brand-green-soft); color: var(--brand-green); }
+.profile-name-web {
+  font-family: var(--font-serif);
+  font-size: 56px;
+  font-weight: 600;
+  margin: 0 0 6px;
+  line-height: 1.02;
+  letter-spacing: -0.01em;
+}
+.profile-pedigree-web {
+  font-size: 16px;
+  font-style: italic;
+  color: var(--muted);
+  margin: 0;
+}
+.profile-actions-web {
+  display: flex;
+  gap: 10px;
+}
+
+.profile-stats-web {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin-top: 28px;
+  border-top: 1px solid var(--line);
+  padding-top: 24px;
+}
+.profile-stats-web .stat-w {
+  text-align: center;
+  padding: 0 8px;
+}
+.profile-stats-web .stat-w + .stat-w { border-left: 1px solid var(--line); }
+.profile-stats-web .stat-num {
+  font-family: var(--font-serif);
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--ink);
+}
+.profile-stats-web .stat-label {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-top: 6px;
+}
+.stats-note-web {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--muted-light);
+  text-align: center;
+  padding: 12px 0 0;
+}
+
+.profile-body-grid {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 32px;
+  margin-top: 32px;
+}
+
+.next-race-web {
+  background: var(--brand-green);
+  color: var(--cream);
+  border-radius: var(--radius-md);
+  padding: 20px 22px;
+}
+.next-race-web .label {
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.7;
+  font-weight: 600;
+}
+.next-race-web .name {
+  font-family: var(--font-serif);
+  font-size: 22px;
+  font-weight: 600;
+  margin: 4px 0 4px;
+}
+.next-race-web .detail {
+  font-size: 13.5px;
+  opacity: 0.85;
+}
+.next-race-web .when {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(250,247,242,0.18);
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+}
+.next-race-web .when strong { font-weight: 600; }
+
+.section-title-web {
+  font-family: var(--font-serif);
+  font-size: 24px;
+  font-weight: 600;
+  margin: 0 0 18px;
+  letter-spacing: -0.005em;
+}
