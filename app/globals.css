@@ -362,6 +362,15 @@ a { color: inherit; text-decoration: none; }
 /* Generic content wrapper for member pages that don't set their own. */
 .page-pad { padding: 32px 40px 60px; max-width: var(--content-max); width: 100%; }
 
+/* Explore/Following feed layout — content column + fixed-width aside (W6, ENG-199). */
+.feed-grid { display: flex; align-items: flex-start; gap: 28px; max-width: 1180px; width: 100%; margin: 0 auto; padding: 32px 40px 60px; }
+.feed-col { flex: 1; min-width: 0; max-width: 700px; }
+.feed-aside { width: 320px; flex: none; display: flex; flex-direction: column; gap: 20px; }
+@media (max-width: 980px) {
+  .feed-grid { flex-direction: column; }
+  .feed-col, .feed-aside { max-width: none; width: 100%; }
+}
+
 /* ====================================================================
    ONBOARDING (full-page, no sidebar) — 05-onboarding.html
    ==================================================================== */

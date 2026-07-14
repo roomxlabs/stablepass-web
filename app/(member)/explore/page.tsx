@@ -1,23 +1,15 @@
-// Explore feed (06-explore.html). MINIMAL placeholder for W1 (auth shell) so the
-// member shell has something to render — W6 replaces this with the real feed.
+// Explore feed (06-explore.html). Server component: resolves the signed-in
+// user's id (the (member) layout already guards auth — see app/(member)/layout.tsx)
+// and hands off to the client ExploreFeed, which owns the fetch/enrich/engagement
+// loop against the W5 BFF + supabaseBrowser (RLS-gated reads/writes).
+import { supabaseServer } from "@/lib/supabase/server";
+import { ExploreFeed } from "./explore-feed";
+
 export const metadata = { title: "Explore · StablePass" };
 
-export default function ExplorePage() {
-  return (
-    <>
-      <div className="topbar">
-        <div className="feed-tabs">
-          <button className="feed-tab active" type="button">Explore</button>
-          <button className="feed-tab" type="button">Following</button>
-        </div>
-        <div className="topbar-spacer" />
-        <div className="topbar-search">Search horses, trainers…</div>
-        <div className="topbar-bell" />
-      </div>
+export default async function ExplorePage() {
+  const sb = await supabaseServer();
+  const { data: { user } } = await sb.auth.getUser();
 
-      <div className="page-pad">
-        <h2>Your feed is coming together.</h2>
-      </div>
-    </>
-  );
+  return <ExploreFeed viewerId={user!.id} />;
 }
