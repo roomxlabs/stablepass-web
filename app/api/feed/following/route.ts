@@ -1,8 +1,22 @@
-import { ok, UNAUTH } from "@/lib/api/envelope";
 import { supabaseServer } from "@/lib/supabase/server";
-export async function GET() {
-  const sb = await supabaseServer(); const { data: { user } } = await sb.auth.getUser();
+import { ok, UNAUTH, GATED, fail } from "@/lib/api/envelope";
+import { edgeFetch } from "@/lib/api/edge";
+
+// GET /api/feed/following?cursor=&limit= — ranked feed restricted to followed trainers/horses.
+export async function GET(req: Request) {
+  const sb = await supabaseServer();
+  const { data: { user } } = await sb.auth.getUser();
   if (!user) return UNAUTH();
-  // TODO(ticket): ranked feed restricted to followed trainers/horses.
-  return ok([], { nextCursor: null, hasMore: false });
+  const { data: sub } = await sb.from("subscription").select("status").eq("user_id", user.id).single();
+  if (!sub || !["trial", "active"].includes(sub.status)) return GATED();
+  const url = new URL(req.url);
+  const cursor = url.searchParams.get("cursor");
+  const limit = Math.min(Number(url.searchParams.get("limit") ?? 20), 50);
+  const query = new URLSearchParams({ following: "true", ...(cursor ? { cursor } : {}), limit: String(limit) });
+  const res = await edgeFetch(sb, `feed?${query}`);
+  if (res.status === 402) return GATED();
+  if (res.status === 400) return fail("invalid_cursor", "Invalid cursor.", 400);
+  if (!res.ok) return fail("feed_failed", "Could not load feed.", 502);
+  const json = await res.json();
+  return ok(json.data, json.meta);
 }
