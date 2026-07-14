@@ -14,6 +14,12 @@ test("signin screen renders", async ({ page }) => {
   await page.screenshot({ path: ".rx/review/w1-signin.png", fullPage: true });
 });
 
+test("trial-start screen renders", async ({ page }) => {
+  await page.goto("/start");
+  await expect(page.getByRole("heading", { name: "Start your 30 days free." })).toBeVisible();
+  await page.screenshot({ path: ".rx/review/w2-start.png", fullPage: true });
+});
+
 test("signed-in member shell renders", async ({ page }) => {
   const email = `w1-harness-${Date.now()}@stablepass.test`;
   const password = "harness-password-123!";
