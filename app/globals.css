@@ -747,3 +747,173 @@ a { color: inherit; text-decoration: none; }
 .notif-row { padding: 18px 26px; }
 .notif-row .notif-title { font-size: 15px; font-weight: 500; margin: 0 0 3px; }
 .notif-row .notif-sub { font-size: 12.5px; color: var(--muted); }
+
+/* ====================================================================
+   Checkout — embedded Stripe Elements (W10 / ENG-202). Ported from
+   mockups/web/style.css (04-checkout.html), lines ~1407-1575. The mockup's
+   .checkout-logo wraps an <img>; this app uses a text brand mark everywhere
+   else (.sidebar-logo, .auth-side-brand), so .checkout-logo-text mirrors that
+   convention instead of introducing a logo image asset.
+   ==================================================================== */
+.checkout-page {
+  min-height: 100vh;
+  background: var(--cream-dark);
+  padding: 48px 32px 80px;
+}
+.checkout-container {
+  max-width: 1080px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 48px;
+  background: var(--cream);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: 0 30px 80px rgba(26, 26, 26, 0.08);
+}
+.checkout-left {
+  padding: 56px 56px 60px;
+}
+.checkout-right {
+  background: var(--brand-green);
+  color: var(--cream);
+  padding: 56px 48px 60px;
+  position: relative;
+  overflow: hidden;
+}
+.checkout-logo {
+  display: block;
+  text-decoration: none;
+  margin-bottom: 36px;
+}
+.checkout-logo-text {
+  font-family: var(--font-serif);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--brand-green);
+}
+.checkout-step {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--brand-green);
+}
+.checkout-h {
+  font-family: var(--font-serif);
+  font-size: 36px;
+  font-weight: 600;
+  margin: 6px 0 8px;
+  line-height: 1.05;
+}
+.checkout-sub {
+  color: var(--muted);
+  margin: 0 0 32px;
+}
+.payment-method-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+.pm-card {
+  flex: 1;
+  border: 2px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 14px 14px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 500;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  cursor: pointer;
+}
+.pm-card.selected {
+  border-color: var(--brand-green);
+  background: var(--brand-green-soft);
+  color: var(--brand-green);
+}
+.pm-card-icon {
+  font-size: 18px;
+  font-weight: 700;
+}
+.checkout-actions {
+  margin-top: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.checkout-secure {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.summary-h {
+  font-family: var(--font-serif);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin: 0 0 16px;
+  position: relative;
+  z-index: 1;
+}
+.summary-product {
+  position: relative;
+  z-index: 1;
+  border-bottom: 1px solid rgba(250, 247, 242, 0.15);
+  padding-bottom: 24px;
+  margin-bottom: 24px;
+}
+.summary-product .label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+.summary-product .name {
+  font-family: var(--font-serif);
+  font-size: 28px;
+  font-weight: 600;
+  margin: 4px 0 8px;
+}
+.summary-product .description {
+  font-size: 13.5px;
+  opacity: 0.85;
+  line-height: 1.5;
+}
+.summary-line {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  font-size: 14px;
+  position: relative;
+  z-index: 1;
+}
+.summary-line.total {
+  border-top: 1px solid rgba(250, 247, 242, 0.15);
+  margin-top: 14px;
+  padding-top: 18px;
+  font-family: var(--font-serif);
+  font-size: 22px;
+  font-weight: 600;
+}
+.trial-callout {
+  margin-top: 24px;
+  background: rgba(250, 247, 242, 0.1);
+  padding: 16px 18px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  line-height: 1.55;
+  position: relative;
+  z-index: 1;
+}
+.trial-callout strong { display: block; margin-bottom: 4px; font-size: 14px; }
