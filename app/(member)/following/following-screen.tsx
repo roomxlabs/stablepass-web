@@ -1,0 +1,378 @@
+"use client";
+
+// FollowingScreen — the Following hub (W13). Two "stories"-style avatar rails of the
+// member's followed horses + trainers (newest-followed first; tap → profile), then the
+// ranked Following feed (GET /api/feed/following) below. Mirrors explore-feed's
+// fetch/enrich/engagement loop; reads the follow rails directly via supabaseBrowser
+// (RLS follow_rw_self). The subscription gate comes from the feed route's 402, same as
+// Explore. Unfollow is NOT here — it lives on the horse/trainer profiles.
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { PostCard } from "@/components/post-card";
+import { ReactionBar } from "@/components/reaction-bar";
+import { supabaseBrowser } from "@/lib/supabase/client";
+import type { FeedPost, PostMedia, ReactionEmoji } from "@/components/types";
+
+const LIMIT = 10;
+
+// Bare be `post` row shape (the following feed returns post rows; names are enriched).
+type PostRow = {
+  id: string;
+  horse_id: string;
+  type: PostMedia["type"];
+  body: string | null;
+  media_url: string | null;
+  watermarked: boolean;
+  like_count: number;
+  published_at: string;
+};
+type HorseTrainer = { name: string };
+type HorseRow = { id: string; display_name: string; trainer: HorseTrainer | HorseTrainer[] | null };
+type ReactionRow = { post_id: string; emoji: ReactionEmoji };
+type BookmarkRow = { post_id: string };
+
+// Followed-entity rows (rail data).
+type FollowedHorse = { id: string; display_name: string; racing_name: string | null; photo_url: string | null };
+type FollowedTrainer = { id: string; name: string; display_name: string | null; photo_url: string | null };
+type HorseFollowRow = { created_at: string; horse: FollowedHorse | FollowedHorse[] | null };
+type TrainerFollowRow = { created_at: string; trainer: FollowedTrainer | FollowedTrainer[] | null };
+type RailItem = { id: string; name: string; photoUrl: string | null; href: string };
+
+function one<T>(v: T | T[] | null): T | null {
+  return Array.isArray(v) ? (v[0] ?? null) : v;
+}
+
+function relativeTime(iso: string | null): string {
+  if (!iso) return "";
+  const ms = Date.now() - new Date(iso).getTime();
+  const mins = Math.max(0, Math.round(ms / 60000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
+}
+
+// A circular "story"-style avatar (photo, or the initial-letter fallback) + name.
+function Avatar({ item, onOpen }: { item: RailItem; onOpen: (href: string) => void }) {
+  const initial = item.name[0]?.toUpperCase() ?? "?";
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(item.href)}
+      aria-label={item.name}
+      style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, width: 76, flexShrink: 0, background: "none", border: "none", padding: 0, cursor: "pointer" }}
+    >
+      <span
+        aria-hidden="true"
+        style={{ width: 64, height: 64, borderRadius: "50%", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(135deg, var(--brand-green-light), var(--brand-green-dark))", color: "var(--cream)", fontFamily: "var(--font-serif)", fontSize: 24, fontWeight: 600 }}
+      >
+        {item.photoUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- arbitrary Storage photo URL, cover-fit
+          <img src={item.photoUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+        ) : (
+          initial
+        )}
+      </span>
+      <span style={{ fontSize: 12, color: "var(--ink)", maxWidth: 76, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "center" }}>
+        {item.name}
+      </span>
+    </button>
+  );
+}
+
+// A horizontal-scroll rail of avatars; hidden entirely when it has no items.
+function Rail({ title, items, onOpen }: { title: string; items: RailItem[]; onOpen: (href: string) => void }) {
+  if (items.length === 0) return null;
+  return (
+    <section style={{ marginBottom: 24 }}>
+      <h2 className="section-title-web" style={{ fontSize: 15, margin: "0 0 12px" }}>{title}</h2>
+      <div style={{ display: "flex", gap: 16, overflowX: "auto", paddingBottom: 4 }}>
+        {items.map((it) => (
+          <Avatar key={it.id} item={it} onOpen={onOpen} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+export function FollowingScreen({ viewerId }: { viewerId: string }) {
+  const router = useRouter();
+  const [horses, setHorses] = useState<RailItem[]>([]);
+  const [trainers, setTrainers] = useState<RailItem[]>([]);
+  const [followsLoaded, setFollowsLoaded] = useState(false);
+  const [posts, setPosts] = useState<FeedPost[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [gated, setGated] = useState(false);
+  const [playing, setPlaying] = useState<Record<string, string>>({});
+  const [playError, setPlayError] = useState<Record<string, boolean>>({});
+
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const loadingRef = useRef(false);
+
+  // Load the follow rails once (own follows via RLS `follow_rw_self`, newest first).
+  useEffect(() => {
+    const sb = supabaseBrowser();
+    (async () => {
+      // Content gate FIRST (mirrors SavedFeed/HorsesGrid) — don't read or render
+      // follows before the subscription check resolves, so a lapsed member never
+      // sees the rails flash before the reactivate prompt.
+      const { data: sub } = await sb.from("subscription").select("status").eq("user_id", viewerId).maybeSingle();
+      const status = (sub as { status?: string } | null)?.status;
+      if (!status || !["trial", "active"].includes(status)) {
+        setGated(true);
+        setFollowsLoaded(true);
+        return;
+      }
+      const [{ data: hRows }, { data: tRows }] = await Promise.all([
+        sb.from("follow").select("created_at, horse:horse_id(id, display_name, racing_name, photo_url)").not("horse_id", "is", null).order("created_at", { ascending: false }),
+        sb.from("follow").select("created_at, trainer:trainer_id(id, name, display_name, photo_url)").not("trainer_id", "is", null).order("created_at", { ascending: false }),
+      ]);
+      const hItems: RailItem[] = ((hRows ?? []) as HorseFollowRow[])
+        .map((r) => one(r.horse))
+        .filter((h): h is FollowedHorse => h !== null)
+        .map((h) => ({ id: h.id, name: h.racing_name || h.display_name, photoUrl: h.photo_url, href: `/horses/${h.id}` }));
+      const tItems: RailItem[] = ((tRows ?? []) as TrainerFollowRow[])
+        .map((r) => one(r.trainer))
+        .filter((t): t is FollowedTrainer => t !== null)
+        .map((t) => ({ id: t.id, name: t.display_name || t.name, photoUrl: t.photo_url, href: `/trainers/${t.id}` }));
+      setHorses(hItems);
+      setTrainers(tItems);
+      setFollowsLoaded(true);
+    })();
+  }, [viewerId]);
+
+  const fetchPage = useCallback(async (forCursor: string | null) => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    setLoading(true);
+    setError(false);
+    if (!forCursor) {
+      setPosts([]);
+      setGated(false);
+      setPlaying({});
+      setPlayError({});
+    }
+    try {
+      const params = new URLSearchParams({ limit: String(LIMIT) });
+      if (forCursor) params.set("cursor", forCursor);
+
+      const res = await fetch(`/api/feed/following?${params}`);
+      if (res.status === 402) {
+        setGated(true);
+        return;
+      }
+      if (!res.ok) {
+        setError(true);
+        return;
+      }
+
+      const body = await res.json();
+      const rows = (body.data ?? []) as PostRow[];
+      const meta = (body.meta ?? {}) as { nextCursor?: string | null; hasMore?: boolean };
+      setCursor(meta.nextCursor ?? null);
+      setHasMore(Boolean(meta.hasMore));
+
+      if (rows.length === 0) {
+        if (!forCursor) setPosts([]);
+        return;
+      }
+
+      const ids = rows.map((r) => r.id);
+      const horseIds = [...new Set(rows.map((r) => r.horse_id))];
+      const sb = supabaseBrowser();
+      const [{ data: horseRows }, { data: reactionRows }, { data: bookmarkRows }] = await Promise.all([
+        sb.from("horse").select("id, display_name, trainer:trainer_id(name)").in("id", horseIds),
+        sb.from("reaction").select("post_id,emoji").in("post_id", ids),
+        sb.from("bookmark").select("post_id").in("post_id", ids),
+      ]);
+
+      const horseById = new Map(((horseRows ?? []) as HorseRow[]).map((h) => [h.id, h]));
+      const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
+      const mySet = new Set(((bookmarkRows ?? []) as BookmarkRow[]).map((b) => b.post_id));
+
+      const mapped: FeedPost[] = rows.map((r) => {
+        const horse = horseById.get(r.horse_id);
+        const trainer = one(horse?.trainer ?? null);
+        return {
+          id: r.id,
+          horseId: r.horse_id,
+          horseName: horse?.display_name ?? "Unknown horse",
+          trainerName: trainer?.name ?? "Stablepass",
+          postedAgo: relativeTime(r.published_at),
+          body: r.body,
+          media: { type: r.type, posterUrl: r.media_url ?? null, duration: null },
+          watermarked: r.watermarked,
+          count: r.like_count,
+          reacted: myReaction.get(r.id) ?? null,
+          bookmarked: mySet.has(r.id),
+        };
+      });
+
+      setPosts((prev) => (forCursor ? [...prev, ...mapped] : mapped));
+
+      // Best-effort impression tracking (the following feed is unseen-first).
+      fetch("/api/feed/seen", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ postIds: ids }),
+      }).catch(() => {});
+    } finally {
+      loadingRef.current = false;
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial data fetch, not derived state
+    fetchPage(null);
+  }, [fetchPage]);
+
+  // Infinite scroll.
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") return;
+    if (!hasMore || loading || gated || error) return;
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries[0]?.isIntersecting) fetchPage(cursor);
+    }, { rootMargin: "200px" });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasMore, loading, gated, error, cursor, fetchPage]);
+
+  async function react(postId: string, emoji: ReactionEmoji) {
+    const target = posts.find((p) => p.id === postId);
+    if (!target) return;
+    const prevReacted = target.reacted;
+    const nextReacted = prevReacted === emoji ? null : emoji;
+    setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, reacted: nextReacted } : p)));
+    const sb = supabaseBrowser();
+    const { error: reactError } = nextReacted
+      ? await sb.from("reaction").upsert({ user_id: viewerId, post_id: postId, emoji: nextReacted }, { onConflict: "user_id,post_id" })
+      : await sb.from("reaction").delete().eq("post_id", postId);
+    if (reactError) setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, reacted: prevReacted } : p)));
+  }
+
+  async function bookmark(postId: string) {
+    const target = posts.find((p) => p.id === postId);
+    if (!target) return;
+    const prevBookmarked = target.bookmarked;
+    const nextBookmarked = !prevBookmarked;
+    setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, bookmarked: nextBookmarked } : p)));
+    const sb = supabaseBrowser();
+    const { error: bookmarkError } = nextBookmarked
+      ? await sb.from("bookmark").insert({ user_id: viewerId, post_id: postId })
+      : await sb.from("bookmark").delete().eq("post_id", postId);
+    if (bookmarkError) setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, bookmarked: prevBookmarked } : p)));
+  }
+
+  async function play(postId: string) {
+    setPlayError((prev) => ({ ...prev, [postId]: false }));
+    try {
+      const res = await fetch(`/api/posts/${postId}/playback`);
+      if (res.status !== 200) { setPlayError((prev) => ({ ...prev, [postId]: true })); return; }
+      const body = await res.json().catch(() => null);
+      const url = body?.data?.playbackUrl as string | undefined;
+      if (!url) { setPlayError((prev) => ({ ...prev, [postId]: true })); return; }
+      setPlaying((prev) => ({ ...prev, [postId]: url }));
+    } catch {
+      setPlayError((prev) => ({ ...prev, [postId]: true }));
+    }
+  }
+
+  const noFollows = followsLoaded && horses.length === 0 && trainers.length === 0;
+  const showEmptyFeed = !gated && !error && !loading && posts.length === 0 && !noFollows;
+  const showSkeleton = !gated && !error && loading && posts.length === 0;
+
+  return (
+    <div className="feed-grid" style={{ justifyContent: "center" }}>
+      <div className="feed-col">
+        <h1 className="section-title-web" style={{ marginBottom: 20 }}>Following</h1>
+
+        {gated && (
+          <div className="aside-card">
+            <h3>Your trial has ended.</h3>
+            <p style={{ color: "var(--muted)", marginBottom: 16 }}>
+              Reactivate your subscription to keep up with the horses you follow.
+            </p>
+            <a className="btn btn-primary" href="/checkout">Reactivate</a>
+          </div>
+        )}
+
+        {!gated && (
+          <>
+            {noFollows ? (
+              <p style={{ color: "var(--muted)", padding: "8px 0 24px" }}>
+                You&rsquo;re not following anyone yet.{" "}
+                <a href="/explore" style={{ color: "var(--brand-green)", fontWeight: 600 }}>Explore</a>{" "}
+                to find horses &amp; trainers to follow.
+              </p>
+            ) : (
+              <>
+                <Rail title="Horses" items={horses} onOpen={(href) => router.push(href)} />
+                <Rail title="Trainers" items={trainers} onOpen={(href) => router.push(href)} />
+              </>
+            )}
+
+            {error && (
+              <p style={{ color: "var(--muted)", padding: "24px 0" }}>Couldn&rsquo;t load the feed.</p>
+            )}
+
+            {showSkeleton && (
+              <>
+                <div className="post-web" aria-hidden="true" style={{ height: 260, background: "var(--line)" }} />
+                <div className="post-web" aria-hidden="true" style={{ height: 260, background: "var(--line)" }} />
+              </>
+            )}
+
+            {showEmptyFeed && (
+              <p style={{ color: "var(--muted)", padding: "24px 0" }}>Nothing from your follows yet.</p>
+            )}
+
+            {posts.length > 0 && (
+              <>
+                {posts.map((p) => {
+                  const playbackUrl = playing[p.id];
+                  if (playbackUrl) {
+                    return (
+                      <article className="post-web" key={p.id}>
+                        <div className="post-head-web">
+                          <div className="post-avatar-web" aria-hidden="true">{p.horseName[0]?.toUpperCase() ?? "?"}</div>
+                          <div className="post-meta-web">
+                            <h3 className="post-horse">{p.horseName}</h3>
+                            <div className="post-byline">
+                              by <span className="by-trainer">{p.trainerName}</span> · {p.postedAgo}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="post-media-web">
+                          <video controls autoPlay src={playbackUrl} style={{ width: "100%", aspectRatio: "16/9", background: "#000" }} />
+                        </div>
+                        {p.body && <div className="post-body-web">{p.body}</div>}
+                        <ReactionBar count={p.count} reacted={p.reacted} bookmarked={p.bookmarked} onReact={(e) => react(p.id, e)} onBookmark={() => bookmark(p.id)} />
+                      </article>
+                    );
+                  }
+                  return (
+                    <Fragment key={p.id}>
+                      <PostCard post={p} viewerId={viewerId} mediaAspect="wide" onReact={(e) => react(p.id, e)} onBookmark={() => bookmark(p.id)} onPlay={() => play(p.id)} />
+                      {playError[p.id] && (
+                        <p role="alert" style={{ color: "var(--red)", marginTop: -16, marginBottom: 24, fontSize: 13.5 }}>Couldn&rsquo;t load the video.</p>
+                      )}
+                    </Fragment>
+                  );
+                })}
+                <div ref={sentinelRef} />
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
