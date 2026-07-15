@@ -1,8 +1,9 @@
 "use client";
 
-// ExploreFeed — the Explore/Following screen (06-explore.html). Composes the W4
-// shared components (PostCard/ReactionBar/RaceDayBand/TrainerCard) against the W5
-// BFF (`/api/feed`, `/api/feed/following`, `/api/feed/seen`, `/api/posts/:id/playback`).
+// ExploreFeed — the Explore screen (06-explore.html). Composes the W4 shared
+// components (PostCard/ReactionBar/RaceDayBand/TrainerCard) against the W5 BFF
+// (`/api/feed`, `/api/feed/seen`, `/api/posts/:id/playback`). The followed feed now
+// lives on the dedicated /following screen (W13), so Explore is a single view.
 //
 // DATA REALITY: the be `feed` fn returns bare `post` rows (no horse/trainer names),
 // so every page is enriched client-side: a `horse` lookup for the byline, plus the
@@ -16,8 +17,6 @@ import { supabaseBrowser } from "@/lib/supabase/client";
 import type { FeedPost, PostMedia, ReactionEmoji, RaceDayEntry, TrainerSummary } from "@/components/types";
 
 const LIMIT = 10;
-
-type View = "explore" | "following";
 
 // Bare be `post` row shape (no horse/trainer names — see module comment).
 type PostRow = {
@@ -98,7 +97,6 @@ function one<T>(v: T | T[] | null): T | null {
 }
 
 export function ExploreFeed({ viewerId }: { viewerId: string }) {
-  const [view, setView] = useState<View>("explore");
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -113,14 +111,13 @@ export function ExploreFeed({ viewerId }: { viewerId: string }) {
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const loadingRef = useRef(false);
 
-  const fetchPage = useCallback(async (forView: View, forCursor: string | null) => {
+  const fetchPage = useCallback(async (forCursor: string | null) => {
     if (loadingRef.current) return;
     loadingRef.current = true;
     setLoading(true);
     setError(false);
     if (!forCursor) {
-      // First page for this view (initial mount or a tab switch) — clear the
-      // previous tab's list/gate/playing state before the new page lands.
+      // First page (initial mount) — reset list/gate/playing state.
       setPosts([]);
       setGated(false);
       setPlaying({});
@@ -129,9 +126,8 @@ export function ExploreFeed({ viewerId }: { viewerId: string }) {
     try {
       const params = new URLSearchParams({ limit: String(LIMIT) });
       if (forCursor) params.set("cursor", forCursor);
-      const path = forView === "following" ? "/api/feed/following" : "/api/feed";
 
-      const res = await fetch(`${path}?${params}`);
+      const res = await fetch(`/api/feed?${params}`);
       if (res.status === 402) {
         setGated(true);
         return;
@@ -199,15 +195,12 @@ export function ExploreFeed({ viewerId }: { viewerId: string }) {
     }
   }, []);
 
-  // Fetch the first page whenever the active tab changes. This is the classic
-  // "synchronize with an external system" effect (fetching data on a dependency
-  // change — an explicitly valid useEffect use per react.dev), not derived
-  // render-state, so the setState-in-effect rule's heuristic is a false positive
-  // for this indirect (fetchPage-internal) case.
+  // Fetch the first page on mount — a "synchronize with an external system"
+  // effect (a data fetch), not derived render-state.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on tab change, not derived state
-    fetchPage(view, null);
-  }, [view, fetchPage]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial data fetch, not derived state
+    fetchPage(null);
+  }, [fetchPage]);
 
   // Race-day band + "Trainers you follow" aside — loaded once, independent of the tab.
   useEffect(() => {
@@ -264,11 +257,11 @@ export function ExploreFeed({ viewerId }: { viewerId: string }) {
     const el = sentinelRef.current;
     if (!el) return;
     const observer = new IntersectionObserver((entries) => {
-      if (entries[0]?.isIntersecting) fetchPage(view, cursor);
+      if (entries[0]?.isIntersecting) fetchPage(cursor);
     }, { rootMargin: "200px" });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [hasMore, loading, gated, error, view, cursor, fetchPage]);
+  }, [hasMore, loading, gated, error, cursor, fetchPage]);
 
   async function react(postId: string, emoji: ReactionEmoji) {
     const target = posts.find((p) => p.id === postId);
@@ -332,22 +325,7 @@ export function ExploreFeed({ viewerId }: { viewerId: string }) {
   return (
     <>
       <div className="topbar">
-        <div className="feed-tabs">
-          <button
-            type="button"
-            className={`feed-tab${view === "explore" ? " active" : ""}`}
-            onClick={() => setView("explore")}
-          >
-            Explore
-          </button>
-          <button
-            type="button"
-            className={`feed-tab${view === "following" ? " active" : ""}`}
-            onClick={() => setView("following")}
-          >
-            Following
-          </button>
-        </div>
+        <h1 className="section-title-web" style={{ margin: 0 }}>Explore</h1>
         <div className="topbar-spacer" />
         <div className="topbar-search">
           <Search /> Search horses, trainers…
@@ -382,11 +360,7 @@ export function ExploreFeed({ viewerId }: { viewerId: string }) {
 
           {showEmpty && (
             <p style={{ color: "var(--muted)", padding: "24px 0" }}>
-              {view === "explore" ? (
-                "Nothing here yet — check back soon."
-              ) : (
-                <>Follow horses to fill this feed. <a href="/onboarding" style={{ color: "var(--brand-green)", fontWeight: 600 }}>Find horses to follow</a></>
-              )}
+              Nothing here yet — check back soon.
             </p>
           )}
 

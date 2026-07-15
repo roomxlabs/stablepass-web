@@ -152,4 +152,14 @@ describe("ExploreFeed", () => {
       ),
     );
   });
+
+  it("renders no Following tab (Explore is a single view since W13)", async () => {
+    global.fetch = fetchImpl(200) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} />);
+    await screen.findByText("Mahogany");
+
+    expect(screen.queryByRole("button", { name: "Following" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Explore" })).toBeInTheDocument();
+  });
 });
