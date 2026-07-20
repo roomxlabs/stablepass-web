@@ -526,7 +526,15 @@ test("A2 trainer profile Website link renders, opens in a new tab, and logs a cl
 // explicit `entry_status` so the lifecycle filtering is what's being screenshotted.
 
 const RF5_PASSWORD = "harness-password-123!";
-const rNum = () => 1000 + Math.floor(Math.random() * 9000);
+// Real AU race numbers are 1-12, and `.name` ("Randwick R5 · BM78") is precisely the
+// element whose mockup fidelity these screenshots are evidence for — a rendered "R9363"
+// undercuts the artefact.
+//
+// Sequential, NOT random in 1-12: the natural key is (venue, race_date, race_number),
+// and two races seeded at the same venue+date would collide ~1-in-12 of the time on a
+// random draw. A sequence keeps them distinct within a run.
+let raceNumSeq = 0;
+const rNum = () => (raceNumSeq++ % 12) + 1;
 
 // `race.race_date` is the LOCAL race day (an AU date), which is what
 // GET /api/race-day compares against — deriving it from a UTC ISO slice would be
@@ -566,14 +574,41 @@ async function seedHorse(
       places: 9,
       prize_money_cents: 120_000_000,
       photo_url: "https://placehold.co/1200x400/285D50/FAF7F2",
-      story: "Mahogany joined Chris Waller's Rosehill stable as a yearling out of Snitzel.",
+      story: `${racingName} joined Chris Waller's Rosehill stable as a yearling out of Snitzel.`,
       ...extra,
     })
     .select("id")
     .single();
   if (hErr) throw hErr;
-  return { trainerId: trainer.id as string, horseId: horse.id as string };
+  const seeded = { trainerId: trainer.id as string, horseId: horse.id as string };
+  seededHorses.push(seeded);
+  return seeded;
 }
+
+// Every row the RF5 helpers create is registered here and swept after each test.
+//
+// The per-spec `finally` blocks are the primary cleanup, but they only run if the spec
+// reaches its `try` — and seeding happens BEFORE it. A seed-time throw therefore leaked
+// silently, which is exactly what happened on a natural-key collision: two horses and
+// two trainers survived, `status='active'`, visible to every member in Explore/Horses.
+// This net catches that case and any future spec that forgets to clean up.
+const seededRaceIds: string[] = [];
+const seededHorses: { horseId: string; trainerId: string }[] = [];
+
+test.afterEach(async () => {
+  if (!seededRaceIds.length && !seededHorses.length) return;
+  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+  // Races first — race_horse cascades from race, and a surviving runner row would
+  // block the horse delete on its FK.
+  for (const id of seededRaceIds.splice(0)) {
+    await admin.from("race").delete().eq("id", id);
+  }
+  for (const h of seededHorses.splice(0)) {
+    await admin.from("race_horse").delete().eq("horse_id", h.horseId);
+    await admin.from("horse").delete().eq("id", h.horseId);
+    await admin.from("trainer").delete().eq("id", h.trainerId);
+  }
+});
 
 /** Seed a race + its runner row with an explicit entry_status. */
 async function seedRun(
@@ -582,12 +617,29 @@ async function seedRun(
   race: Record<string, unknown>,
   runner: Record<string, unknown>,
 ) {
-  const { data: row, error: rErr } = await admin
-    .from("race")
-    .insert({ race_number: rNum(), ...race })
-    .select("id")
-    .single();
-  if (rErr) throw rErr;
+  // `race_natural_key` is (venue, race_date, race_number) and specs run in PARALLEL
+  // workers, each with its own module instance — so a per-module counter restarts at 0
+  // in every worker and two specs seeding the same venue+date collide on R1. The old
+  // 1000-9999 draw only made that rare, never impossible. Retry across the plausible
+  // 1-12 range instead of widening it back out.
+  let row: { id: string } | null = null;
+  let rErr: { code?: string } | null = null;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const res = await admin
+      .from("race")
+      .insert({ race_number: rNum(), ...race })
+      .select("id")
+      .single();
+    if (!res.error) {
+      row = res.data as { id: string };
+      rErr = null;
+      break;
+    }
+    rErr = res.error;
+    if (res.error.code !== "23505") break; // a real failure, not a taken slot
+  }
+  if (rErr || !row) throw rErr ?? new Error("seedRun: no free race_number after 12 tries");
+  seededRaceIds.push(row.id);
   const { error: rhErr } = await admin.from("race_horse").insert({ race_id: row.id, horse_id: horseId, ...runner });
   if (rhErr) throw rhErr;
   return row.id as string;
@@ -604,7 +656,7 @@ async function signIn(page: import("@playwright/test").Page, email: string) {
 test("RF5 horse profile — confirmed next race + race record (scratched excluded)", async ({ page }) => {
   const email = `rf5a-harness-${Date.now()}@stablepass.test`;
   const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
-  const { horseId } = await seedHorse(admin, "Mahogany");
+  const { horseId, trainerId } = await seedHorse(admin, "Mahogany");
   const raceIds: string[] = [];
 
   const soon = new Date(Date.now() + 6 * 3_600_000).toISOString();
@@ -653,7 +705,12 @@ test("RF5 horse profile — confirmed next race + race record (scratched exclude
     await page.waitForTimeout(1000);
     await page.screenshot({ path: ".rx/review/rf5-horse-profile-confirmed.png", fullPage: true });
   } finally {
+    // Horse and trainer must go too. They are status='active', so a leaked horse shows
+    // up in every member's Explore/Horses and a leaked trainer duplicates the trainer
+    // list — and they accumulate on every run. Horse before trainer (FK).
     for (const id of raceIds) await admin.from("race").delete().eq("id", id);
+    await admin.from("horse").delete().eq("id", horseId);
+    await admin.from("trainer").delete().eq("id", trainerId);
     if (userData?.user?.id) await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});
   }
 });
@@ -661,7 +718,7 @@ test("RF5 horse profile — confirmed next race + race record (scratched exclude
 test("RF5 horse profile — nominated next race hides barrier + jockey", async ({ page }) => {
   const email = `rf5b-harness-${Date.now()}@stablepass.test`;
   const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
-  const { horseId } = await seedHorse(admin, "Northern Star");
+  const { horseId, trainerId } = await seedHorse(admin, "Northern Star");
 
   const soon = new Date(Date.now() + 30 * 3_600_000).toISOString();
   // Barrier + jockey ARE in the row — the UI must still omit them while nominated.
@@ -687,6 +744,8 @@ test("RF5 horse profile — nominated next race hides barrier + jockey", async (
     await page.screenshot({ path: ".rx/review/rf5-horse-profile-nominated.png", fullPage: true });
   } finally {
     await admin.from("race").delete().eq("id", raceId);
+    await admin.from("horse").delete().eq("id", horseId);
+    await admin.from("trainer").delete().eq("id", trainerId);
     if (userData?.user?.id) await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});
   }
 });
@@ -731,10 +790,21 @@ test("RF5 explore — 'Racing today' band shows followed horses' confirmed runne
     await expect(band).not.toContainText("Not Followed"); // follow-scoped
     await expect(band).not.toContainText("Warwick Farm"); // confirmed-only
 
+    // This screenshot is design evidence for the band IN ITS MOCKUP CONTEXT
+    // (06-explore.html places it in the aside beside a populated feed). Asserting only
+    // the band let an earlier capture ship with the feed column rendering "Couldn't
+    // load the feed." — the spec passed and the artefact evidenced nothing. Fail the
+    // test rather than photograph a broken page.
+    await expect(page.locator("body")).not.toContainText("Couldn't load the feed");
+
     await page.waitForTimeout(1000);
     await page.screenshot({ path: ".rx/review/rf5-explore-race-day-band.png", fullPage: true });
   } finally {
     for (const id of raceIds) await admin.from("race").delete().eq("id", id);
+    for (const h of [followed, unfollowed]) {
+      await admin.from("horse").delete().eq("id", h.horseId);
+      await admin.from("trainer").delete().eq("id", h.trainerId);
+    }
     if (userId) await admin.auth.admin.deleteUser(userId).catch(() => {});
   }
 });
