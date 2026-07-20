@@ -10,6 +10,7 @@
 // stable, not derived from `race_horse`.
 import { notFound } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
+import { fetchHorseRaces, raceName, raceDetail, raceWhenParts } from "@/lib/races";
 import { TrainerCard } from "@/components/trainer-card";
 import { FollowNotify } from "./follow-notify";
 import { HorsePosts } from "./horse-posts";
@@ -33,15 +34,6 @@ type HorseRow = {
   photo_url: string | null;
   trainer: TrainerRow | TrainerRow[] | null;
 };
-type NextRaceRow = {
-  barrier: number | null;
-  jockey: string | null;
-  race:
-    | { venue: string | null; race_number: number | null; race_class: string | null; distance_m: number | null; scheduled_at: string | null; status: string }
-    | { venue: string | null; race_number: number | null; race_class: string | null; distance_m: number | null; scheduled_at: string | null; status: string }[]
-    | null;
-};
-
 function one<T>(v: T | T[] | null): T | null {
   return Array.isArray(v) ? (v[0] ?? null) : v;
 }
@@ -55,6 +47,26 @@ function pedigree(sire: string | null, dam: string | null): string | null {
 function ageSexLabel(foalingYear: number | null, sex: string | null): string {
   const age = foalingYear ? new Date().getFullYear() - foalingYear : null;
   return [age != null ? `${age}yo` : null, sex].filter(Boolean).join(" · ");
+}
+
+// The race record's badge text. `race_horse.result` is free text ("2nd of 12");
+// fall back to the ordinal finish, then to a neutral "Ran" so a completed run is
+// never rendered blank.
+function resultLabel(result: string | null, finishPosition: number | null): string {
+  if (result) return result;
+  if (finishPosition == null) return "Ran";
+  const suffix = finishPosition % 100 >= 11 && finishPosition % 100 <= 13
+    ? "th"
+    : ["th", "st", "nd", "rd"][finishPosition % 10] ?? "th";
+  return `${finishPosition}${suffix}`;
+}
+
+// "12 Jul 2026" — the record row's date line.
+function formatRaceDate(raceDate: string | null): string {
+  if (!raceDate) return "";
+  const d = new Date(`${raceDate}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return raceDate;
+  return d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
 }
 
 function trainingStatusLabel(status: string): string {
@@ -120,29 +132,10 @@ export default async function HorseProfilePage({ params }: { params: Promise<{ i
   const coverUrl = row.photo_url ?? null;
   const about = row.story ?? null;
 
-  const { data: nextRaceRows } = await sb
-    .from("race_horse")
-    .select("barrier, jockey, race:race_id(venue, race_number, race_class, distance_m, scheduled_at, status)")
-    .eq("horse_id", id);
-
-  let nextRace: { label: string; name: string; detail: string } | null = null;
-  let earliest: string | null = null;
-  for (const rh of (nextRaceRows ?? []) as NextRaceRow[]) {
-    const race = one(rh.race);
-    if (!race || race.status !== "upcoming" || !race.scheduled_at) continue;
-    if (!earliest || race.scheduled_at < earliest) {
-      earliest = race.scheduled_at;
-      nextRace = {
-        label: "Next race",
-        name: `${race.venue ?? "TBC"} R${race.race_number ?? "?"}${race.race_class ? ` · ${race.race_class}` : ""}`,
-        detail: [
-          race.distance_m ? `${race.distance_m}m` : null,
-          rh.barrier ? `Barrier ${rh.barrier}` : null,
-          rh.jockey ? `Jockey: ${rh.jockey}` : null,
-        ].filter(Boolean).join(" · "),
-      };
-    }
-  }
+  // Next race + race record, split by RF1's `entry_status` lifecycle — the same
+  // helper GET /api/horses/:id uses, so the page and its route can't drift.
+  const { next: nextRace, record } = await fetchHorseRaces(sb, id);
+  const nextWhen = nextRace ? raceWhenParts(nextRace.scheduled_at) : null;
 
   const [{ data: followRow }, { data: notifyRow }, { count: trainerHorseCount }] = await Promise.all([
     sb.from("follow").select("id").eq("user_id", userId).eq("horse_id", id).maybeSingle(),
@@ -203,11 +196,44 @@ export default async function HorseProfilePage({ params }: { params: Promise<{ i
           </div>
 
           <aside className="feed-aside">
-            {nextRace && (
-              <div className="next-race-web">
-                <div className="label">{nextRace.label}</div>
-                <div className="name">{nextRace.name}</div>
-                <div className="detail">{nextRace.detail}</div>
+            {/* Next race (mockup 07 `.next-race-web`). `nominated` reuses the same
+                card with a "Nominated" label and no barrier/jockey — those aren't
+                allocated until the runner is accepted (locked treatment: the
+                mockups predate the nomination decision, so nothing is invented
+                beyond the label). No next race → the card is absent entirely. */}
+            {nextRace && nextWhen && (
+              <div className="next-race-web" data-testid="next-race">
+                <div className="label">
+                  Next race{nextRace.entry_status === "nominated" ? " · Nominated" : ""}
+                </div>
+                <div className="name">
+                  {raceName(nextRace.venue, nextRace.race_number, nextRace.race_class)}
+                </div>
+                <div className="detail">{raceDetail(nextRace)}</div>
+                <div className="when">
+                  <span>{nextWhen[0]}</span>
+                  <strong>{nextWhen[1]}</strong>
+                </div>
+              </div>
+            )}
+
+            {/* Race record — completed runs (`entry_status='ran'`), newest first.
+                No mockup backs this card, so it is composed strictly from existing
+                design-system primitives: the `.aside-card` + `.aside-race` row from
+                the "Racing today" band, with the gold `.race-badge.result` the
+                design system already designates for a result. */}
+            {record.length > 0 && (
+              <div className="aside-card" data-testid="race-record">
+                <h3>Race record</h3>
+                <div className="aside-races">
+                  {record.map((r, i) => (
+                    <div className="aside-race" key={`${r.race_date ?? "?"}-${r.race_number ?? i}`}>
+                      <span className="race-badge result">{resultLabel(r.result, r.finish_position)}</span>
+                      <div className="horse-name">{raceName(r.venue, r.race_number, r.race_class)}</div>
+                      <div className="race-info">{formatRaceDate(r.race_date)}</div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 

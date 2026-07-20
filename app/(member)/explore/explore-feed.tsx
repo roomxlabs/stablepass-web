@@ -35,18 +35,6 @@ type HorseRow = { id: string; display_name: string; trainer: HorseTrainer | Hors
 type ReactionRow = { post_id: string; emoji: ReactionEmoji };
 type BookmarkRow = { post_id: string };
 
-type RaceHorse = { id: string; display_name: string };
-type RaceHorseRow = { horse: RaceHorse | RaceHorse[] | null };
-type RaceRow = {
-  id: string;
-  venue: string | null;
-  race_number: number | null;
-  race_class: string | null;
-  distance_m: number | null;
-  scheduled_at: string | null;
-  race_horse: RaceHorseRow[] | RaceHorseRow | null;
-};
-
 type FollowTrainer = { id: string; name: string };
 type FollowRow = { trainer: FollowTrainer | FollowTrainer[] | null };
 
@@ -73,23 +61,6 @@ export function relativeTime(iso: string | null): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.round(hours / 24);
   return `${days}d ago`;
-}
-
-function formatClock(iso: string): string {
-  const d = new Date(iso);
-  let h = d.getHours();
-  const m = d.getMinutes();
-  const ampm = h >= 12 ? "pm" : "am";
-  h = h % 12 || 12;
-  return `${h}:${String(m).padStart(2, "0")}${ampm}`;
-}
-
-function raceWhen(iso: string | null): string {
-  if (!iso) return "Today";
-  const diffMs = new Date(iso).getTime() - Date.now();
-  const diffHours = Math.round(diffMs / 3_600_000);
-  const rel = diffHours <= 0 ? "now" : diffHours === 1 ? "in 1 hour" : `in ${diffHours} hours`;
-  return `Today · ${formatClock(iso)} · ${rel}`;
 }
 
 function one<T>(v: T | T[] | null): T | null {
@@ -205,29 +176,15 @@ export function ExploreFeed({ viewerId }: { viewerId: string }) {
   // Race-day band + "Trainers you follow" aside — loaded once, independent of the tab.
   useEffect(() => {
     const sb = supabaseBrowser();
-    const today = new Date().toISOString().slice(0, 10);
 
-    sb.from("race")
-      .select("id, venue, race_number, race_class, distance_m, scheduled_at, race_horse(horse:horse_id(id, display_name))")
-      .eq("race_date", today)
-      .order("scheduled_at")
-      .then(({ data }: { data: RaceRow[] | null }) => {
-        const entries: RaceDayEntry[] = [];
-        for (const r of data ?? []) {
-          const runners = Array.isArray(r.race_horse) ? r.race_horse : r.race_horse ? [r.race_horse] : [];
-          for (const runner of runners) {
-            const horse = one(runner.horse);
-            if (!horse) continue;
-            entries.push({
-              horseId: horse.id,
-              horseName: horse.display_name,
-              info: `${r.venue ?? "TBC"} R${r.race_number ?? "?"} · ${r.race_class ?? ""} · ${r.distance_m ?? "?"}m`,
-              when: raceWhen(r.scheduled_at),
-            });
-          }
-        }
-        setRaces(entries);
-      });
+    // Race-day band via the BFF (RF5): today's CONFIRMED runners among the horses
+    // the viewer follows. This used to be a direct browser read of `race`, which
+    // both ignored the viewer's follows and put a gated read outside the BFF.
+    // A failure just leaves the band hidden — it must never break the feed.
+    fetch("/api/race-day")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body) => setRaces(((body?.data?.races ?? []) as RaceDayEntry[])))
+      .catch(() => setRaces([]));
 
     (async () => {
       const { data: followRows } = await sb.from("follow").select("trainer:trainer_id(id,name)").not("trainer_id", "is", null);

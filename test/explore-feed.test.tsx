@@ -162,4 +162,68 @@ describe("ExploreFeed", () => {
     expect(screen.queryByRole("button", { name: "Following" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Explore" })).toBeInTheDocument();
   });
+
+  // ------------------------------------------------ race-day band (RF5, ENG-297)
+
+  it("renders the 'Racing today' band from GET /api/race-day", async () => {
+    const base = fetchImpl(200);
+    global.fetch = vi.fn((input: string | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/race-day")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              races: [
+                { horseId: "h1", horseName: "Mahogany", info: "Randwick R5 · BM78 · 1400m", when: "Today · 4:35pm · in 6 hours", notify: true },
+                { horseId: "h2", horseName: "Northern Star", info: "Caulfield R3 · Maiden · 1100m", when: "Today · 2:10pm · in 3 hours", notify: false },
+              ],
+            },
+          }),
+        });
+      }
+      return base(input, init);
+    }) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} />);
+
+    expect(await screen.findByText("Racing today")).toBeInTheDocument();
+    expect(screen.getByText("Randwick R5 · BM78 · 1400m")).toBeInTheDocument();
+    expect(screen.getByText("Today · 2:10pm · in 3 hours")).toBeInTheDocument();
+  });
+
+  it("hides the band when the member has no runners today (empty array)", async () => {
+    global.fetch = fetchImpl(200) as unknown as typeof fetch; // /api/race-day -> { data: [] }
+
+    render(<ExploreFeed viewerId={VIEWER_ID} />);
+    await screen.findByText("Mahogany");
+
+    expect(screen.queryByText("Racing today")).not.toBeInTheDocument();
+  });
+
+  it("hides the band (and never breaks the feed) when race-day fails", async () => {
+    const base = fetchImpl(200);
+    global.fetch = vi.fn((input: string | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/race-day")) return Promise.reject(new Error("network"));
+      return base(input, init);
+    }) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} />);
+
+    // The feed still renders...
+    expect(await screen.findByText("Mahogany")).toBeInTheDocument();
+    // ...and the band is simply absent.
+    expect(screen.queryByText("Racing today")).not.toBeInTheDocument();
+  });
+
+  it("reads the band through the BFF, never the browser Supabase client (guardrail)", async () => {
+    global.fetch = fetchImpl(200) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} />);
+    await screen.findByText("Mahogany");
+
+    // The gated race read must not happen client-side any more.
+    expect(fromMock).not.toHaveBeenCalledWith("race");
+    expect(fromMock).not.toHaveBeenCalledWith("race_horse");
+  });
 });

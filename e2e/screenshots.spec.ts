@@ -519,3 +519,222 @@ test("A2 trainer profile Website link renders, opens in a new tab, and logs a cl
     }
   }
 });
+
+// ---------------------------------------------------------------- RF5 (ENG-297)
+// Member race reads: the next-race card (confirmed + nominated), the race record,
+// and the Explore "Racing today" band. Every race row here is seeded with an
+// explicit `entry_status` so the lifecycle filtering is what's being screenshotted.
+
+const RF5_PASSWORD = "harness-password-123!";
+const rNum = () => 1000 + Math.floor(Math.random() * 9000);
+
+// `race.race_date` is the LOCAL race day (an AU date), which is what
+// GET /api/race-day compares against — deriving it from a UTC ISO slice would be
+// a day off for most of the Australian afternoon.
+function localDate(d: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Seed a trainer + horse, returning both ids. */
+async function seedHorse(
+  admin: ReturnType<typeof createClient>,
+  racingName: string,
+  extra: Record<string, unknown> = {},
+) {
+  const { data: trainer, error: tErr } = await admin
+    .from("trainer")
+    .insert({ name: "Chris Waller", slug: `cw-rf5-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, stable_name: "Chris Waller Racing", location: "Rosehill, NSW" })
+    .select("id")
+    .single();
+  if (tErr) throw tErr;
+
+  const { data: horse, error: hErr } = await admin
+    .from("horse")
+    .insert({
+      trainer_id: trainer.id,
+      display_name: racingName,
+      racing_name: racingName,
+      sire: "Snitzel",
+      dam: "Polar Success",
+      sex: "gelding",
+      foaling_year: new Date().getFullYear() - 5,
+      training_status: "racing",
+      status: "active",
+      starts: 24,
+      wins: 6,
+      places: 9,
+      prize_money_cents: 120_000_000,
+      photo_url: "https://placehold.co/1200x400/285D50/FAF7F2",
+      story: "Mahogany joined Chris Waller's Rosehill stable as a yearling out of Snitzel.",
+      ...extra,
+    })
+    .select("id")
+    .single();
+  if (hErr) throw hErr;
+  return { trainerId: trainer.id as string, horseId: horse.id as string };
+}
+
+/** Seed a race + its runner row with an explicit entry_status. */
+async function seedRun(
+  admin: ReturnType<typeof createClient>,
+  horseId: string,
+  race: Record<string, unknown>,
+  runner: Record<string, unknown>,
+) {
+  const { data: row, error: rErr } = await admin
+    .from("race")
+    .insert({ race_number: rNum(), ...race })
+    .select("id")
+    .single();
+  if (rErr) throw rErr;
+  const { error: rhErr } = await admin.from("race_horse").insert({ race_id: row.id, horse_id: horseId, ...runner });
+  if (rhErr) throw rhErr;
+  return row.id as string;
+}
+
+async function signIn(page: import("@playwright/test").Page, email: string) {
+  await page.goto("/signin");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill(RF5_PASSWORD);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.waitForURL("**/explore");
+}
+
+test("RF5 horse profile — confirmed next race + race record (scratched excluded)", async ({ page }) => {
+  const email = `rf5a-harness-${Date.now()}@stablepass.test`;
+  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+  const { horseId } = await seedHorse(admin, "Mahogany");
+  const raceIds: string[] = [];
+
+  const soon = new Date(Date.now() + 6 * 3_600_000).toISOString();
+  const sooner = new Date(Date.now() + 2 * 3_600_000).toISOString();
+
+  // The confirmed runner that should win the card...
+  raceIds.push(await seedRun(admin,horseId,
+    { status: "upcoming", venue: "Randwick", race_date: soon.slice(0, 10), race_class: "BM78", distance_m: 1400, scheduled_at: soon },
+    { entry_status: "confirmed", barrier: 4, jockey: "T. Berry" }));
+  // ...and an EARLIER scratched one that must not mask it.
+  raceIds.push(await seedRun(admin, horseId,
+    { status: "upcoming", venue: "Rosehill", race_date: sooner.slice(0, 10), race_class: "BM64", distance_m: 1200, scheduled_at: sooner },
+    { entry_status: "scratched", barrier: 2, jockey: "J. Doe" }));
+  // Two completed runs for the record + one scratched run that must stay out.
+  raceIds.push(await seedRun(admin, horseId,
+    { status: "finished", venue: "Caulfield", race_date: "2026-06-04", race_class: "Maiden", distance_m: 1100, scheduled_at: "2026-06-04T04:00:00.000Z" },
+    { entry_status: "ran", barrier: 7, jockey: "K. McEvoy", result: "2nd of 12", finish_position: 2 }));
+  raceIds.push(await seedRun(admin, horseId,
+    { status: "finished", venue: "Flemington", race_date: "2026-05-11", race_class: "BM70", distance_m: 1300, scheduled_at: "2026-05-11T04:00:00.000Z" },
+    { entry_status: "ran", barrier: 3, jockey: "J. McDonald", result: "1st of 10", finish_position: 1 }));
+  raceIds.push(await seedRun(admin, horseId,
+    { status: "finished", venue: "Moonee Valley", race_date: "2026-04-02", race_class: "BM64", distance_m: 1200, scheduled_at: "2026-04-02T04:00:00.000Z" },
+    { entry_status: "scratched" }));
+
+  const { data: userData, error: uErr } = await admin.auth.admin.createUser({ email, password: RF5_PASSWORD, email_confirm: true });
+  if (uErr) throw uErr;
+
+  try {
+    await signIn(page, email);
+    await page.goto(`/horses/${horseId}`);
+
+    const card = page.getByTestId("next-race");
+    await expect(card).toBeVisible();
+    await expect(card).toContainText("Randwick");
+    await expect(card).toContainText("Barrier 4");
+    await expect(card).toContainText("Jockey: T. Berry");
+    // The earlier scratched entry must not be the one shown.
+    await expect(card).not.toContainText("Rosehill");
+
+    const record = page.getByTestId("race-record");
+    await expect(record).toBeVisible();
+    await expect(record).toContainText("1st of 10"); // newest run first
+    await expect(record).toContainText("2nd of 12");
+    await expect(record).not.toContainText("Moonee Valley"); // scratched run excluded
+
+    await page.waitForTimeout(1000);
+    await page.screenshot({ path: ".rx/review/rf5-horse-profile-confirmed.png", fullPage: true });
+  } finally {
+    for (const id of raceIds) await admin.from("race").delete().eq("id", id);
+    if (userData?.user?.id) await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});
+  }
+});
+
+test("RF5 horse profile — nominated next race hides barrier + jockey", async ({ page }) => {
+  const email = `rf5b-harness-${Date.now()}@stablepass.test`;
+  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+  const { horseId } = await seedHorse(admin, "Northern Star");
+
+  const soon = new Date(Date.now() + 30 * 3_600_000).toISOString();
+  // Barrier + jockey ARE in the row — the UI must still omit them while nominated.
+  const raceId = await seedRun(admin, horseId,
+    { status: "upcoming", venue: "Randwick", race_date: soon.slice(0, 10), race_class: "BM78", distance_m: 1400, scheduled_at: soon },
+    { entry_status: "nominated", barrier: 4, jockey: "T. Berry" });
+
+  const { data: userData, error: uErr } = await admin.auth.admin.createUser({ email, password: RF5_PASSWORD, email_confirm: true });
+  if (uErr) throw uErr;
+
+  try {
+    await signIn(page, email);
+    await page.goto(`/horses/${horseId}`);
+
+    const card = page.getByTestId("next-race");
+    await expect(card).toBeVisible();
+    await expect(card).toContainText("Nominated");
+    await expect(card).toContainText("1400m");
+    await expect(card).not.toContainText("Barrier");
+    await expect(card).not.toContainText("Jockey");
+
+    await page.waitForTimeout(1000);
+    await page.screenshot({ path: ".rx/review/rf5-horse-profile-nominated.png", fullPage: true });
+  } finally {
+    await admin.from("race").delete().eq("id", raceId);
+    if (userData?.user?.id) await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});
+  }
+});
+
+test("RF5 explore — 'Racing today' band shows followed horses' confirmed runners", async ({ page }) => {
+  const email = `rf5c-harness-${Date.now()}@stablepass.test`;
+  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+  const followed = await seedHorse(admin, "Mahogany");
+  const unfollowed = await seedHorse(admin, "Not Followed");
+  const raceIds: string[] = [];
+
+  const soon = new Date(Date.now() + 5 * 3_600_000).toISOString();
+  const today = localDate();
+
+  raceIds.push(await seedRun(admin, followed.horseId,
+    { status: "upcoming", venue: "Randwick", race_date: today, race_class: "BM78", distance_m: 1400, scheduled_at: soon },
+    { entry_status: "confirmed", barrier: 4, jockey: "T. Berry" }));
+  // A followed but only-nominated runner — not on today's card yet.
+  raceIds.push(await seedRun(admin, followed.horseId,
+    { status: "upcoming", venue: "Warwick Farm", race_date: today, race_class: "BM64", distance_m: 1200, scheduled_at: soon },
+    { entry_status: "nominated" }));
+  // A confirmed runner the member does NOT follow — must not appear.
+  raceIds.push(await seedRun(admin, unfollowed.horseId,
+    { status: "upcoming", venue: "Caulfield", race_date: today, race_class: "Maiden", distance_m: 1100, scheduled_at: soon },
+    { entry_status: "confirmed", barrier: 1, jockey: "A. Nother" }));
+
+  const { data: userData, error: uErr } = await admin.auth.admin.createUser({ email, password: RF5_PASSWORD, email_confirm: true });
+  if (uErr) throw uErr;
+  const userId = userData!.user!.id;
+
+  await admin.from("follow").insert({ user_id: userId, horse_id: followed.horseId });
+  await admin.from("notify_optin").insert({ user_id: userId, horse_id: followed.horseId });
+
+  try {
+    await signIn(page, email);
+    await page.goto("/explore");
+
+    const band = page.locator(".aside-card", { hasText: "Racing today" });
+    await expect(band).toBeVisible();
+    await expect(band).toContainText("Mahogany");
+    await expect(band).toContainText("Randwick");
+    await expect(band).not.toContainText("Not Followed"); // follow-scoped
+    await expect(band).not.toContainText("Warwick Farm"); // confirmed-only
+
+    await page.waitForTimeout(1000);
+    await page.screenshot({ path: ".rx/review/rf5-explore-race-day-band.png", fullPage: true });
+  } finally {
+    for (const id of raceIds) await admin.from("race").delete().eq("id", id);
+    if (userId) await admin.auth.admin.deleteUser(userId).catch(() => {});
+  }
+});
