@@ -63,6 +63,32 @@ describe("WebsiteLink", () => {
     expect((init as RequestInit).method).toBe("POST");
   });
 
+  it("logs a middle-click (opens in a new tab without ever firing onClick)", async () => {
+    const user = userEvent.setup();
+    render(<WebsiteLink trainerId={TRAINER_ID} websiteUrl="https://wallerracing.example" />);
+
+    await user.pointer({
+      keys: "[MouseMiddle]",
+      target: screen.getByRole("link", { name: /website/i }),
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT log a right-click (opening the context menu is not a visit)", async () => {
+    const user = userEvent.setup();
+    render(<WebsiteLink trainerId={TRAINER_ID} websiteUrl="https://wallerracing.example" />);
+
+    // auxclick fires for any non-primary button, so an unguarded onAuxClick
+    // would count "Copy link address" as a click-through that never happened.
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: screen.getByRole("link", { name: /website/i }),
+    });
+
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("GUARDRAIL: sends no user identity in the click request (server derives it)", async () => {
     const user = userEvent.setup();
     render(<WebsiteLink trainerId={TRAINER_ID} websiteUrl="https://wallerracing.example" />);

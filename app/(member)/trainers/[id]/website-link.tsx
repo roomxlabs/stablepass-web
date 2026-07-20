@@ -72,7 +72,14 @@ export function WebsiteLink({ trainerId, websiteUrl }: WebsiteLinkProps) {
       // onAuxClick covers middle-click "open in new tab", which never fires
       // onClick — without it the metric silently undercounts. React fires
       // onClick for the primary button only, so the two can't double-log.
-      onAuxClick={logClick}
+      //
+      // Guarded to button 1 (middle) specifically: auxclick fires for ANY
+      // non-primary button, so an unguarded handler also logs a right-click —
+      // "Copy link address" would count as a visit that never happened.
+      // Undercounting middle-clicks is a smaller sin than inventing clicks.
+      onAuxClick={(e) => {
+        if (e.button === 1) logClick();
+      }}
     >
       <ExternalLinkIcon /> Website
     </a>
