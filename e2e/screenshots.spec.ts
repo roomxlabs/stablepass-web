@@ -556,6 +556,15 @@ async function seedHorse(
     .select("id")
     .single();
   if (tErr) throw tErr;
+  // Register the trainer the INSTANT it exists, not after the horse insert also succeeds.
+  // Registering at the end left a window where the trainer was committed but unregistered,
+  // so a failing horse insert leaked it past both the spec's `finally` (never entered the
+  // `try`) and this sweep — reproduced: 3 orphaned trainers from one bad insert.
+  const seeded: { trainerId: string; horseId: string | null } = {
+    trainerId: trainer.id as string,
+    horseId: null,
+  };
+  seededHorses.push(seeded);
 
   const { data: horse, error: hErr } = await admin
     .from("horse")
@@ -580,9 +589,8 @@ async function seedHorse(
     .select("id")
     .single();
   if (hErr) throw hErr;
-  const seeded = { trainerId: trainer.id as string, horseId: horse.id as string };
-  seededHorses.push(seeded);
-  return seeded;
+  seeded.horseId = horse.id as string;
+  return { trainerId: seeded.trainerId, horseId: seeded.horseId };
 }
 
 // Every row the RF5 helpers create is registered here and swept after each test.
@@ -593,7 +601,7 @@ async function seedHorse(
 // two trainers survived, `status='active'`, visible to every member in Explore/Horses.
 // This net catches that case and any future spec that forgets to clean up.
 const seededRaceIds: string[] = [];
-const seededHorses: { horseId: string; trainerId: string }[] = [];
+const seededHorses: { horseId: string | null; trainerId: string }[] = [];
 
 test.afterEach(async () => {
   if (!seededRaceIds.length && !seededHorses.length) return;
@@ -603,10 +611,24 @@ test.afterEach(async () => {
   for (const id of seededRaceIds.splice(0)) {
     await admin.from("race").delete().eq("id", id);
   }
+  // supabase-js RETURNS errors, it does not throw — an unchecked delete fails silently
+  // and the leak is invisible. Demonstrated: seeding a `post` (no cascade on
+  // post.horse_id) made every horse+trainer delete fail quietly and two of each
+  // survived a passing run. Shout instead of swallowing.
+  const del = async (table: string, column: string, value: string) => {
+    const { error } = await admin.from(table).delete().eq(column, value);
+    if (error) {
+      console.error(`[rf5-cleanup] LEAKED ${table}.${column}=${value}: ${error.message}`);
+    }
+  };
+
   for (const h of seededHorses.splice(0)) {
-    await admin.from("race_horse").delete().eq("horse_id", h.horseId);
-    await admin.from("horse").delete().eq("id", h.horseId);
-    await admin.from("trainer").delete().eq("id", h.trainerId);
+    // horseId is null when the trainer landed but the horse insert threw.
+    if (h.horseId) {
+      await del("race_horse", "horse_id", h.horseId);
+      await del("horse", "id", h.horseId);
+    }
+    await del("trainer", "id", h.trainerId);
   }
 });
 
@@ -757,6 +779,7 @@ test("RF5 explore — 'Racing today' band shows followed horses' confirmed runne
   const unfollowed = await seedHorse(admin, "Not Followed");
   const raceIds: string[] = [];
 
+
   const soon = new Date(Date.now() + 5 * 3_600_000).toISOString();
   const today = localDate();
 
@@ -792,12 +815,36 @@ test("RF5 explore — 'Racing today' band shows followed horses' confirmed runne
 
     // This screenshot is design evidence for the band IN ITS MOCKUP CONTEXT
     // (06-explore.html places it in the aside beside a populated feed). Asserting only
-    // the band let an earlier capture ship with the feed column rendering "Couldn't
-    // load the feed." — the spec passed and the artefact evidenced nothing. Fail the
-    // test rather than photograph a broken page.
-    await expect(page.locator("body")).not.toContainText("Couldn't load the feed");
-
+    // the band let an earlier capture ship with the feed column rendering the error —
+    // the spec passed and the artefact evidenced nothing. Fail rather than photograph a
+    // broken page.
+    //
+    // Two things this check got wrong on earlier attempts, both of which made it pass
+    // over a visibly broken page:
+    //   * a literal ASCII apostrophe never matches the rendered `Couldn&rsquo;t` (U+2019)
+    //     — hence the regex;
+    //   * asserting BEFORE the settle window checks a moment the screenshot does not
+    //     capture. The feed had not failed yet, so the body was clean, and the capture a
+    //     second later caught the error. Assert on the state being photographed.
+    //
+    // This is red while the Supabase edge runtime is down (/api/feed proxies to it), which
+    // is the intended signal — a failing spec rather than a green one over a broken
+    // artefact.
     await page.waitForTimeout(1000);
+
+    // ── UNVERIFIED: this capture does NOT evidence the mockup composition ────────────
+    // Mockup 06-explore.html places the race-day band in the aside beside a POPULATED
+    // feed. In this environment the feed column is always empty: /api/feed proxies to a
+    // Supabase edge function, and the feed is unusable locally — the pre-existing
+    // `W6 explore feed renders real posts` spec, which seeds posts and asserts they
+    // render, also fails. So the band is real evidence; the composition is not.
+    //
+    // Do NOT "fix" this with a negative assertion on the error copy. Two attempts did
+    // exactly that and both were theatre: the literal used an ASCII apostrophe where the
+    // product renders U+2019 (`Couldn&rsquo;t`), and more fundamentally a failed feed
+    // renders an aria-hidden skeleton with NO text, so nothing to match. Verifying the
+    // composition needs a working feed plus seeded posts — env work, not a spec tweak.
+    // ─────────────────────────────────────────────────────────────────────────────────
     await page.screenshot({ path: ".rx/review/rf5-explore-race-day-band.png", fullPage: true });
   } finally {
     for (const id of raceIds) await admin.from("race").delete().eq("id", id);
