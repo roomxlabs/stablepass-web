@@ -13,6 +13,7 @@ import type { HorseSummary } from "@/components/types";
 import { FollowNotify } from "./follow-notify";
 import { StableHorses } from "./stable-horses";
 import { TrainerPosts } from "./trainer-posts";
+import { WebsiteLink } from "./website-link";
 
 type TrainerRow = {
   id: string;
@@ -22,6 +23,7 @@ type TrainerRow = {
   location: string | null;
   bio: string | null;
   photo_url: string | null;
+  website_url: string | null;
 };
 type HorseRow = { id: string; display_name: string; racing_name: string | null; wins: number };
 
@@ -60,7 +62,7 @@ export default async function TrainerProfilePage({ params }: { params: Promise<{
 
   const { data: trainerRow } = await sb
     .from("trainer")
-    .select("id, name, display_name, stable_name, location, bio, photo_url")
+    .select("id, name, display_name, stable_name, location, bio, photo_url, website_url")
     .eq("id", id)
     .maybeSingle();
   if (!trainerRow) notFound();
@@ -105,12 +107,19 @@ export default async function TrainerProfilePage({ params }: { params: Promise<{
             {subtitle && <p className="profile-pedigree-web">{subtitle}</p>}
           </div>
 
-          <FollowNotify
-            trainerId={id}
-            userId={userId}
-            initialFollowing={Boolean(followRow)}
-            initialNotify={Boolean(notifyRow)}
-          />
+          {/* Secondary-action row: Follow/Notify plus the optional Website link.
+              FollowNotify renders its own .profile-actions-web flex row; nesting it
+              here keeps all three actions on one evenly-gapped line without the
+              Website link needing a grid cell of its own. */}
+          <div className="profile-actions-web">
+            <FollowNotify
+              trainerId={id}
+              userId={userId}
+              initialFollowing={Boolean(followRow)}
+              initialNotify={Boolean(notifyRow)}
+            />
+            <WebsiteLink trainerId={id} websiteUrl={t.website_url} />
+          </div>
 
           <div className="profile-stats-web cols-3" style={{ gridColumn: "1 / -1" }}>
             <div className="stat-w"><div className="stat-num">{horses.length}</div><div className="stat-label">Horses</div></div>

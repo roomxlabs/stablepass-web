@@ -428,3 +428,94 @@ test("W7 horses browse list renders", async ({ page }) => {
     }
   }
 });
+
+test("A2 trainer profile Website link renders, opens in a new tab, and logs a click", async ({ page, context }) => {
+  const email = `a2-harness-${Date.now()}@stablepass.test`;
+  const password = "harness-password-123!";
+  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+  // Two trainers: one WITH a website_url (the link must render) and one WITHOUT
+  // (the link must be absent) — the two states the ticket names.
+  const stamp = Date.now();
+  const { data: linked, error: linkedError } = await admin
+    .from("trainer")
+    .insert({
+      name: "Chris Waller",
+      slug: `a2-waller-${stamp}`,
+      stable_name: "Chris Waller Racing",
+      location: "Rosehill, NSW",
+      bio: "Premiership-winning trainer with a stable of stakes performers.",
+      website_url: "https://example.com/waller-racing",
+    })
+    .select("id")
+    .single();
+  if (linkedError) throw linkedError;
+
+  const { data: bare, error: bareError } = await admin
+    .from("trainer")
+    .insert({
+      name: "Annabel Neasham",
+      slug: `a2-neasham-${stamp}`,
+      stable_name: "Neasham Racing",
+      location: "Warwick Farm, NSW",
+      bio: "No website on file — the Website action must not render.",
+    })
+    .select("id")
+    .single();
+  if (bareError) throw bareError;
+
+  const { data: userData, error: userError } = await admin.auth.admin.createUser({ email, password, email_confirm: true });
+  if (userError) throw userError;
+
+  try {
+    await page.goto("/signin");
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password").fill(password);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.waitForURL("**/explore");
+
+    // --- State 1: website_url set -> the Website action renders in the action row.
+    await page.goto(`/trainers/${linked.id}`);
+    const websiteLink = page.getByRole("link", { name: /website/i });
+    await expect(websiteLink).toBeVisible();
+    await expect(websiteLink).toHaveAttribute("href", "https://example.com/waller-racing");
+    await expect(websiteLink).toHaveAttribute("target", "_blank");
+    await expect(websiteLink).toHaveAttribute("rel", "noopener noreferrer");
+    await page.screenshot({ path: ".rx/review/a2-trainer-website-link.png", fullPage: true });
+
+    // --- The click: opens a new tab AND logs exactly one row for this member.
+    const [popup] = await Promise.all([
+      context.waitForEvent("page"),
+      websiteLink.click(),
+    ]);
+    expect(popup.url()).toContain("example.com/waller-racing");
+    await popup.close();
+
+    // The log is fire-and-forget, so poll briefly rather than assuming it landed.
+    let clicks: unknown[] = [];
+    for (let i = 0; i < 10; i++) {
+      const { data } = await admin
+        .from("trainer_website_click")
+        .select("id, trainer_id, user_id")
+        .eq("trainer_id", linked.id);
+      clicks = data ?? [];
+      if (clicks.length > 0) break;
+      await page.waitForTimeout(300);
+    }
+    expect(clicks).toHaveLength(1);
+    // GUARDRAIL: the row is attributed to the signed-in member, server-derived.
+    expect((clicks[0] as { user_id: string }).user_id).toBe(userData.user!.id);
+
+    // --- State 2: no website_url -> no Website action at all.
+    await page.goto(`/trainers/${bare.id}`);
+    await expect(page.locator(".profile-name-web")).toHaveText("Annabel Neasham");
+    await expect(page.getByRole("link", { name: /website/i })).toHaveCount(0);
+    await page.screenshot({ path: ".rx/review/a2-trainer-no-website.png", fullPage: true });
+  } finally {
+    // Best-effort cleanup; click rows cascade with the trainer.
+    await admin.from("trainer_website_click").delete().eq("trainer_id", linked.id);
+    if (userData?.user?.id) {
+      await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});
+    }
+  }
+});
