@@ -49,6 +49,11 @@ function ageSexLabel(foalingYear: number | null, sex: string | null): string {
   return [age != null ? `${age}yo` : null, sex].filter(Boolean).join(" · ");
 }
 
+// How many completed runs the aside card shows. The card has no mockup backing,
+// and a campaigner with 24+ starts would otherwise render an aside taller than the
+// page; the API still returns the full record. Flagged for the mockup owner.
+const RECORD_ROWS = 6;
+
 // The race record's badge text. `race_horse.result` is free text ("2nd of 12");
 // fall back to the ordinal finish, then to a neutral "Ran" so a completed run is
 // never rendered blank.
@@ -226,7 +231,7 @@ export default async function HorseProfilePage({ params }: { params: Promise<{ i
               <div className="aside-card" data-testid="race-record">
                 <h3>Race record</h3>
                 <div className="aside-races">
-                  {record.map((r, i) => (
+                  {record.slice(0, RECORD_ROWS).map((r, i) => (
                     <div className="aside-race" key={`${r.race_date ?? "?"}-${r.race_number ?? i}`}>
                       <span className="race-badge result">{resultLabel(r.result, r.finish_position)}</span>
                       <div className="horse-name">{raceName(r.venue, r.race_number, r.race_class)}</div>

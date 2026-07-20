@@ -2,7 +2,7 @@
 // core of the member race reads: which runners reach the next-race card, which
 // reach the race record, and (the guardrail-adjacent one) which reach NEITHER.
 import { describe, it, expect } from "vitest";
-import { splitRaces, raceName, raceDetail, raceWhenParts, raceDayWhen } from "@/lib/races";
+import { splitRaces, raceName, raceDetail, raceWhenParts, raceDayWhen, racingDay, formatClock } from "@/lib/races";
 
 const upcoming = (scheduledAt: string) => ({
   venue: "Randwick",
@@ -153,5 +153,43 @@ describe("presentation helpers", () => {
     const now = new Date("2026-08-01T00:35:00.000Z");
     expect(raceDayWhen("2026-08-01T06:35:00.000Z", now)).toContain("in 6 hours");
     expect(raceDayWhen(null, now)).toBe("Today");
+  });
+
+  it("says 'In 1 day', not 'In 1 days'", () => {
+    const now = new Date("2026-08-01T00:00:00.000Z");
+    const [, rel] = raceWhenParts("2026-08-02T01:00:00.000Z", now); // 25h out
+    expect(rel).toBe("In 1 day");
+  });
+
+  it("pluralizes the hour and day arms correctly across the boundary", () => {
+    const now = new Date("2026-08-01T00:00:00.000Z");
+    expect(raceWhenParts("2026-08-01T01:00:00.000Z", now)[1]).toBe("In 1 hour");
+    expect(raceWhenParts("2026-08-01T03:00:00.000Z", now)[1]).toBe("In 3 hours");
+    expect(raceWhenParts("2026-08-04T00:00:00.000Z", now)[1]).toBe("In 3 days");
+  });
+});
+
+// These pin the AU racing zone explicitly. They are the regression guard for the
+// bug where the day/clock were derived from the SERVER's timezone: on a UTC host
+// the race-day band went blank all morning on race day and the card showed a time
+// up to 10h off. Every assertion below is a fixed instant with a known AU answer,
+// so it fails on any host whose zone leaks back into the implementation.
+describe("racing timezone is pinned to Australia/Sydney, never the host", () => {
+  it("racingDay rolls over on the AU day, not the UTC day", () => {
+    // 23:00Z on 1 Aug is already 09:00 on 2 Aug in Sydney (UTC+10).
+    expect(racingDay(new Date("2026-08-01T23:00:00.000Z"))).toBe("2026-08-02");
+    // 13:00Z on 1 Aug is 23:00 the same day in Sydney.
+    expect(racingDay(new Date("2026-08-01T13:00:00.000Z"))).toBe("2026-08-01");
+  });
+
+  it("formatClock renders the track's clock", () => {
+    // 06:35Z == 4:35pm in Sydney (AEST, UTC+10) — the mockup's exact example.
+    expect(formatClock("2026-08-01T06:35:00.000Z")).toBe("4:35pm");
+  });
+
+  it("'Today' is judged on the AU racing day", () => {
+    // Both instants are the same Sydney day (2 Aug) though different UTC days.
+    const now = new Date("2026-08-01T23:00:00.000Z");
+    expect(raceWhenParts("2026-08-02T04:00:00.000Z", now)[0]).toContain("Today");
   });
 });

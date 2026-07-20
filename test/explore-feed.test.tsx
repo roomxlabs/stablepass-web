@@ -193,7 +193,31 @@ describe("ExploreFeed", () => {
   });
 
   it("hides the band when the member has no runners today (empty array)", async () => {
-    global.fetch = fetchImpl(200) as unknown as typeof fetch; // /api/race-day -> { data: [] }
+    // Mock the route's REAL shape — `{ data: { races: [] } }`. The generic
+    // fallback returns `{ data: [] }`, which would make this pass vacuously
+    // (`undefined ?? []`) even against a route that returned nothing at all.
+    const base = fetchImpl(200);
+    global.fetch = vi.fn((input: string | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/race-day")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: { races: [] } }) });
+      }
+      return base(input, init);
+    }) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} />);
+    await screen.findByText("Mahogany");
+
+    expect(screen.queryByText("Racing today")).not.toBeInTheDocument();
+  });
+
+  it("hides the band on a 402 without rendering gated content", async () => {
+    const base = fetchImpl(200);
+    global.fetch = vi.fn((input: string | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/race-day")) {
+        return Promise.resolve({ ok: false, status: 402, json: async () => ({ error: { code: "subscription_required" } }) });
+      }
+      return base(input, init);
+    }) as unknown as typeof fetch;
 
     render(<ExploreFeed viewerId={VIEWER_ID} />);
     await screen.findByText("Mahogany");

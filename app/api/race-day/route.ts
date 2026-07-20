@@ -14,7 +14,7 @@
 // (admin-only RLS) is never queried.
 import { ok, UNAUTH, GATED } from "@/lib/api/envelope";
 import { supabaseServer } from "@/lib/supabase/server";
-import { raceName, raceDayWhen } from "@/lib/races";
+import { raceName, raceDayWhen, racingDay } from "@/lib/races";
 
 type RaceJoin = {
   venue: string | null;
@@ -36,12 +36,6 @@ function one<T>(v: T | T[] | null): T | null {
   return Array.isArray(v) ? (v[0] ?? null) : v;
 }
 
-/** Local calendar date as YYYY-MM-DD, matching `race.race_date` (a DATE column). */
-function todayLocal(now: Date = new Date()): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-}
-
 export async function GET() {
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
@@ -61,10 +55,17 @@ export async function GET() {
   const horseIds = [...new Set(((followRows ?? []) as FollowRow[]).map((f) => f.horse_id).filter((v): v is string => Boolean(v)))];
   if (horseIds.length === 0) return ok({ races: [] });
 
+  // `race.race_date` is the AU racing day — derive "today" in that zone, never the
+  // host's, or a UTC-deployed server hides the band all morning on race day.
+  const today = racingDay();
+
+  // The date filter is pushed into the embedded race (an inner join) rather than
+  // applied in JS, so we don't pull a horse's entire confirmed history per request.
   const { data: runnerRows } = await sb
     .from("race_horse")
-    .select("horse:horse_id(id, display_name), race:race_id(venue, race_date, race_number, race_class, distance_m, scheduled_at)")
+    .select("horse:horse_id(id, display_name), race:race_id!inner(venue, race_date, race_number, race_class, distance_m, scheduled_at)")
     .eq("entry_status", "confirmed")
+    .eq("race.race_date", today)
     .in("horse_id", horseIds);
 
   // Which of those the viewer has a bell on — drives the band's bell icon.
@@ -75,12 +76,13 @@ export async function GET() {
     .in("horse_id", horseIds);
   const notifySet = new Set(((notifyRows ?? []) as NotifyRow[]).map((n) => n.horse_id));
 
-  const today = todayLocal();
   const races = ((runnerRows ?? []) as RunnerRow[])
     .flatMap((rh) => {
       const race = one(rh.race);
       const horse = one(rh.horse);
-      if (!race || !horse || race.race_date !== today) return [];
+      // `horse` is null when the embed was filtered out by `horse_select_sub`
+      // (hidden/disabled horse) — that row must be dropped, not rendered.
+      if (!race || !horse) return [];
       return [{
         sortKey: race.scheduled_at ?? "",
         entry: {

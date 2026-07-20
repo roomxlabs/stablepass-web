@@ -125,7 +125,15 @@ export function splitRaces(rows: RaceHorseRow[]): HorseRaces {
   return { next, record };
 }
 
-/** Read one horse's races through the caller's RLS-scoped client. */
+/**
+ * Read one horse's races through the caller's RLS-scoped client.
+ *
+ * PRECONDITION — the caller MUST have already established that this horse is
+ * visible to the viewer (both current callers do, via the `horse` read + 404).
+ * `race_horse`'s RLS policy is subscription-scoped (`has_content_access`), NOT
+ * horse-scoped, so passing an id for a hidden/disabled horse WILL return its
+ * runner rows. Do not call this before the horse visibility check.
+ */
 export async function fetchHorseRaces(sb: QueryClient, horseId: string): Promise<HorseRaces> {
   const query = sb.from("race_horse") as RaceHorseQuery;
   const { data } = await query.select(RACE_HORSE_SELECT).eq("horse_id", horseId);
@@ -133,6 +141,19 @@ export async function fetchHorseRaces(sb: QueryClient, horseId: string): Promise
 }
 
 // ---------------------------------------------------------------- presentation
+
+// Australian racing runs on AU local time, and `race.race_date` is that AU
+// calendar day. Every date/clock derivation below is pinned to this zone: these
+// helpers run SERVER-side (route handlers + server components), so using the host
+// clock would render a race time up to 10h off and hide today's race-day band for
+// the first ~10 hours of every AU race day on a UTC-deployed host.
+export const RACING_TZ = "Australia/Sydney";
+
+/** The current AU racing day as YYYY-MM-DD — the value `race.race_date` holds. */
+export function racingDay(now: Date = new Date()): string {
+  // en-CA formats as YYYY-MM-DD.
+  return new Intl.DateTimeFormat("en-CA", { timeZone: RACING_TZ }).format(now);
+}
 
 /** "Randwick R5 · BM78" — the next-race card's headline (mockup 07, `.name`). */
 export function raceName(venue: string | null, raceNumber: number | null, raceClass: string | null): string {
@@ -146,33 +167,36 @@ export function raceName(venue: string | null, raceNumber: number | null, raceCl
 export function raceDetail(next: Pick<NextRace, "distance_m" | "barrier" | "jockey">): string {
   return [
     next.distance_m ? `${next.distance_m}m` : null,
-    next.barrier ? `Barrier ${next.barrier}` : null,
+    next.barrier != null ? `Barrier ${next.barrier}` : null,
     next.jockey ? `Jockey: ${next.jockey}` : null,
   ]
     .filter(Boolean)
     .join(" · ");
 }
 
-/** "4:35pm" in the viewer's locale clock. */
-export function formatClock(iso: string, now: Date = new Date()): string {
-  void now;
-  const d = new Date(iso);
-  let h = d.getHours();
-  const m = d.getMinutes();
-  const ampm = h >= 12 ? "pm" : "am";
-  h = h % 12 || 12;
-  return `${h}:${String(m).padStart(2, "0")}${ampm}`;
+/** "4:35pm" on the track's clock (AU racing time — see RACING_TZ). */
+export function formatClock(iso: string): string {
+  const parts = new Intl.DateTimeFormat("en-AU", {
+    timeZone: RACING_TZ,
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).formatToParts(new Date(iso));
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("hour")}:${get("minute")}${get("dayPeriod").toLowerCase().replace(/\s|\./g, "")}`;
 }
 
 /** The mockup's `.when` row: ["Today · 4:35pm", "In 6 hours"]. */
 export function raceWhenParts(iso: string | null, now: Date = new Date()): [string, string] {
   if (!iso) return ["Scheduled", "TBC"];
   const then = new Date(iso);
-  const sameDay = then.toDateString() === now.toDateString();
+  // Compare AU racing days, not host days.
+  const sameDay = racingDay(then) === racingDay(now);
   const day = sameDay
     ? "Today"
-    : then.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+    : new Intl.DateTimeFormat("en-AU", { timeZone: RACING_TZ, weekday: "short", day: "numeric", month: "short" }).format(then);
   const diffHours = Math.round((then.getTime() - now.getTime()) / 3_600_000);
+  const days = Math.round(diffHours / 24);
   const rel =
     diffHours <= 0
       ? "Now"
@@ -180,8 +204,10 @@ export function raceWhenParts(iso: string | null, now: Date = new Date()): [stri
         ? "In 1 hour"
         : diffHours < 24
           ? `In ${diffHours} hours`
-          : `In ${Math.round(diffHours / 24)} days`;
-  return [`${day} · ${formatClock(iso, now)}`, rel];
+          : days === 1
+            ? "In 1 day"
+            : `In ${days} days`;
+  return [`${day} · ${formatClock(iso)}`, rel];
 }
 
 /** The race-day band's single-line time, e.g. "Today · 4:35pm · in 6 hours". */

@@ -34,14 +34,12 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import { GET } from "@/app/api/race-day/route";
 
-/** race.race_date is a DATE — the route compares against the local calendar day. */
-function todayLocal(): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-const raceAt = (hourOffset: number, raceDate = todayLocal()) => ({
+// NOTE: deliberately NOT re-deriving the route's "today" here — an earlier version
+// of this file copied the route's date helper verbatim, which made the date
+// assertions tautological (both sides drifted together, so no timezone bug could
+// ever fail the suite). The route now filters by race_date in the QUERY, which the
+// "scopes the query" test below asserts against a fixed, injected day.
+const raceAt = (hourOffset: number, raceDate = "2026-08-01") => ({
   venue: "Randwick",
   race_date: raceDate,
   race_number: 5,
@@ -121,14 +119,37 @@ describe("GET /api/race-day", () => {
     expect(body.data.races[0]).not.toHaveProperty("scheduledAt");
   });
 
-  it("excludes runners whose race is not today", async () => {
+  it("filters to the AU racing day IN THE QUERY, not in JS", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
     tableData.subscription = { data: { status: "trial" } };
     tableData.follow = { data: [{ horse_id: "h1" }] };
     tableData.notify_optin = { data: [] };
-    tableData.race_horse = {
-      data: [{ horse: { id: "h1", display_name: "Mahogany" }, race: raceAt(30, "2026-12-25") }],
-    };
+    tableData.race_horse = { data: [] };
+
+    // Pin the clock to a moment where the AU racing day and the UTC day DIFFER:
+    // 2026-08-01T23:00Z is already 2026-08-02 in Australia/Sydney (UTC+10).
+    vi.setSystemTime(new Date("2026-08-01T23:00:00.000Z"));
+    try {
+      await GET();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const chain = fromMock.mock.results[fromMock.mock.calls.findIndex(([t]) => t === "race_horse")]
+      .value as { eq: ReturnType<typeof vi.fn> };
+    // Must be the AU day, NOT the host/UTC day — this assertion fails if the route
+    // ever goes back to deriving the date from the server's own timezone.
+    expect(chain.eq).toHaveBeenCalledWith("race.race_date", "2026-08-02");
+  });
+
+  it("drops a runner whose horse embed was filtered out by RLS (hidden horse)", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    tableData.subscription = { data: { status: "trial" } };
+    tableData.follow = { data: [{ horse_id: "h1" }] };
+    tableData.notify_optin = { data: [] };
+    // race_horse RLS is subscription-scoped, not horse-scoped: a hidden horse's
+    // runner row still comes back, but with a null `horse` embed.
+    tableData.race_horse = { data: [{ horse: null, race: raceAt(3) }] };
 
     const res = await GET();
     expect((await res.json()).data.races).toEqual([]);

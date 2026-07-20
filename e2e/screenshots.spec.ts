@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 // See .rx/fe-harness.md for the full harness convention.
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "http://127.0.0.1:54321";
@@ -532,13 +532,13 @@ const rNum = () => 1000 + Math.floor(Math.random() * 9000);
 // GET /api/race-day compares against — deriving it from a UTC ISO slice would be
 // a day off for most of the Australian afternoon.
 function localDate(d: Date = new Date()): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  // en-CA formats as YYYY-MM-DD; pinned to the racing zone to match the route.
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Sydney" }).format(d);
 }
 
 /** Seed a trainer + horse, returning both ids. */
 async function seedHorse(
-  admin: ReturnType<typeof createClient>,
+  admin: SupabaseClient,
   racingName: string,
   extra: Record<string, unknown> = {},
 ) {
@@ -577,7 +577,7 @@ async function seedHorse(
 
 /** Seed a race + its runner row with an explicit entry_status. */
 async function seedRun(
-  admin: ReturnType<typeof createClient>,
+  admin: SupabaseClient,
   horseId: string,
   race: Record<string, unknown>,
   runner: Record<string, unknown>,
@@ -612,11 +612,11 @@ test("RF5 horse profile — confirmed next race + race record (scratched exclude
 
   // The confirmed runner that should win the card...
   raceIds.push(await seedRun(admin,horseId,
-    { status: "upcoming", venue: "Randwick", race_date: soon.slice(0, 10), race_class: "BM78", distance_m: 1400, scheduled_at: soon },
+    { status: "upcoming", venue: "Randwick", race_date: localDate(new Date(soon)), race_class: "BM78", distance_m: 1400, scheduled_at: soon },
     { entry_status: "confirmed", barrier: 4, jockey: "T. Berry" }));
   // ...and an EARLIER scratched one that must not mask it.
   raceIds.push(await seedRun(admin, horseId,
-    { status: "upcoming", venue: "Rosehill", race_date: sooner.slice(0, 10), race_class: "BM64", distance_m: 1200, scheduled_at: sooner },
+    { status: "upcoming", venue: "Rosehill", race_date: localDate(new Date(sooner)), race_class: "BM64", distance_m: 1200, scheduled_at: sooner },
     { entry_status: "scratched", barrier: 2, jockey: "J. Doe" }));
   // Two completed runs for the record + one scratched run that must stay out.
   raceIds.push(await seedRun(admin, horseId,
@@ -666,7 +666,7 @@ test("RF5 horse profile — nominated next race hides barrier + jockey", async (
   const soon = new Date(Date.now() + 30 * 3_600_000).toISOString();
   // Barrier + jockey ARE in the row — the UI must still omit them while nominated.
   const raceId = await seedRun(admin, horseId,
-    { status: "upcoming", venue: "Randwick", race_date: soon.slice(0, 10), race_class: "BM78", distance_m: 1400, scheduled_at: soon },
+    { status: "upcoming", venue: "Randwick", race_date: localDate(new Date(soon)), race_class: "BM78", distance_m: 1400, scheduled_at: soon },
     { entry_status: "nominated", barrier: 4, jockey: "T. Berry" });
 
   const { data: userData, error: uErr } = await admin.auth.admin.createUser({ email, password: RF5_PASSWORD, email_confirm: true });

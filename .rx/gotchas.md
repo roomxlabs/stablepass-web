@@ -55,3 +55,30 @@ There is no `middleware.ts` and no route does an origin check. Cookie-auth POSTs
 with no custom headers are CORS-simple and forgeable cross-origin. RLS still pins
 rows to the victim's own user_id, so impact is data pollution, not disclosure —
 but assume it repo-wide rather than re-discovering it per ticket.
+
+## `npm run build` does NOT typecheck `e2e/`
+Next excludes `e2e/` from its build, so a Playwright spec can be type-broken while
+`npm run build` stays green. `npm run typecheck` (tsc --noEmit) is the only gate that
+sees it. Run typecheck AFTER adding e2e specs, not just after the app code.
+Symptom seen: 22 × TS2345 from helpers typed `ReturnType<typeof createClient>` — use
+`SupabaseClient` from `@supabase/supabase-js` for a client passed as a parameter.
+
+## Dates: `race.race_date` is the AU racing day — never derive "today" from the host
+Server-side date/clock helpers must pin `Australia/Sydney` (see `RACING_TZ` in
+`lib/races.ts`). Deriving the day from `Date#getDate()` works on an AU laptop and breaks
+on a UTC host: the "Racing today" band goes blank for the first ~10h of every race day and
+race times render up to 10h off. Route handlers and server components both run server-side,
+so "the viewer's locale" is never available there.
+Corollary for tests: do NOT re-implement the route's date helper in the test — that makes
+the assertion tautological (both sides drift together). Pin a literal instant + expected day.
+
+## `fetchHorseRaces` has a visibility precondition
+`race_horse`'s RLS is subscription-scoped (`has_content_access`), NOT horse-scoped. Reading
+runners for a hidden/disabled horse returns rows. Callers must confirm the horse is visible
+(the `horse` read + 404) BEFORE calling. The race-day route relies on the `horse:horse_id`
+embed returning null for hidden horses and drops those rows explicitly.
+
+## TS2589 when passing the Supabase client to a helper
+Typing a helper param structurally against `SupabaseClient` makes tsc bail with
+"type instantiation is excessively deep" (PostgREST's recursive builder generics). Type the
+param as `{ from: (t: string) => unknown }` and narrow inside the helper instead.
