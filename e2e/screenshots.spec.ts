@@ -558,8 +558,8 @@ async function seedHorse(
   if (tErr) throw tErr;
   // Register the trainer the INSTANT it exists, not after the horse insert also succeeds.
   // Registering at the end left a window where the trainer was committed but unregistered,
-  // so a failing horse insert leaked it past both the spec's `finally` (never entered the
-  // `try`) and this sweep — reproduced: 3 orphaned trainers from one bad insert.
+  // so a failing horse insert leaked it past this sweep — reproduced: 3 orphaned trainers
+  // from one bad insert.
   const seeded: { trainerId: string; horseId: string | null } = {
     trainerId: trainer.id as string,
     horseId: null,
@@ -595,11 +595,20 @@ async function seedHorse(
 
 // Every row the RF5 helpers create is registered here and swept after each test.
 //
-// The per-spec `finally` blocks are the primary cleanup, but they only run if the spec
-// reaches its `try` — and seeding happens BEFORE it. A seed-time throw therefore leaked
-// silently, which is exactly what happened on a natural-key collision: two horses and
-// two trainers survived, `status='active'`, visible to every member in Explore/Horses.
-// This net catches that case and any future spec that forgets to clean up.
+// This registry is the SINGLE owner of cleanup for RF5-seeded rows — the races, horses
+// and trainers created by `seedHorse`/`seedRun` are deleted here and nowhere else. The
+// RF5 specs' `finally` blocks delete only the auth user; they do not touch rows. One
+// owner, one code path (see the note at the first RF5 spec's `finally`).
+//
+// (Older non-RF5 specs predate this registry and still do their own row cleanup — e.g.
+// the W7 spec's `finally`, which deletes its race row because that natural key collides
+// on rerun. Not covered by this sweep, deliberately.)
+//
+// It is registration-time, not `try`-scoped, on purpose: seeding happens BEFORE a spec
+// enters its `try`, so a seed-time throw used to leak silently. That is exactly what
+// happened on a natural-key collision — two horses and two trainers survived,
+// `status='active'`, visible to every member in Explore/Horses. Registering each row the
+// instant it exists covers that case and any future spec that forgets to clean up.
 const seededRaceIds: string[] = [];
 const seededHorses: { horseId: string | null; trainerId: string }[] = [];
 
