@@ -115,7 +115,7 @@ describe("GET /api/horses/:id", () => {
     expect(body.data.horse.coverUrl).toBe("https://placehold.co/1200x400");
     expect(body.data.horse.about).toBe("Mahogany joined Chris Waller's Rosehill stable as a yearling.");
     expect(body.data.stats).toEqual({ starts: 24, wins: 6, places: 9, prizeMoney: "$1.2M" });
-    expect(body.data.nextRace).toBeNull();
+    expect(body.data.races).toEqual({ next: null, record: [] });
   });
 
   it("formats prize money at the k/M/plain thresholds", async () => {
@@ -148,6 +148,53 @@ describe("GET /api/horses/:id", () => {
     tableData.horse = { data: { ...base, prize_money_cents: 500_00 } };
     res = await GET(new Request("http://localhost/api/horses/h1"), params("h1"));
     expect((await res.json()).data.stats.prizeMoney).toBe("$500");
+  });
+
+  it("returns races.next + races.record, excluding scratched runners", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    tableData.subscription = { data: { status: "trial" } };
+    tableData.horse = { data: { id: "h1", display_name: "Mahogany", racing_name: null, sire: null, dam: null, sex: null, colour: null, foaling_year: null, training_status: "racing", starts: 1, wins: 0, places: 0, prize_money_cents: 0, story: null, photo_url: null, trainer: null } };
+    tableData.race_horse = {
+      data: [
+        // Scratched, and EARLIER than the confirmed run — must not win `next`.
+        { entry_status: "scratched", barrier: 2, jockey: "J. Doe", result: null, finish_position: null,
+          race: { venue: "Rosehill", race_date: "2026-07-25", race_number: 1, race_class: "BM64", distance_m: 1200, scheduled_at: "2026-07-25T06:00:00.000Z", status: "upcoming" } },
+        { entry_status: "confirmed", barrier: 4, jockey: "T. Berry", result: null, finish_position: null,
+          race: { venue: "Randwick", race_date: "2026-08-01", race_number: 5, race_class: "BM78", distance_m: 1400, scheduled_at: "2026-08-01T06:35:00.000Z", status: "upcoming" } },
+        { entry_status: "ran", barrier: 7, jockey: "K. McEvoy", result: "2nd of 12", finish_position: 2,
+          race: { venue: "Caulfield", race_date: "2026-06-04", race_number: 3, race_class: "Maiden", distance_m: 1100, scheduled_at: "2026-06-04T04:00:00.000Z", status: "finished" } },
+        // Scratched completed run — excluded from the record too.
+        { entry_status: "scratched", barrier: null, jockey: null, result: null, finish_position: null,
+          race: { venue: "Flemington", race_date: "2026-05-01", race_number: 2, race_class: "BM70", distance_m: 1300, scheduled_at: "2026-05-01T04:00:00.000Z", status: "finished" } },
+      ],
+    };
+
+    const res = await GET(new Request("http://localhost/api/horses/h1"), params("h1"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.races.next).toMatchObject({ venue: "Randwick", entry_status: "confirmed", barrier: 4, jockey: "T. Berry" });
+    expect(body.data.races.record).toEqual([
+      { venue: "Caulfield", race_date: "2026-06-04", race_number: 3, race_class: "Maiden", result: "2nd of 12", finish_position: 2 },
+    ]);
+    expect(JSON.stringify(body)).not.toMatch(/odds|wager|bookmaker/i);
+  });
+
+  it("omits barrier + jockey for a nominated next race", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    tableData.subscription = { data: { status: "trial" } };
+    tableData.horse = { data: { id: "h1", display_name: "Mahogany", racing_name: null, sire: null, dam: null, sex: null, colour: null, foaling_year: null, training_status: "racing", starts: 0, wins: 0, places: 0, prize_money_cents: 0, story: null, photo_url: null, trainer: null } };
+    tableData.race_horse = {
+      data: [
+        { entry_status: "nominated", barrier: 4, jockey: "T. Berry", result: null, finish_position: null,
+          race: { venue: "Randwick", race_date: "2026-08-01", race_number: 5, race_class: "BM78", distance_m: 1400, scheduled_at: "2026-08-01T06:35:00.000Z", status: "upcoming" } },
+      ],
+    };
+
+    const res = await GET(new Request("http://localhost/api/horses/h1"), params("h1"));
+    const body = await res.json();
+
+    expect(body.data.races.next).toMatchObject({ entry_status: "nominated", barrier: null, jockey: null, distance_m: 1400 });
   });
 
   it("returns 404 not_found when there is no matching horse row (never 403)", async () => {

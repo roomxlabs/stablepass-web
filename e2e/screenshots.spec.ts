@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 // See .rx/fe-harness.md for the full harness convention.
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "http://127.0.0.1:54321";
@@ -517,5 +517,358 @@ test("A2 trainer profile Website link renders, opens in a new tab, and logs a cl
     if (userData?.user?.id) {
       await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});
     }
+  }
+});
+
+// ---------------------------------------------------------------- RF5 (ENG-297)
+// Member race reads: the next-race card (confirmed + nominated), the race record,
+// and the Explore "Racing today" band. Every race row here is seeded with an
+// explicit `entry_status` so the lifecycle filtering is what's being screenshotted.
+
+const RF5_PASSWORD = "harness-password-123!";
+// Real AU race numbers are 1-12, and `.name` ("Randwick R5 · BM78") is precisely the
+// element whose mockup fidelity these screenshots are evidence for — a rendered "R9363"
+// undercuts the artefact.
+//
+// Sequential, NOT random in 1-12: the natural key is (venue, race_date, race_number),
+// and two races seeded at the same venue+date would collide ~1-in-12 of the time on a
+// random draw. A sequence keeps them distinct within a run.
+let raceNumSeq = 0;
+const rNum = () => (raceNumSeq++ % 12) + 1;
+
+// `race.race_date` is the LOCAL race day (an AU date), which is what
+// GET /api/race-day compares against — deriving it from a UTC ISO slice would be
+// a day off for most of the Australian afternoon.
+function localDate(d: Date = new Date()): string {
+  // en-CA formats as YYYY-MM-DD; pinned to the racing zone to match the route.
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Sydney" }).format(d);
+}
+
+/** Seed a trainer + horse, returning both ids. */
+async function seedHorse(
+  admin: SupabaseClient,
+  racingName: string,
+  extra: Record<string, unknown> = {},
+) {
+  const { data: trainer, error: tErr } = await admin
+    .from("trainer")
+    .insert({ name: "Chris Waller", slug: `cw-rf5-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, stable_name: "Chris Waller Racing", location: "Rosehill, NSW" })
+    .select("id")
+    .single();
+  if (tErr) throw tErr;
+  // Register the trainer the INSTANT it exists, not after the horse insert also succeeds.
+  // Registering at the end left a window where the trainer was committed but unregistered,
+  // so a failing horse insert leaked it past both the spec's `finally` (never entered the
+  // `try`) and this sweep — reproduced: 3 orphaned trainers from one bad insert.
+  const seeded: { trainerId: string; horseId: string | null } = {
+    trainerId: trainer.id as string,
+    horseId: null,
+  };
+  seededHorses.push(seeded);
+
+  const { data: horse, error: hErr } = await admin
+    .from("horse")
+    .insert({
+      trainer_id: trainer.id,
+      display_name: racingName,
+      racing_name: racingName,
+      sire: "Snitzel",
+      dam: "Polar Success",
+      sex: "gelding",
+      foaling_year: new Date().getFullYear() - 5,
+      training_status: "racing",
+      status: "active",
+      starts: 24,
+      wins: 6,
+      places: 9,
+      prize_money_cents: 120_000_000,
+      photo_url: "https://placehold.co/1200x400/285D50/FAF7F2",
+      story: `${racingName} joined Chris Waller's Rosehill stable as a yearling out of Snitzel.`,
+      ...extra,
+    })
+    .select("id")
+    .single();
+  if (hErr) throw hErr;
+  seeded.horseId = horse.id as string;
+  return { trainerId: seeded.trainerId, horseId: seeded.horseId };
+}
+
+// Every row the RF5 helpers create is registered here and swept after each test.
+//
+// The per-spec `finally` blocks are the primary cleanup, but they only run if the spec
+// reaches its `try` — and seeding happens BEFORE it. A seed-time throw therefore leaked
+// silently, which is exactly what happened on a natural-key collision: two horses and
+// two trainers survived, `status='active'`, visible to every member in Explore/Horses.
+// This net catches that case and any future spec that forgets to clean up.
+const seededRaceIds: string[] = [];
+const seededHorses: { horseId: string | null; trainerId: string }[] = [];
+
+test.afterEach(async () => {
+  if (!seededRaceIds.length && !seededHorses.length) return;
+  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+  // supabase-js RETURNS errors, it does not throw — an unchecked delete fails silently
+  // and the leak is invisible. Demonstrated: seeding a `post` (no cascade on
+  // post.horse_id) made every horse+trainer delete fail quietly and two of each survived
+  // a PASSING run.
+  //
+  // Collect and THROW. An earlier version only console.error'd, which gates nothing —
+  // the test still exited 0 with rows left behind, so in CI the leak is buried in a green
+  // run. A cleanup failure has to fail the suite or it is not cleanup.
+  //
+  // EVERY delete goes through this helper, races included. A previous version defined it
+  // below the race loop, leaving races as the one table swept unchecked — while the
+  // per-spec finallys had been deleted on the stated grounds that this registry checks
+  // its deletes. That is the same silent-failure hole one table over.
+  const leaks: string[] = [];
+  const del = async (table: string, column: string, value: string) => {
+    const { error } = await admin.from(table).delete().eq(column, value);
+    if (error) leaks.push(`${table}.${column}=${value}: ${error.message}`);
+  };
+
+  // Races first — race_horse cascades from race, and a surviving runner row would
+  // block the horse delete on its FK.
+  for (const id of seededRaceIds.splice(0)) {
+    await del("race", "id", id);
+  }
+
+  for (const h of seededHorses.splice(0)) {
+    // Sweep the horse by trainer_id, NOT by id. If the horse insert committed but its
+    // response failed, horseId is null while the row exists — deleting by id would skip
+    // it and the trainer delete would then fail on the FK, leaking both. Deleting by
+    // trainer_id covers that case and the normal one identically.
+    //
+    // Safe only because seedHorse mints a FRESH trainer per call, so one trainer owns one
+    // horse. If a spec ever seeds two horses under one trainer this over-deletes.
+    //
+    // No explicit race_horse delete: race_horse_horse_id_fkey is ON DELETE CASCADE, so
+    // the horse delete takes its runners with it.
+    await del("horse", "trainer_id", h.trainerId);
+    await del("trainer", "id", h.trainerId);
+  }
+
+  if (leaks.length) {
+    throw new Error(`[rf5-cleanup] left rows behind:\n  ${leaks.join("\n  ")}`);
+  }
+});
+
+/** Seed a race + its runner row with an explicit entry_status. */
+async function seedRun(
+  admin: SupabaseClient,
+  horseId: string,
+  race: Record<string, unknown>,
+  runner: Record<string, unknown>,
+) {
+  // `race_natural_key` is (venue, race_date, race_number) and specs run in PARALLEL
+  // workers, each with its own module instance — so a per-module counter restarts at 0
+  // in every worker and two specs seeding the same venue+date collide on R1. The old
+  // 1000-9999 draw only made that rare, never impossible. Retry across the plausible
+  // 1-12 range instead of widening it back out.
+  let row: { id: string } | null = null;
+  let rErr: { code?: string } | null = null;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const res = await admin
+      .from("race")
+      .insert({ race_number: rNum(), ...race })
+      .select("id")
+      .single();
+    if (!res.error) {
+      row = res.data as { id: string };
+      rErr = null;
+      break;
+    }
+    rErr = res.error;
+    if (res.error.code !== "23505") break; // a real failure, not a taken slot
+  }
+  if (rErr || !row) throw rErr ?? new Error("seedRun: no free race_number after 12 tries");
+  seededRaceIds.push(row.id);
+  const { error: rhErr } = await admin.from("race_horse").insert({ race_id: row.id, horse_id: horseId, ...runner });
+  if (rhErr) throw rhErr;
+  return row.id as string;
+}
+
+async function signIn(page: import("@playwright/test").Page, email: string) {
+  await page.goto("/signin");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill(RF5_PASSWORD);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.waitForURL("**/explore");
+}
+
+test("RF5 horse profile — confirmed next race + race record (scratched excluded)", async ({ page }) => {
+  const email = `rf5a-harness-${Date.now()}@stablepass.test`;
+  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+  const { horseId } = await seedHorse(admin, "Mahogany"); // cleanup is the afterEach registry
+
+  const soon = new Date(Date.now() + 6 * 3_600_000).toISOString();
+  const sooner = new Date(Date.now() + 2 * 3_600_000).toISOString();
+
+  // The confirmed runner that should win the card...
+  await seedRun(admin,horseId,
+    { status: "upcoming", venue: "Randwick", race_date: localDate(new Date(soon)), race_class: "BM78", distance_m: 1400, scheduled_at: soon },
+    { entry_status: "confirmed", barrier: 4, jockey: "T. Berry" });
+  // ...and an EARLIER scratched one that must not mask it.
+  await seedRun(admin, horseId,
+    { status: "upcoming", venue: "Rosehill", race_date: localDate(new Date(sooner)), race_class: "BM64", distance_m: 1200, scheduled_at: sooner },
+    { entry_status: "scratched", barrier: 2, jockey: "J. Doe" });
+  // Two completed runs for the record + one scratched run that must stay out.
+  await seedRun(admin, horseId,
+    { status: "finished", venue: "Caulfield", race_date: "2026-06-04", race_class: "Maiden", distance_m: 1100, scheduled_at: "2026-06-04T04:00:00.000Z" },
+    { entry_status: "ran", barrier: 7, jockey: "K. McEvoy", result: "2nd of 12", finish_position: 2 });
+  await seedRun(admin, horseId,
+    { status: "finished", venue: "Flemington", race_date: "2026-05-11", race_class: "BM70", distance_m: 1300, scheduled_at: "2026-05-11T04:00:00.000Z" },
+    { entry_status: "ran", barrier: 3, jockey: "J. McDonald", result: "1st of 10", finish_position: 1 });
+  await seedRun(admin, horseId,
+    { status: "finished", venue: "Moonee Valley", race_date: "2026-04-02", race_class: "BM64", distance_m: 1200, scheduled_at: "2026-04-02T04:00:00.000Z" },
+    { entry_status: "scratched" });
+
+  const { data: userData, error: uErr } = await admin.auth.admin.createUser({ email, password: RF5_PASSWORD, email_confirm: true });
+  if (uErr) throw uErr;
+
+  try {
+    await signIn(page, email);
+    await page.goto(`/horses/${horseId}`);
+
+    const card = page.getByTestId("next-race");
+    await expect(card).toBeVisible();
+    await expect(card).toContainText("Randwick");
+    await expect(card).toContainText("Barrier 4");
+    await expect(card).toContainText("Jockey: T. Berry");
+    // The earlier scratched entry must not be the one shown.
+    await expect(card).not.toContainText("Rosehill");
+
+    const record = page.getByTestId("race-record");
+    await expect(record).toBeVisible();
+    await expect(record).toContainText("1st of 10"); // newest run first
+    await expect(record).toContainText("2nd of 12");
+    await expect(record).not.toContainText("Moonee Valley"); // scratched run excluded
+
+    await page.waitForTimeout(1000);
+    await page.screenshot({ path: ".rx/review/rf5-horse-profile-confirmed.png", fullPage: true });
+  } finally {
+    // Races, horses and trainers are swept by the afterEach registry, which CHECKS its
+    // deletes and throws. Duplicating them here as unchecked deletes is what let a silent
+    // FK failure hide — one owner, one code path.
+    if (userData?.user?.id) await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});
+  }
+});
+
+test("RF5 horse profile — nominated next race hides barrier + jockey", async ({ page }) => {
+  const email = `rf5b-harness-${Date.now()}@stablepass.test`;
+  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+  const { horseId } = await seedHorse(admin, "Northern Star"); // cleanup is the afterEach registry
+
+  const soon = new Date(Date.now() + 30 * 3_600_000).toISOString();
+  // Barrier + jockey ARE in the row — the UI must still omit them while nominated.
+  await seedRun(admin, horseId,
+    { status: "upcoming", venue: "Randwick", race_date: localDate(new Date(soon)), race_class: "BM78", distance_m: 1400, scheduled_at: soon },
+    { entry_status: "nominated", barrier: 4, jockey: "T. Berry" });
+
+  const { data: userData, error: uErr } = await admin.auth.admin.createUser({ email, password: RF5_PASSWORD, email_confirm: true });
+  if (uErr) throw uErr;
+
+  try {
+    await signIn(page, email);
+    await page.goto(`/horses/${horseId}`);
+
+    const card = page.getByTestId("next-race");
+    await expect(card).toBeVisible();
+    await expect(card).toContainText("Nominated");
+    await expect(card).toContainText("1400m");
+    await expect(card).not.toContainText("Barrier");
+    await expect(card).not.toContainText("Jockey");
+
+    await page.waitForTimeout(1000);
+    await page.screenshot({ path: ".rx/review/rf5-horse-profile-nominated.png", fullPage: true });
+  } finally {
+    // Swept by the afterEach registry — see the note in the spec above.
+    if (userData?.user?.id) await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});
+  }
+});
+
+test("RF5 explore — 'Racing today' band shows followed horses' confirmed runners", async ({ page }) => {
+  const email = `rf5c-harness-${Date.now()}@stablepass.test`;
+  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+  const followed = await seedHorse(admin, "Mahogany");
+  const unfollowed = await seedHorse(admin, "Not Followed");
+
+
+  const soon = new Date(Date.now() + 5 * 3_600_000).toISOString();
+  const today = localDate();
+
+  await seedRun(admin, followed.horseId,
+    { status: "upcoming", venue: "Randwick", race_date: today, race_class: "BM78", distance_m: 1400, scheduled_at: soon },
+    { entry_status: "confirmed", barrier: 4, jockey: "T. Berry" });
+  // A followed but only-nominated runner — not on today's card yet.
+  await seedRun(admin, followed.horseId,
+    { status: "upcoming", venue: "Warwick Farm", race_date: today, race_class: "BM64", distance_m: 1200, scheduled_at: soon },
+    { entry_status: "nominated" });
+  // A confirmed runner the member does NOT follow — must not appear.
+  await seedRun(admin, unfollowed.horseId,
+    { status: "upcoming", venue: "Caulfield", race_date: today, race_class: "Maiden", distance_m: 1100, scheduled_at: soon },
+    { entry_status: "confirmed", barrier: 1, jockey: "A. Nother" });
+
+  const { data: userData, error: uErr } = await admin.auth.admin.createUser({ email, password: RF5_PASSWORD, email_confirm: true });
+  if (uErr) throw uErr;
+  const userId = userData!.user!.id;
+
+  await admin.from("follow").insert({ user_id: userId, horse_id: followed.horseId });
+  await admin.from("notify_optin").insert({ user_id: userId, horse_id: followed.horseId });
+
+  try {
+    await signIn(page, email);
+    await page.goto("/explore");
+
+    const band = page.locator(".aside-card", { hasText: "Racing today" });
+    await expect(band).toBeVisible();
+    await expect(band).toContainText("Mahogany");
+    await expect(band).toContainText("Randwick");
+    await expect(band).not.toContainText("Not Followed"); // follow-scoped
+    await expect(band).not.toContainText("Warwick Farm"); // confirmed-only
+
+    // Wait for the feed to reach a RESOLVED state — either its empty state or its error —
+    // before asserting which one.
+    //
+    // With the edge runtime down the page behaves NONDETERMINISTICALLY, measured over
+    // repeated runs:
+    //   * sometimes /api/feed is never requested at all, and the column sits in its
+    //     aria-hidden skeleton forever (loading=true, error=false);
+    //   * sometimes it is requested, 502s at ~700ms, and renders "Couldn't load the feed."
+    // A fixed wall-clock wait catches neither reliably — which is how an earlier version
+    // passed over a page that rendered the error just after the assertion, into the
+    // screenshot. `waitForResponse` does not help either: the feed request fires during
+    // navigation and has already completed by this point.
+    //
+    // Two steps, because there are two modes: this wait goes red on the stuck case, and
+    // the negative assertion below goes red on the errored case. Both were exercised.
+    //
+    // The BE `feed` fn is a stub returning [], so the healthy outcome is the empty state.
+    await expect(page.getByText(/Nothing here yet|Couldn.t load the feed/)).toBeVisible({
+      timeout: 15_000,
+    });
+
+    // Refuse to photograph a broken page. The feed column must not be showing its error
+    // state when this capture is taken — mockup 06-explore.html places the band in the
+    // aside beside a working feed, so an errored column makes the artefact evidence
+    // nothing about the composition it exists to show.
+    //
+    // REGEX, and placed AFTER the settle wait. Earlier attempts at this check were
+    // theatre: a literal ASCII apostrophe never matches the rendered `Couldn&rsquo;t`
+    // (U+2019), and asserting before the settle window checks a moment the screenshot
+    // does not capture. A later attempt removed the check entirely, reasoning that a
+    // failed feed renders no text — true only in the stuck mode above, not the errored
+    // one, where this line is the assertion that fires.
+    //
+    // This requires the Supabase edge runtime to be up (/api/feed proxies to it):
+    //   cd ../stablepass-be && npx supabase functions serve
+    // Without it the feed 502s and this spec fails — which is the correct signal.
+    await expect(page.locator("body")).not.toContainText(/Couldn.t load the feed/);
+
+    // NOTE on what this artefact does and does not evidence: the band is real. The
+    // POPULATED-feed composition is not, because the BE `feed` edge fn is still a stub
+    // returning [] by design — an epic-level gap, not an environment problem.
+    await page.screenshot({ path: ".rx/review/rf5-explore-race-day-band.png", fullPage: true });
+  } finally {
+    // Swept by the afterEach registry — see the note in the first RF5 spec.
+    if (userId) await admin.auth.admin.deleteUser(userId).catch(() => {});
   }
 });

@@ -44,3 +44,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Scratch screenshot/review output — the committed evidence lives in docs/screenshots/.
+# Gitignored in stablepass-be and stablepass-admin; matched here so a `git add -A` after
+# an e2e run cannot commit duplicate copies of the same images.
+.rx/review/

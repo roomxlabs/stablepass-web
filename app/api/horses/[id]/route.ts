@@ -9,6 +9,7 @@
 // stable (see the mockup's stats-note copy), not derived from `race_horse`.
 import { ok, fail, UNAUTH, GATED } from "@/lib/api/envelope";
 import { supabaseServer } from "@/lib/supabase/server";
+import { fetchHorseRaces } from "@/lib/races";
 
 type TrainerRow = { id: string; name: string; stable_name: string | null; location: string | null };
 type HorseRow = {
@@ -29,15 +30,6 @@ type HorseRow = {
   photo_url: string | null;
   trainer: TrainerRow | TrainerRow[] | null;
 };
-type NextRaceRow = {
-  barrier: number | null;
-  jockey: string | null;
-  race:
-    | { venue: string | null; race_number: number | null; race_class: string | null; distance_m: number | null; scheduled_at: string | null; status: string }
-    | { venue: string | null; race_number: number | null; race_class: string | null; distance_m: number | null; scheduled_at: string | null; status: string }[]
-    | null;
-};
-
 function one<T>(v: T | T[] | null): T | null {
   return Array.isArray(v) ? (v[0] ?? null) : v;
 }
@@ -83,30 +75,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const row = horseRow as HorseRow;
   const trainer = one(row.trainer);
 
-  // Next race — earliest upcoming scheduled_at, or null.
-  const { data: nextRaceRows } = await sb
-    .from("race_horse")
-    .select("barrier, jockey, race:race_id(venue, race_number, race_class, distance_m, scheduled_at, status)")
-    .eq("horse_id", id);
-
-  let nextRace: { label: string; name: string; detail: string } | null = null;
-  let earliest: string | null = null;
-  for (const rh of (nextRaceRows ?? []) as NextRaceRow[]) {
-    const race = one(rh.race);
-    if (!race || race.status !== "upcoming" || !race.scheduled_at) continue;
-    if (!earliest || race.scheduled_at < earliest) {
-      earliest = race.scheduled_at;
-      nextRace = {
-        label: "Next race",
-        name: `${race.venue ?? "TBC"} R${race.race_number ?? "?"}${race.race_class ? ` · ${race.race_class}` : ""}`,
-        detail: [
-          race.distance_m ? `${race.distance_m}m` : null,
-          rh.barrier ? `Barrier ${rh.barrier}` : null,
-          rh.jockey ? `Jockey: ${rh.jockey}` : null,
-        ].filter(Boolean).join(" · "),
-      };
-    }
-  }
+  // Races — the next-race card + the race record, split by RF1's `entry_status`
+  // lifecycle (scratched / not_accepted surface in neither). See lib/races.ts.
+  const races = await fetchHorseRaces(sb, id);
 
   return ok({
     horse: {
@@ -120,6 +91,6 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     },
     trainer,
     stats: { starts: row.starts, wins: row.wins, places: row.places, prizeMoney: formatPrize(row.prize_money_cents) },
-    nextRace,
+    races,
   });
 }
