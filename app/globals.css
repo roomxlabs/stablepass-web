@@ -1,49 +1,944 @@
+/* ====================================================================
+   StablePass Web — design tokens + foundation styles (W1 / ENG-193)
+   Translated from docs/dev-handover/mockups/web/style.css. Tokens live here;
+   feature screens/components (W4+) reuse these — never hardcode ad-hoc values.
+   ==================================================================== */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --brand-green: #285D50;
+  --brand-green-dark: #1F4A40;
+  --brand-green-darker: #122E26;
+  --brand-green-light: #3A7A6A;
+  --brand-green-soft: #E8F0EC;
+  --cream: #FAF7F2;
+  --cream-dark: #F1ECE3;
+  --navy: #1A2B3F;
+  --gold: #C9A56F;
+  --ink: #1A1A1A;
+  --muted: #6B6963;
+  --muted-light: #A8A6A0;
+  --line: #E2DED6;
+  --line-dark: #C9C5BD;
+  --white: #FFFFFF;
+  --red: #C84A3E;
+
+  /* Font family vars are bound to the next/font faces in app/layout.tsx. */
+  --font-serif: var(--font-cormorant), Georgia, serif;
+  --font-sans: var(--font-inter), -apple-system, BlinkMacSystemFont, sans-serif;
+
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgba(26, 26, 26, 0.04);
+  --shadow-md: 0 4px 12px rgba(26, 26, 26, 0.06);
+  --shadow-lg: 0 16px 40px rgba(26, 26, 26, 0.10);
+
+  --sidebar-w: 240px;
+  --content-max: 920px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
 
-html {
-  height: 100%;
-}
-
-html,
 body {
-  max-width: 100vw;
-  overflow-x: hidden;
+  font-family: var(--font-sans);
+  background: var(--cream);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
 }
 
-body {
-  min-height: 100%;
+a { color: inherit; text-decoration: none; }
+
+/* ---- icons ---------------------------------------------------------- */
+.ic {
+  display: inline-block;
+  width: 1em; height: 1em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vertical-align: middle;
+}
+
+/* ---- buttons -------------------------------------------------------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 600;
+  padding: 12px 22px;
+  border-radius: var(--radius-pill);
+  border: none;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.btn .ic { width: 18px; height: 18px; }
+.btn-primary { background: var(--brand-green); color: var(--cream); }
+.btn-primary:hover:not(:disabled) { background: var(--brand-green-dark); }
+.btn-ghost { background: transparent; color: var(--brand-green); border: 1px solid var(--brand-green); }
+.btn-ghost:hover { background: var(--brand-green); color: var(--cream); }
+.btn-light { background: var(--white); color: var(--ink); border: 1px solid var(--line); }
+.btn-light:hover:not(:disabled) { background: var(--cream-dark); }
+.btn-large { padding: 16px 28px; font-size: 16px; }
+.btn-xl { padding: 18px 36px; font-size: 17px; }
+.btn-block { width: 100%; }
+
+/* ---- form inputs ---------------------------------------------------- */
+.input-group { margin-bottom: 18px; }
+.input-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 7px;
+}
+.input {
+  width: 100%;
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  background: var(--white);
+  color: var(--ink);
+}
+.input:focus { outline: none; border-color: var(--brand-green); }
+.input-row { display: flex; gap: 12px; }
+.input-row .input-group { flex: 1; }
+.field-error { color: var(--red); font-size: 12.5px; margin-top: 6px; }
+.form-error {
+  background: rgba(200, 74, 62, 0.08);
+  border-left: 3px solid var(--red);
+  color: var(--red);
+  padding: 12px 16px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 13.5px;
+  margin-bottom: 18px;
+}
+
+/* ====================================================================
+   AUTH PAGES (sign in / sign up)
+   ==================================================================== */
+.auth-page { min-height: 100vh; display: flex; }
+.auth-page-side {
+  flex: 1;
+  background: var(--brand-green);
+  color: var(--cream);
+  padding: 56px 64px;
   display: flex;
   flex-direction: column;
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  justify-content: space-between;
+  position: relative;
+  overflow: hidden;
+}
+.auth-page-side-logo { position: relative; z-index: 2; }
+.auth-side-brand {
+  font-family: var(--font-serif);
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--cream);
+}
+.auth-side-quote { position: relative; z-index: 2; max-width: 440px; }
+.auth-side-quote .quote {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 30px;
+  font-weight: 500;
+  line-height: 1.3;
+  margin: 0 0 24px;
+}
+.auth-side-quote .attrib { font-size: 13.5px; opacity: 0.8; display: flex; align-items: center; gap: 12px; }
+.auth-side-quote .attrib-avatar {
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  background: var(--cream);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--brand-green);
+  font-family: var(--font-serif);
+  font-size: 16px;
+  font-weight: 600;
+}
+.auth-side-copyright { font-size: 12.5px; opacity: 0.6; position: relative; z-index: 2; }
+
+.auth-page-form { flex: 1; background: var(--cream); padding: 56px 64px; display: flex; align-items: center; }
+.auth-card { max-width: 460px; width: 100%; }
+.auth-card h1 {
+  font-family: var(--font-serif);
+  font-size: 44px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.05;
+  margin: 0 0 12px;
+}
+.auth-card .auth-sub { color: var(--muted); font-size: 16px; margin: 0 0 36px; }
+.auth-divider { display: flex; align-items: center; gap: 12px; margin: 24px 0 16px; }
+.auth-divider .rule { flex: 1; height: 1px; background: var(--line); }
+.auth-divider span { font-size: 12.5px; color: var(--muted); letter-spacing: 0.02em; }
+.auth-forgot { text-align: center; margin-top: 18px; }
+.auth-forgot a { font-size: 13.5px; color: var(--brand-green); font-weight: 500; }
+.auth-foot { margin-top: 32px; font-size: 14px; color: var(--muted); text-align: center; }
+.auth-foot a { color: var(--brand-green); font-weight: 600; }
+.google-icon { width: 18px; height: 18px; display: block; }
+
+/* trial-start banner + legal fine print (auth family; used by the /start screen) */
+.trial-banner-web {
+  background: var(--brand-green-soft);
+  border-left: 3px solid var(--brand-green);
+  padding: 16px 20px;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  margin-bottom: 28px;
+}
+.trial-banner-web .trial-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--brand-green);
+  margin-bottom: 4px;
+}
+.trial-banner-web .trial-detail { font-size: 14px; color: var(--ink); line-height: 1.5; }
+.legal-mini { font-size: 12px; color: var(--muted-light); text-align: center; margin-top: 20px; line-height: 1.5; }
+.legal-mini a { color: var(--muted); text-decoration: underline; }
+
+/* ====================================================================
+   MEMBER PORTAL — app shell with sidebar
+   ==================================================================== */
+.app-shell { display: grid; grid-template-columns: var(--sidebar-w) 1fr; min-height: 100vh; }
+
+.sidebar {
+  background: var(--white);
+  border-right: 1px solid var(--line);
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+.sidebar-logo {
+  padding: 4px 12px 22px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 16px;
+  font-family: var(--font-serif);
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--brand-green);
+  letter-spacing: -0.01em;
+}
+.sidebar-nav { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 2px; }
+.sidebar-nav a {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  color: var(--ink);
+  font-size: 14.5px;
+  font-weight: 500;
+}
+.sidebar-nav a .ic { width: 18px; height: 18px; color: var(--muted); }
+.sidebar-nav a:hover { background: var(--cream-dark); }
+.sidebar-nav a.active { background: var(--brand-green-soft); color: var(--brand-green); font-weight: 600; }
+.sidebar-nav a.active .ic { color: var(--brand-green); }
+.sidebar-nav .nav-badge {
+  margin-left: auto;
+  background: var(--brand-green);
+  color: var(--cream);
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+.sidebar-section {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-light);
+  padding: 16px 14px 8px;
+}
+.sidebar-footer { margin-top: auto; padding: 16px 14px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.sidebar-user { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
+.sidebar-user .avatar {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--brand-green-light), var(--brand-green));
+  display: flex; align-items: center; justify-content: center;
+  color: var(--cream);
+  font-family: var(--font-serif);
+  font-size: 15px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.sidebar-user .meta { font-size: 12.5px; line-height: 1.3; min-width: 0; }
+.sidebar-user .meta strong { display: block; color: var(--ink); font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-user .meta .email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trial-badge-sidebar {
+  background: var(--brand-green-soft);
+  color: var(--brand-green);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  margin-top: 8px;
+  text-align: center;
 }
 
-* {
-  box-sizing: border-box;
-  padding: 0;
+.main { display: flex; flex-direction: column; min-width: 0; }
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 18px 40px;
+  border-bottom: 1px solid var(--line);
+  background: var(--cream);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.topbar .feed-tabs { display: flex; gap: 4px; }
+.topbar .feed-tab {
+  padding: 10px 18px;
+  font-size: 14.5px;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  font-family: var(--font-sans);
+}
+.topbar .feed-tab.active { color: var(--brand-green); font-weight: 600; border-bottom-color: var(--brand-green); }
+.topbar-spacer { flex: 1; }
+.topbar-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--white);
+  border: 1px solid var(--line);
+  padding: 8px 14px;
+  border-radius: var(--radius-pill);
+  font-size: 13.5px;
+  color: var(--muted);
+  width: 280px;
+}
+.topbar-search .ic { width: 16px; height: 16px; }
+.topbar-bell {
+  width: 38px; height: 38px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  position: relative;
+  color: var(--ink);
+}
+.topbar-bell .ic { width: 16px; height: 16px; }
+.topbar-bell .badge-dot {
+  position: absolute;
+  top: 8px; right: 8px;
+  width: 8px; height: 8px;
+  background: var(--brand-green);
+  border-radius: 50%;
+  border: 2px solid var(--white);
+}
+
+/* Generic content wrapper for member pages that don't set their own. */
+.page-pad { padding: 32px 40px 60px; max-width: var(--content-max); width: 100%; }
+
+/* Explore/Following feed layout — content column + fixed-width aside (W6, ENG-199). */
+.feed-grid { display: flex; align-items: flex-start; gap: 28px; max-width: 1180px; width: 100%; margin: 0 auto; padding: 32px 40px 60px; }
+.feed-col { flex: 1; min-width: 0; max-width: 700px; }
+.feed-aside { width: 320px; flex: none; display: flex; flex-direction: column; gap: 20px; }
+@media (max-width: 980px) {
+  .feed-grid { flex-direction: column; }
+  .feed-col, .feed-aside { max-width: none; width: 100%; }
+}
+
+/* ====================================================================
+   ONBOARDING (full-page, no sidebar) — 05-onboarding.html
+   ==================================================================== */
+.onboarding-nav {
+  position: sticky; top: 0; z-index: 20;
+  background: var(--cream);
+  border-bottom: 1px solid var(--line);
+  padding: 18px 48px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.onboarding-nav .brand { font-family: var(--font-serif); font-size: 24px; font-weight: 600; color: var(--brand-green); letter-spacing: -0.01em; }
+.onboarding-nav .welcome { font-size: 13px; color: var(--muted); }
+.onboarding-web { min-height: 100vh; padding: 60px 32px; }
+.onboarding-container { max-width: 1000px; margin: 0 auto; }
+.onboarding-topline { display: flex; align-items: center; justify-content: space-between; }
+.onboarding-progress {
+  font-size: 11px; font-weight: 600; color: var(--brand-green);
+  letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 12px;
+}
+.select-all-btn { font-size: 13.5px; color: var(--brand-green); font-weight: 600; background: none; border: none; cursor: pointer; }
+.select-all-btn:disabled { color: var(--muted-light); cursor: default; }
+.onboarding-h {
+  font-family: var(--font-serif); font-size: 44px; font-weight: 600;
+  margin: 0 0 8px; line-height: 1.05; letter-spacing: -0.01em;
+}
+.onboarding-sub { color: var(--muted); font-size: 16px; margin: 0 0 40px; }
+.onboarding-grid-web { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin-bottom: 40px; }
+.horse-card-web {
+  background: var(--white); border: 1px solid var(--line); border-radius: var(--radius-md);
+  padding: 14px; position: relative; cursor: pointer; text-align: left;
+  font-family: var(--font-sans); width: 100%;
+  display: flex; flex-direction: column; align-items: stretch;
+}
+.horse-card-web.selected { border-color: var(--brand-green); border-width: 2px; padding: 13px; }
+.horse-card-web .horse-thumb {
+  width: 100%; aspect-ratio: 1; border-radius: 10px; margin-bottom: 12px; overflow: hidden; flex-shrink: 0;
+  background: linear-gradient(135deg, var(--brand-green-light), var(--brand-green-dark));
+  display: flex; align-items: center; justify-content: center;
+  color: var(--cream); font-family: var(--font-serif); font-size: 40px; font-weight: 600;
+}
+.horse-card-web .horse-name { font-family: var(--font-serif); font-size: 17px; font-weight: 600; margin: 0 0 2px; line-height: 1.15; min-height: calc(2 * 1.15em); }
+.horse-card-web .horse-trainer { font-size: 12px; color: var(--muted); margin: 0; }
+.horse-card-web .check {
+  position: absolute; top: 10px; right: 10px; width: 24px; height: 24px; border-radius: 50%;
+  background: var(--white); border: 1.5px solid var(--line);
+  display: flex; align-items: center; justify-content: center; color: transparent;
+}
+.horse-card-web.selected .check { background: var(--brand-green); border-color: var(--brand-green); color: var(--cream); }
+.horse-card-web.selected .check .ic { stroke: var(--cream); stroke-width: 3; width: 14px; height: 14px; }
+.onboarding-foot-web { display: flex; justify-content: space-between; align-items: center; padding-top: 24px; border-top: 1px solid var(--line); }
+.onboarding-foot-web .count { font-size: 13.5px; color: var(--muted); }
+.onboarding-empty { text-align: center; color: var(--muted); padding: 60px 0; }
+@media (max-width: 900px) { .onboarding-grid-web { grid-template-columns: repeat(2, 1fr); } }
+
+/* ====================================================================
+   SHARED MEMBER COMPONENTS (W4) — post card, media, reactions, cards
+   From 06-explore.html / 07-horse-profile.html / style.css
+   ==================================================================== */
+.post-web { background: var(--white); border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; margin-bottom: 24px; }
+.post-head-web { display: flex; align-items: center; gap: 12px; padding: 16px 22px 14px; }
+.post-avatar-web {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--brand-green-light), var(--brand-green));
+  display: flex; align-items: center; justify-content: center;
+  color: var(--cream); font-family: var(--font-serif); font-size: 18px; font-weight: 600; flex-shrink: 0;
+}
+.post-meta-web { flex: 1; min-width: 0; }
+.post-meta-web .post-horse { font-family: var(--font-serif); font-size: 18px; font-weight: 600; margin: 0; line-height: 1.2; }
+.post-meta-web .post-byline { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.post-meta-web .post-byline .by-trainer { color: var(--brand-green); font-weight: 500; }
+.post-more-web { color: var(--muted); background: none; border: none; cursor: pointer; padding: 4px; }
+
+.post-media-web { position: relative; background: var(--brand-green-dark); aspect-ratio: 16/9; overflow: hidden; }
+.post-media-web img, .post-media-web video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.post-media-web.tall { aspect-ratio: 4/5; }
+.post-media-web.square { aspect-ratio: 1/1; }
+.post-media-web .media-play {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 64px; height: 64px; border-radius: 50%; background: rgba(255,255,255,0.95);
+  display: flex; align-items: center; justify-content: center; color: var(--brand-green-dark);
+  border: none; cursor: pointer;
+}
+.post-media-web .media-play .ic { width: 22px; height: 22px; margin-left: 3px; }
+.post-media-web .media-duration {
+  position: absolute; bottom: 14px; left: 14px;
+  background: rgba(0,0,0,0.6); color: #fff; font-size: 11.5px; font-weight: 500;
+  padding: 4px 9px; border-radius: var(--radius-pill); font-variant-numeric: tabular-nums;
+}
+
+/* Brand + forensic viewer-id overlay (deterrence only; asset never modified). */
+.post-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.post-overlay .brand-mark {
+  position: absolute; bottom: 14px; right: 16px;
+  font-family: var(--font-serif); font-size: 18px; font-weight: 600;
+  color: rgba(250,247,242,0.85); text-shadow: 0 1px 4px rgba(0,0,0,0.4); letter-spacing: -0.01em;
+}
+.post-overlay .viewer-id {
+  position: absolute; top: 12px; left: 14px;
+  font-family: var(--font-sans); font-size: 10px; letter-spacing: 0.14em;
+  color: rgba(250,247,242,0.28); text-transform: uppercase; user-select: none;
+}
+
+.post-body-web { padding: 16px 22px; font-size: 15px; line-height: 1.55; color: var(--ink); }
+.post-actions-web { display: flex; align-items: center; gap: 18px; padding: 0 22px 18px; }
+.action-web { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; background: none; border: none; padding: 0; font-family: var(--font-sans); }
+.action-web .ic { width: 18px; height: 18px; }
+.action-web.liked { color: var(--brand-green); font-weight: 600; }
+.action-web.liked .ic { fill: var(--brand-green); stroke: var(--brand-green); }
+.action-web.bookmarked .ic { fill: var(--brand-green); stroke: var(--brand-green); }
+.action-spacer-web { flex: 1; }
+.reactions-web { display: flex; margin-left: -4px; }
+.reactions-web button, .reactions-web span {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; font-size: 14px; line-height: 1;
+  background: var(--white); border: 1px solid var(--line); border-radius: 50%;
+  margin-left: -4px; cursor: pointer; padding: 0;
+}
+.reactions-web button:hover { border-color: var(--brand-green); }
+.reactions-web button.on { background: var(--brand-green-soft); border-color: var(--brand-green); }
+
+.race-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--brand-green); color: var(--cream);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 5px 11px; border-radius: var(--radius-pill); margin-bottom: 8px;
+}
+.race-badge::before { content: ''; width: 6px; height: 6px; background: var(--cream); border-radius: 50%; }
+.race-badge.result { background: var(--gold); color: var(--ink); }
+.race-badge.result::before { background: var(--ink); }
+
+/* Aside cards + race-day band + trainer/horse rows */
+.aside-card { background: var(--white); border: 1px solid var(--line); border-radius: var(--radius-md); padding: 22px; }
+.aside-card h3 { font-family: var(--font-serif); font-size: 18px; font-weight: 600; margin: 0 0 16px; }
+.aside-races { display: flex; flex-direction: column; gap: 14px; }
+.aside-race { padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.aside-race:last-child { border-bottom: none; padding-bottom: 0; }
+.aside-race .horse-name { font-family: var(--font-serif); font-size: 17px; font-weight: 600; margin: 0 0 2px; display: flex; align-items: center; gap: 8px; }
+.aside-race .horse-name .ic { width: 12px; height: 12px; color: var(--brand-green); }
+.aside-race .race-info { font-size: 12.5px; color: var(--muted); }
+.aside-race .race-time { font-size: 12px; font-weight: 600; color: var(--brand-green); margin-top: 4px; }
+.aside-trainer-list { display: flex; flex-direction: column; gap: 12px; }
+.aside-trainer-row { display: flex; align-items: center; gap: 10px; }
+.trainer-avatar-mini {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--brand-green-light), var(--brand-green));
+  display: flex; align-items: center; justify-content: center;
+  color: var(--cream); font-family: var(--font-serif); font-size: 13px; font-weight: 600; flex-shrink: 0;
+}
+.trainer-info { flex: 1; min-width: 0; }
+.trainer-info .name { font-family: var(--font-serif); font-size: 14.5px; font-weight: 600; margin: 0; line-height: 1.2; }
+.trainer-info .horses { font-size: 12px; color: var(--muted); }
+
+/* Horse profile — web (W7 / ENG-200). Ported from mockups/web/style.css
+   ~1252-1404. The cover has no image field on `horse`, so `.profile-cover-web`
+   itself carries a green-gradient placeholder background (the ported `img` +
+   `.gradient` rules stay in case a real cover photo lands later). */
+.profile-page {
+  background: var(--cream);
+}
+.profile-cover-web {
+  height: 360px;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, var(--brand-green-light), var(--brand-green-darker));
+}
+.profile-cover-web img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+}
+.profile-cover-web .gradient {
+  position: absolute; inset: 0;
+  background: linear-gradient(180deg, transparent 30%, rgba(0,0,0,0.4) 100%);
+}
+.profile-main {
+  max-width: 1080px;
+  margin: -80px auto 0;
+  padding: 0 40px 60px;
+  position: relative;
+  z-index: 2;
+}
+.profile-header-web {
+  background: var(--cream);
+  padding: 30px 36px 24px;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 10px 40px rgba(0,0,0,0.06);
+  border: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 32px;
+  align-items: end;
+}
+.profile-head-left .status-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.tag {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--cream-dark);
+  color: var(--muted);
+}
+.tag.race-day { background: var(--brand-green); color: var(--cream); }
+.tag.active { background: var(--brand-green-soft); color: var(--brand-green); }
+.profile-name-web {
+  font-family: var(--font-serif);
+  font-size: 56px;
+  font-weight: 600;
+  margin: 0 0 6px;
+  line-height: 1.02;
+  letter-spacing: -0.01em;
+}
+.profile-pedigree-web {
+  font-size: 16px;
+  font-style: italic;
+  color: var(--muted);
   margin: 0;
 }
+.profile-actions-web {
+  display: flex;
+  gap: 10px;
+}
 
-a {
-  color: inherit;
+.profile-stats-web {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin-top: 28px;
+  border-top: 1px solid var(--line);
+  padding-top: 24px;
+}
+.profile-stats-web .stat-w {
+  text-align: center;
+  padding: 0 8px;
+}
+.profile-stats-web .stat-w + .stat-w { border-left: 1px solid var(--line); }
+.profile-stats-web .stat-num {
+  font-family: var(--font-serif);
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--ink);
+}
+.profile-stats-web .stat-label {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-top: 6px;
+}
+.stats-note-web {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--muted-light);
+  text-align: center;
+  padding: 12px 0 0;
+}
+
+.profile-body-grid {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 32px;
+  margin-top: 32px;
+}
+
+.next-race-web {
+  background: var(--brand-green);
+  color: var(--cream);
+  border-radius: var(--radius-md);
+  padding: 20px 22px;
+}
+.next-race-web .label {
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.7;
+  font-weight: 600;
+}
+.next-race-web .name {
+  font-family: var(--font-serif);
+  font-size: 22px;
+  font-weight: 600;
+  margin: 4px 0 4px;
+}
+.next-race-web .detail {
+  font-size: 13.5px;
+  opacity: 0.85;
+}
+.next-race-web .when {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(250,247,242,0.18);
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+}
+.next-race-web .when strong { font-weight: 600; }
+
+.section-title-web {
+  font-family: var(--font-serif);
+  font-size: 24px;
+  font-weight: 600;
+  margin: 0 0 18px;
+  letter-spacing: -0.005em;
+}
+
+/* ====================================================================
+   ACCOUNT / SUBSCRIPTION PAGE (W9 / ENG-198) — 09-account.html,
+   ported from mockups/web/style.css ~1674-1778. Devices & sessions is
+   intentionally NOT ported — single-device guardrail, no devices UI.
+   ==================================================================== */
+.settings-page { padding: 40px 40px 80px; max-width: 880px; margin: 0 auto; }
+.settings-h { font-family: var(--font-serif); font-size: 38px; font-weight: 600; margin: 0 0 4px; }
+.settings-sub { color: var(--muted); margin: 0 0 36px; }
+.settings-card { background: var(--white); border: 1px solid var(--line); border-radius: var(--radius-md); margin-bottom: 22px; }
+.settings-card-head {
+  padding: 22px 26px 14px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+.settings-card-head h3 { font-family: var(--font-serif); font-size: 22px; font-weight: 600; margin: 0 0 4px; }
+.settings-card-head .sub { font-size: 13.5px; color: var(--muted); }
+.settings-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 26px;
+  border-bottom: 1px solid var(--line);
+  font-size: 14.5px;
+}
+.settings-row:last-child { border-bottom: none; }
+.settings-row .label { color: var(--muted); }
+.settings-row .value { color: var(--ink); font-weight: 500; }
+.plan-card-inner { padding: 22px 26px 26px; }
+.plan-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px;
+  background: var(--brand-green-soft);
+  border-radius: var(--radius-md);
+  margin-bottom: 18px;
+}
+.plan-row .plan-name { font-family: var(--font-serif); font-size: 19px; font-weight: 600; margin: 0; }
+.plan-row .plan-price { font-family: var(--font-serif); font-size: 19px; font-weight: 600; }
+.plan-row .plan-meta { font-size: 12.5px; color: var(--brand-green); font-weight: 500; }
+.toggle {
+  width: 46px; height: 28px;
+  background: var(--line);
+  border-radius: 14px;
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 24px; height: 24px;
+  background: var(--white);
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+  transition: left 0.2s;
+}
+.toggle.on { background: var(--brand-green); }
+.toggle.on::after { left: 20px; }
+
+.notif-row { padding: 18px 26px; }
+.notif-row .notif-title { font-size: 15px; font-weight: 500; margin: 0 0 3px; }
+.notif-row .notif-sub { font-size: 12.5px; color: var(--muted); }
+
+/* ====================================================================
+   Checkout — embedded Stripe Elements (W10 / ENG-202). Ported from
+   mockups/web/style.css (04-checkout.html), lines ~1407-1575. The mockup's
+   .checkout-logo wraps an <img>; this app uses a text brand mark everywhere
+   else (.sidebar-logo, .auth-side-brand), so .checkout-logo-text mirrors that
+   convention instead of introducing a logo image asset.
+   ==================================================================== */
+.checkout-page {
+  min-height: 100vh;
+  background: var(--cream-dark);
+  padding: 48px 32px 80px;
+}
+.checkout-container {
+  max-width: 1080px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 48px;
+  background: var(--cream);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: 0 30px 80px rgba(26, 26, 26, 0.08);
+}
+.checkout-left {
+  padding: 56px 56px 60px;
+}
+.checkout-right {
+  background: var(--brand-green);
+  color: var(--cream);
+  padding: 56px 48px 60px;
+  position: relative;
+  overflow: hidden;
+}
+.checkout-logo {
+  display: block;
   text-decoration: none;
+  margin-bottom: 36px;
 }
+.checkout-logo-text {
+  font-family: var(--font-serif);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--brand-green);
+}
+.checkout-step {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--brand-green);
+}
+.checkout-h {
+  font-family: var(--font-serif);
+  font-size: 36px;
+  font-weight: 600;
+  margin: 6px 0 8px;
+  line-height: 1.05;
+}
+.checkout-sub {
+  color: var(--muted);
+  margin: 0 0 32px;
+}
+.payment-method-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+.pm-card {
+  flex: 1;
+  border: 2px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 14px 14px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 500;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  cursor: pointer;
+}
+.pm-card.selected {
+  border-color: var(--brand-green);
+  background: var(--brand-green-soft);
+  color: var(--brand-green);
+}
+.pm-card-icon {
+  font-size: 18px;
+  font-weight: 700;
+}
+.checkout-actions {
+  margin-top: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.checkout-secure {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.summary-h {
+  font-family: var(--font-serif);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin: 0 0 16px;
+  position: relative;
+  z-index: 1;
+}
+.summary-product {
+  position: relative;
+  z-index: 1;
+  border-bottom: 1px solid rgba(250, 247, 242, 0.15);
+  padding-bottom: 24px;
+  margin-bottom: 24px;
+}
+.summary-product .label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+.summary-product .name {
+  font-family: var(--font-serif);
+  font-size: 28px;
+  font-weight: 600;
+  margin: 4px 0 8px;
+}
+.summary-product .description {
+  font-size: 13.5px;
+  opacity: 0.85;
+  line-height: 1.5;
+}
+.summary-line {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  font-size: 14px;
+  position: relative;
+  z-index: 1;
+}
+.summary-line.total {
+  border-top: 1px solid rgba(250, 247, 242, 0.15);
+  margin-top: 14px;
+  padding-top: 18px;
+  font-family: var(--font-serif);
+  font-size: 22px;
+  font-weight: 600;
+}
+.trial-callout {
+  margin-top: 24px;
+  background: rgba(250, 247, 242, 0.1);
+  padding: 16px 18px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  line-height: 1.55;
+  position: relative;
+  z-index: 1;
+}
+.trial-callout strong { display: block; margin-bottom: 4px; font-size: 14px; }
 
-@media (prefers-color-scheme: dark) {
-  html {
-    color-scheme: dark;
-  }
+/* ====================================================================
+   TRAINERS (W8) — browse card + 3-tile stats variant. Additive; reuses the
+   profile/aside classes from W7. Pattern-based (no mockup).
+   ==================================================================== */
+/* 3-tile stats band (trainers have Horses·Updates·Wins, vs the horse's 4). */
+.profile-stats-web.cols-3 { grid-template-columns: repeat(3, 1fr); }
+
+/* Trainer browse card — mirrors .horse-card-web, initials thumb + meta line. */
+.trainer-card-web {
+  background: var(--white); border: 1px solid var(--line); border-radius: var(--radius-md);
+  padding: 16px; cursor: pointer; text-align: left; font-family: var(--font-sans); width: 100%;
+  display: flex; flex-direction: column; gap: 12px;
 }
+.trainer-card-web:hover { border-color: var(--brand-green); }
+.trainer-card-web .trainer-thumb {
+  width: 100%; aspect-ratio: 1; border-radius: 10px; overflow: hidden; flex-shrink: 0;
+  background: linear-gradient(135deg, var(--brand-green-light), var(--brand-green-dark));
+  display: flex; align-items: center; justify-content: center;
+  color: var(--cream); font-family: var(--font-serif); font-size: 40px; font-weight: 600;
+}
+.trainer-card-web .trainer-name { font-family: var(--font-serif); font-size: 19px; font-weight: 600; margin: 0; line-height: 1.15; min-height: calc(2 * 1.15em); }
+.trainer-card-web .trainer-sub { font-size: 13px; color: var(--muted); margin: 2px 0 0; }
+.trainer-card-web .trainer-meta { font-size: 12px; color: var(--brand-green); font-weight: 600; margin-top: auto; }
