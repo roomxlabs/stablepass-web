@@ -9,7 +9,10 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./test/setup.ts"],
     // e2e/ holds Playwright specs (own `test()`, own runner) — never vitest's.
-    exclude: ["node_modules/**", "e2e/**", ".next/**"],
+    // `**/node_modules/**` (not `node_modules/**`) because the loop's per-ticket
+    // worktrees under .claude/worktrees/ carry their own node_modules; the
+    // top-level-only glob let vitest crawl those and run third-party suites.
+    exclude: ["**/node_modules/**", "e2e/**", ".next/**", ".claude/**"],
   },
   resolve: {
     alias: {

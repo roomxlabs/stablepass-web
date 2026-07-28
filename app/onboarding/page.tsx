@@ -5,6 +5,7 @@
 import { redirect } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
 import { HorsePicker, type PickHorse } from "./horse-picker";
+import { Wordmark } from "@/components/wordmark";
 
 export const metadata = { title: "Build your stable · StablePass" };
 
@@ -41,7 +42,7 @@ export default async function OnboardingPage() {
   return (
     <>
       <nav className="onboarding-nav">
-        <span className="brand">stablepass.</span>
+        <Wordmark className="brand" />
         <span className="welcome">Welcome, {firstName} · 30 days free</span>
       </nav>
 
