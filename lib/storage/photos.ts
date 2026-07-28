@@ -41,6 +41,29 @@ export async function signPhoto(
   return data?.signedUrl ?? null;
 }
 
+// A post's display image: the baked video poster if one exists, otherwise the
+// photo. `poster_url` is written by the backend's mux-webhook on video.asset.ready
+// (BE migration 20260728120000) and, like `media_url`, is a bare object path in the
+// private `post-media` bucket — so both are signed through the same signPhotoMap.
+//
+// Before this existed a video post had NOTHING to show: `media_url` is the
+// photo/voice path and is null for video, so every video card fell through to an
+// empty box over the dark-green background.
+export function postPosterKey(
+  row: { poster_url?: string | null; media_url?: string | null },
+): string | null {
+  return row.poster_url ?? row.media_url ?? null;
+}
+
+/** Resolve a post row to its signed poster URL using an already-built sign map. */
+export function signedPosterFor(
+  row: { poster_url?: string | null; media_url?: string | null },
+  signed: Map<string, string>,
+): string | null {
+  const key = postPosterKey(row);
+  return key ? signed.get(key) ?? null : null;
+}
+
 // Batch variant: one round-trip for a list. Returns a `value -> signed URL` map
 // keyed by the ORIGINAL stored value, so a caller can look each row's value up
 // directly. Distinct paths only; absolute URLs map to themselves.

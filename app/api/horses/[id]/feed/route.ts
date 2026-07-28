@@ -17,7 +17,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
   const { data: posts } = await sb
     .from("post")
-    .select("id, type, title, body, media_url, mux_playback_id, watermarked, like_count, published_at, source_trainer_id")
+    .select("id, type, title, body, media_url, poster_url, mux_playback_id, watermarked, like_count, published_at, source_trainer_id")
     .eq("horse_id", id)
     .eq("status", "published")
     .order("published_at", { ascending: false })

@@ -9,7 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { PostCard } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { signPhotoMap, POST_MEDIA_BUCKET } from "@/lib/storage/photos";
+import { signPhotoMap, POST_MEDIA_BUCKET, signedPosterFor } from "@/lib/storage/photos";
 import type { FeedPost, PostMedia, ReactionEmoji } from "@/components/types";
 
 const LIMIT = 10;
@@ -21,6 +21,7 @@ type PostRow = {
   type: PostMedia["type"];
   body: string | null;
   media_url: string | null;
+  poster_url: string | null;
   watermarked: boolean;
   like_count: number;
   published_at: string;
@@ -116,7 +117,7 @@ export function SavedFeed({ viewerId }: { viewerId: string }) {
       const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
       // `media_url` is a bare path in the PRIVATE `post-media` bucket — sign it
       // or the poster renders as a broken relative URL (absolute URLs pass through).
-      const postMedia = await signPhotoMap(sb, POST_MEDIA_BUCKET, postRows.map((p) => p.media_url));
+      const postMedia = await signPhotoMap(sb, POST_MEDIA_BUCKET, postRows.flatMap((p) => [p.poster_url, p.media_url]));
 
       const mapped: FeedPost[] = postRows.map((r) => {
         const horse = horseById.get(r.horse_id);
@@ -128,7 +129,7 @@ export function SavedFeed({ viewerId }: { viewerId: string }) {
           trainerName: trainer?.name ?? "Stablepass",
           postedAgo: relativeTime(r.published_at),
           body: r.body,
-          media: { type: r.type, posterUrl: r.media_url ? postMedia.get(r.media_url) ?? null : null, duration: null },
+          media: { type: r.type, posterUrl: signedPosterFor(r, postMedia), duration: null },
           watermarked: r.watermarked,
           count: r.like_count,
           reacted: myReaction.get(r.id) ?? null,

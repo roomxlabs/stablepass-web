@@ -4,6 +4,17 @@
 // There is NO comment UI anywhere (guardrail). Purely callback-driven; the consumer
 // wires the writes (W6/profiles). The emoji keys match the backend `reaction.emoji`
 // CHECK set exactly.
+//
+// Both states used to be effectively invisible:
+//   - reacted  → `.on` only swapped a 1px border colour and a very pale fill, and
+//                the glyph <span> carried its own opaque white circle that painted
+//                straight over that fill.
+//   - saved    → the stylesheet rule that greens the icon was defeated by an inline
+//                `fill: currentColor`, and `.bookmarked` never set `color`, so the
+//                icon filled muted grey.
+// Now the at-rest states carry the message, plus a short-lived confirmation on save
+// (which otherwise has no feedback at all).
+import { useEffect, useRef, useState } from "react";
 import type { ReactionEmoji } from "./types";
 
 // The 7 positive reactions, in display order. Exported so tests assert the exact set.
@@ -17,8 +28,12 @@ export const REACTIONS: { key: ReactionEmoji; glyph: string; label: string }[] =
   { key: "horse", glyph: "🐎", label: "Horse" },
 ];
 
-const Bookmark = ({ filled }: { filled: boolean }) => (
-  <svg className="ic" viewBox="0 0 24 24" aria-hidden="true" style={filled ? { fill: "currentColor" } : undefined}>
+const TOAST_MS = 2200;
+
+// No inline fill: `.action-web.bookmarked .ic` owns the filled state in CSS, and an
+// inline style would outrank it (the bug this replaces).
+const Bookmark = () => (
+  <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">
     <path d="M6 3h12v18l-6-4-6 4Z" />
   </svg>
 );
@@ -32,6 +47,22 @@ export interface ReactionBarProps {
 }
 
 export function ReactionBar({ count, reacted, bookmarked, onReact, onBookmark }: ReactionBarProps) {
+  const [savedToast, setSavedToast] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+
+  function handleBookmark() {
+    // Only confirm the ADD. Removing a bookmark is self-evident from the button
+    // dropping back to its outline state, and a toast there would read as an error.
+    const adding = !bookmarked;
+    onBookmark();
+    if (!adding) return;
+    setSavedToast(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setSavedToast(false), TOAST_MS);
+  }
+
   return (
     <div className="post-actions-web">
       <div className="reactions-web" role="group" aria-label="React">
@@ -48,7 +79,7 @@ export function ReactionBar({ count, reacted, bookmarked, onReact, onBookmark }:
           </button>
         ))}
       </div>
-      {count > 0 && <span className="action-web" style={{ marginLeft: 10 }}>{count}</span>}
+      {count > 0 && <span className="reaction-count-web">{count}</span>}
 
       <div className="action-spacer-web" />
 
@@ -57,10 +88,17 @@ export function ReactionBar({ count, reacted, bookmarked, onReact, onBookmark }:
         className={`action-web${bookmarked ? " bookmarked" : ""}`}
         aria-label={bookmarked ? "Remove bookmark" : "Bookmark"}
         aria-pressed={bookmarked}
-        onClick={onBookmark}
+        onClick={handleBookmark}
       >
-        <Bookmark filled={bookmarked} />
+        <Bookmark />
+        <span className="save-label-web">{bookmarked ? "Saved" : "Save"}</span>
       </button>
+
+      {savedToast && (
+        <div className="post-toast-web" role="status" data-testid="saved-toast">
+          Saved to your stable
+        </div>
+      )}
     </div>
   );
 }

@@ -474,22 +474,77 @@ a { color: inherit; text-decoration: none; }
 }
 
 .post-body-web { padding: 16px 22px; font-size: 15px; line-height: 1.55; color: var(--ink); }
-.post-actions-web { display: flex; align-items: center; gap: 18px; padding: 0 22px 18px; }
+/* position: relative anchors the save toast, which sits ABOVE this row. */
+.post-actions-web { position: relative; display: flex; align-items: center; gap: 14px; padding: 0 22px 18px; }
+/* A post with media but no caption renders no .post-body-web at all, so the actions
+   row landed flush against the media (the shorthand above sets padding-top: 0, and a
+   captioned post gets its 16px from .post-body-web instead). The adjacent-sibling
+   selector adds the breathing room ONLY in that case, leaving captioned posts alone. */
+.post-media-web + .post-actions-web,
+.post-head-web + .post-actions-web { padding-top: 14px; }
+
 .action-web { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; background: none; border: none; padding: 0; font-family: var(--font-sans); }
 .action-web .ic { width: 18px; height: 18px; }
-.action-web.liked { color: var(--brand-green); font-weight: 600; }
-.action-web.liked .ic { fill: var(--brand-green); stroke: var(--brand-green); }
+/* Saved: colour AND fill both flip. `.bookmarked` previously set no `color`, so the
+   icon's currentColor stayed muted grey and "saved" was near-indistinguishable. */
+.action-web.bookmarked { color: var(--brand-green); font-weight: 600; }
 .action-web.bookmarked .ic { fill: var(--brand-green); stroke: var(--brand-green); }
+.save-label-web { font-size: 12.5px; letter-spacing: 0.01em; }
 .action-spacer-web { flex: 1; }
-.reactions-web { display: flex; margin-left: -4px; }
-.reactions-web button, .reactions-web span {
+.reaction-count-web { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* Reaction chips. They no longer overlap (margin-left: -4px) — the overlap read as
+   cramped and left no room for the selected chip to lift without clipping. */
+.reactions-web { display: flex; gap: 6px; }
+.reactions-web button {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 26px; height: 26px; font-size: 14px; line-height: 1;
+  width: 30px; height: 30px; font-size: 15px; line-height: 1;
   background: var(--white); border: 1px solid var(--line); border-radius: 50%;
-  margin-left: -4px; cursor: pointer; padding: 0;
+  cursor: pointer; padding: 0;
+  opacity: 0.62;
+  transition: transform 130ms ease, opacity 130ms ease, background-color 130ms ease,
+              border-color 130ms ease, box-shadow 130ms ease;
 }
-.reactions-web button:hover { border-color: var(--brand-green); }
-.reactions-web button.on { background: var(--brand-green-soft); border-color: var(--brand-green); }
+/* The glyph wrapper must stay a bare span. It used to share the button's rule, which
+   gave it its own opaque white circle — painted straight over the selected fill. */
+.reactions-web button > span { background: none; border: 0; border-radius: 0; width: auto; height: auto; }
+.reactions-web button:hover { opacity: 1; border-color: var(--brand-green); transform: translateY(-1px); }
+.reactions-web button:focus-visible { opacity: 1; outline: 2px solid var(--brand-green); outline-offset: 2px; }
+.reactions-web button.on {
+  opacity: 1;
+  background: var(--brand-green);
+  border-color: var(--brand-green);
+  transform: scale(1.15);
+  box-shadow: 0 2px 8px rgba(40, 93, 80, 0.35);
+}
+
+/* Transient save confirmation. Anchored to the actions row and pushed ABOVE it
+   (bottom: 100%) so it never covers the reaction chips it is confirming — it rises
+   over the foot of the media instead, like a snackbar off the button row. */
+.post-toast-web {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% - 6px);
+  transform: translateX(-50%);
+  background: var(--brand-green);
+  color: var(--cream);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 8px 16px;
+  border-radius: var(--radius-pill);
+  box-shadow: 0 6px 18px rgba(26, 26, 26, 0.18);
+  z-index: 5;
+  animation: post-toast-in 160ms ease-out;
+}
+@keyframes post-toast-in {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .post-toast-web { animation: none; }
+  .reactions-web button { transition: none; }
+}
 
 .race-badge {
   display: inline-flex; align-items: center; gap: 6px;
