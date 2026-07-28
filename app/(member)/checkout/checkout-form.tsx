@@ -19,6 +19,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
+import { Wordmark } from "@/components/wordmark";
 
 type CheckoutState =
   | { status: "loading" }
@@ -66,7 +67,7 @@ function CheckoutHeader({ trialDaysLeft }: { trialDaysLeft: number }) {
   return (
     <>
       <a href="/explore" className="checkout-logo">
-        <span className="checkout-logo-text">stablepass.</span>
+        <Wordmark className="checkout-logo-text" />
       </a>
       <div className="checkout-step">Step 2 of 2 · Payment</div>
       <h1 className="checkout-h">Continue your access.</h1>
@@ -201,7 +202,7 @@ export function CheckoutForm({ trialDaysLeft }: { trialDaysLeft: number }) {
         <div className="checkout-container" style={{ gridTemplateColumns: "1fr" }}>
           <div className="checkout-left">
             <a href="/explore" className="checkout-logo">
-              <span className="checkout-logo-text">stablepass.</span>
+              <Wordmark className="checkout-logo-text" />
             </a>
             <h1 className="checkout-h">You&rsquo;re already subscribed.</h1>
             <p className="checkout-sub">Your membership is active — there&rsquo;s nothing to do here.</p>

@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
 import { SignInForm } from "./sign-in-form";
+import { Wordmark } from "@/components/wordmark";
 
 export const metadata = { title: "Sign in · StablePass" };
 
@@ -15,7 +16,7 @@ export default async function SignInPage() {
     <div className="auth-page">
       <aside className="auth-page-side">
         <div className="auth-page-side-logo">
-          <span className="auth-side-brand">stablepass.</span>
+          <Wordmark className="auth-side-brand" />
         </div>
         <div className="auth-side-quote">
           <p className="quote">

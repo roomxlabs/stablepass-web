@@ -54,6 +54,46 @@ body {
 
 a { color: inherit; text-decoration: none; }
 
+/* ---- accessible-but-invisible text ---------------------------------- */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---- brand marks ----------------------------------------------------
+   The real logo is a single alpha PNG painted with `background-color:
+   currentColor` through a CSS mask, so one asset covers every colourway and
+   picks up the colour of its context. Callers set --wordmark-h; width follows
+   from aspect-ratio because the mask is sized `contain`. See components/wordmark.tsx.
+   -------------------------------------------------------------------- */
+.wordmark,
+.brandmark {
+  display: block;
+  height: var(--wordmark-h, 26px);
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat;
+          mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+          mask-position: center;
+  -webkit-mask-size: contain;
+          mask-size: contain;
+}
+.wordmark {
+  aspect-ratio: 6752 / 1448; /* ink bounding box of Logo/stablepass- green.png */
+  -webkit-mask-image: url("/brand/wordmark.png");
+          mask-image: url("/brand/wordmark.png");
+}
+.brandmark {
+  aspect-ratio: 2660 / 2720; /* ink bounding box of Logo/S. green watermark.png */
+  -webkit-mask-image: url("/brand/mark.png");
+          mask-image: url("/brand/mark.png");
+}
+
 /* ---- icons ---------------------------------------------------------- */
 .ic {
   display: inline-block;
@@ -145,12 +185,11 @@ a { color: inherit; text-decoration: none; }
   overflow: hidden;
 }
 .auth-page-side-logo { position: relative; z-index: 2; }
+/* Cream on the green auth panel — same asset as the sidebar, recoloured by
+   `color` alone (the mask paints with currentColor). */
 .auth-side-brand {
-  font-family: var(--font-serif);
-  font-size: 30px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
   color: var(--cream);
+  --wordmark-h: 30px;
 }
 .auth-side-quote { position: relative; z-index: 2; max-width: 440px; }
 .auth-side-quote .quote {
@@ -235,12 +274,11 @@ a { color: inherit; text-decoration: none; }
   padding: 4px 12px 22px;
   border-bottom: 1px solid var(--line);
   margin-bottom: 16px;
-  font-family: var(--font-serif);
-  font-size: 26px;
-  font-weight: 600;
   color: var(--brand-green);
-  letter-spacing: -0.01em;
+  --wordmark-h: 26px;
 }
+/* The square mark only appears in the collapsed rail (see shell responsive). */
+.sidebar-brandmark { display: none; }
 .sidebar-nav { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 2px; }
 .sidebar-nav a {
   display: flex;
@@ -253,7 +291,8 @@ a { color: inherit; text-decoration: none; }
   font-size: 14.5px;
   font-weight: 500;
 }
-.sidebar-nav a .ic { width: 18px; height: 18px; color: var(--muted); }
+.sidebar-nav a .ic { width: 18px; height: 18px; color: var(--muted); flex: none; }
+.sidebar-nav .nav-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-nav a:hover { background: var(--cream-dark); }
 .sidebar-nav a.active { background: var(--brand-green-soft); color: var(--brand-green); font-weight: 600; }
 .sidebar-nav a.active .ic { color: var(--brand-green); }
@@ -290,6 +329,9 @@ a { color: inherit; text-decoration: none; }
 .sidebar-user .meta { font-size: 12.5px; line-height: 1.3; min-width: 0; }
 .sidebar-user .meta strong { display: block; color: var(--ink); font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-user .meta .email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Was an inline style on the button; moved here so the tablet rail can override it
+   (inline styles beat stylesheet rules, so the rail could not shrink it before). */
+.sidebar-signout { margin-top: 12px; font-size: 13px; padding: 9px 14px; }
 .trial-badge-sidebar {
   background: var(--brand-green-soft);
   color: var(--brand-green);
@@ -366,9 +408,122 @@ a { color: inherit; text-decoration: none; }
 .feed-grid { display: flex; align-items: flex-start; gap: 28px; max-width: 1180px; width: 100%; margin: 0 auto; padding: 32px 40px 60px; }
 .feed-col { flex: 1; min-width: 0; max-width: 700px; }
 .feed-aside { width: 320px; flex: none; display: flex; flex-direction: column; gap: 20px; }
-@media (max-width: 980px) {
+
+/* ====================================================================
+   SHELL RESPONSIVE — three stages
+   The previous single `max-width: 980px` query keyed off the VIEWPORT, but the
+   box it was really constraining is .main, which is always viewport minus the
+   sidebar. On an iPad in landscape (1024px) the query therefore never fired,
+   yet the feed column had been squeezed to ~356px. Every breakpoint below is
+   written in viewport terms with that stage's sidebar width folded in.
+
+     >=1280   full 240px sidebar   content = vw - 240
+     900-1279 72px icon rail       content = vw - 72
+     <900     off-canvas drawer    content = vw
+   ==================================================================== */
+
+/* Drawer chrome, declared BEFORE the stage queries below. Both selectors are a
+   single class, so the stage rules that switch them on only win on source order
+   — putting these afterwards would silently re-hide the hamburger everywhere. */
+.nav-toggle {
+  display: none;
+  position: fixed;
+  top: 12px; left: 12px;
+  z-index: 50;
+  width: 40px; height: 40px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: var(--white);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.nav-toggle .ic { width: 20px; height: 20px; }
+/* Once the drawer is out, the toggle steps to its right edge — parked top-left it
+   would sit straight on top of the wordmark in the drawer header. 264 + 12 gutter. */
+.nav-toggle.is-open { left: 276px; }
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(18, 46, 38, 0.38);
+}
+
+/* Right rail stacks once the content box can no longer seat 600 + 28 + 320.
+   At 1100px: rail stage gives 1100 - 72 - 80 padding = 948 inner. Below that,
+   the feed column starts losing more than it can afford. */
+@media (max-width: 1099px) {
   .feed-grid { flex-direction: column; }
   .feed-col, .feed-aside { max-width: none; width: 100%; }
+}
+
+/* ---- Stage 2: tablet — sidebar collapses to an icon-only rail -------- */
+@media (min-width: 900px) and (max-width: 1279px) {
+  .app-shell { grid-template-columns: 72px 1fr; }
+  .sidebar { padding: 24px 10px; align-items: center; }
+  .sidebar-logo {
+    padding: 4px 0 18px;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    --wordmark-h: 26px;
+  }
+  .sidebar-wordmark { display: none; }
+  .sidebar-brandmark { display: block; }
+
+  .sidebar-nav { width: 100%; }
+  .sidebar-nav a { justify-content: center; padding: 12px 0; gap: 0; }
+  /* Labels go sr-only rather than display:none so assistive tech keeps them;
+     the title attribute on the anchor surfaces them on hover. */
+  .sidebar-nav .nav-label {
+    position: absolute;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* "Your stable" wraps to two lines in a 72px rail. Collapse it to a rule: the
+     text stays in the DOM (and in the a11y tree) but stops taking visual space. */
+  .sidebar-section {
+    font-size: 0;
+    padding: 0;
+    margin: 14px 10px 10px;
+    border-top: 1px solid var(--line);
+  }
+  .sidebar-footer { padding: 12px 2px; }
+  .sidebar-user { justify-content: center; padding: 4px 0; }
+  .sidebar-user .meta { display: none; }
+  .trial-badge-sidebar { display: none; }
+  .sidebar-signout { font-size: 10px; padding: 8px 2px; }
+}
+
+/* ---- Stage 3: phone — sidebar becomes an off-canvas drawer ----------- */
+@media (max-width: 899px) {
+  .app-shell { grid-template-columns: 1fr; }
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0;
+    z-index: 40;
+    width: 264px;
+    height: 100dvh;
+    transform: translateX(-100%);
+    transition: transform 180ms ease;
+  }
+  .sidebar.open { transform: none; box-shadow: 0 16px 40px rgba(26, 26, 26, 0.18); }
+  .sidebar-backdrop { display: block; }
+  .nav-toggle { display: inline-flex; }
+  /* Make room for the fixed hamburger so it never sits on top of topbar content. */
+  .topbar { padding-left: 64px; padding-right: 20px; gap: 12px; }
+  .page-pad, .feed-grid { padding-left: 20px; padding-right: 20px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar { transition: none; }
 }
 
 /* ====================================================================
@@ -381,7 +536,7 @@ a { color: inherit; text-decoration: none; }
   padding: 18px 48px;
   display: flex; align-items: center; justify-content: space-between;
 }
-.onboarding-nav .brand { font-family: var(--font-serif); font-size: 24px; font-weight: 600; color: var(--brand-green); letter-spacing: -0.01em; }
+.onboarding-nav .brand { color: var(--brand-green); --wordmark-h: 24px; }
 .onboarding-nav .welcome { font-size: 13px; color: var(--muted); }
 .onboarding-web { min-height: 100vh; padding: 60px 32px; }
 .onboarding-container { max-width: 1000px; margin: 0 auto; }
@@ -751,10 +906,10 @@ a { color: inherit; text-decoration: none; }
 
 /* ====================================================================
    Checkout — embedded Stripe Elements (W10 / ENG-202). Ported from
-   mockups/web/style.css (04-checkout.html), lines ~1407-1575. The mockup's
-   .checkout-logo wraps an <img>; this app uses a text brand mark everywhere
-   else (.sidebar-logo, .auth-side-brand), so .checkout-logo-text mirrors that
-   convention instead of introducing a logo image asset.
+   mockups/web/style.css (04-checkout.html), lines ~1407-1575. Like every other
+   brand instance (.sidebar-logo, .auth-side-brand, .onboarding-nav .brand),
+   .checkout-logo-text now renders the real mark through the shared .wordmark
+   mask and only has to declare its colour and --wordmark-h.
    ==================================================================== */
 .checkout-page {
   min-height: 100vh;
@@ -788,11 +943,8 @@ a { color: inherit; text-decoration: none; }
   margin-bottom: 36px;
 }
 .checkout-logo-text {
-  font-family: var(--font-serif);
-  font-size: 26px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
   color: var(--brand-green);
+  --wordmark-h: 26px;
 }
 .checkout-step {
   font-size: 11px;
