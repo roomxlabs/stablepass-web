@@ -4,10 +4,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // return the chain; single()/maybeSingle() resolve a per-table fixture; the chain
 // is awaitable (a `.select().eq()...` with no terminal method resolves the same
 // fixture — which is how the route reads `horse` (array) and `post` (count)).
-const { getUserMock, fromMock, tableData, fromCalls } = vi.hoisted(() => {
+const { getUserMock, fromMock, tableData, fromCalls, storageFromMock, createSignedUrlMock } = vi.hoisted(() => {
   const getUserMock = vi.fn();
   const tableData: Record<string, { data?: unknown; error?: unknown; count?: number }> = {};
   const fromCalls: string[] = [];
+  // `trainer-photos` is a PRIVATE bucket: the route must turn the stored object
+  // path into a signed URL, never hand the raw path to the client.
+  const createSignedUrlMock = vi.fn(async (path: string) => ({ data: { signedUrl: `https://sb.local/${path}?token=sig` } }));
+  const storageFromMock = vi.fn(() => ({ createSignedUrl: createSignedUrlMock }));
 
   function makeChain(table: string) {
     const result = () => tableData[table] ?? { data: null, error: null };
@@ -29,11 +33,15 @@ const { getUserMock, fromMock, tableData, fromCalls } = vi.hoisted(() => {
     return makeChain(table);
   });
 
-  return { getUserMock, fromMock, tableData, fromCalls };
+  return { getUserMock, fromMock, tableData, fromCalls, storageFromMock, createSignedUrlMock };
 });
 
 vi.mock("@/lib/supabase/server", () => ({
-  supabaseServer: vi.fn(async () => ({ auth: { getUser: getUserMock }, from: fromMock })),
+  supabaseServer: vi.fn(async () => ({
+    auth: { getUser: getUserMock },
+    from: fromMock,
+    storage: { from: storageFromMock },
+  })),
 }));
 
 import { GET } from "@/app/api/trainers/[id]/route";
@@ -47,7 +55,32 @@ describe("GET /api/trainers/:id", () => {
     getUserMock.mockReset();
     fromMock.mockClear();
     fromCalls.length = 0;
+    storageFromMock.mockClear();
+    createSignedUrlMock.mockClear();
     for (const key of Object.keys(tableData)) delete tableData[key];
+  });
+
+  it("signs a stored photo path — the raw path must never reach the client", async () => {
+    // REGRESSION: admin stores a BARE OBJECT PATH (e.g. "ilham-1785164320876.jpg")
+    // in a private bucket. Returning it raw makes the browser resolve it as a
+    // RELATIVE url (/trainers/<id>/ilham-....jpg) and the image silently 404s.
+    getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
+    tableData.subscription = { data: { status: "trial" } };
+    tableData.trainer = {
+      data: {
+        id: "t1", name: "Ilham", display_name: null, stable_name: null,
+        location: null, bio: null, photo_url: "ilham-1785164320876.jpg",
+      },
+    };
+    tableData.horse = { data: [] };
+    tableData.post = { count: 0 };
+
+    const res = await GET(new Request("http://localhost/api/trainers/t1"), params("t1"));
+    const body = await res.json();
+
+    expect(storageFromMock).toHaveBeenCalledWith("trainer-photos");
+    expect(body.data.trainer.coverUrl).toBe("https://sb.local/ilham-1785164320876.jpg?token=sig");
+    expect(body.data.trainer.coverUrl).not.toBe("ilham-1785164320876.jpg");
   });
 
   it("returns 401 when there is no session", async () => {

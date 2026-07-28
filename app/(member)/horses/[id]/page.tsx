@@ -10,6 +10,7 @@
 // stable, not derived from `race_horse`.
 import { notFound } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
+import { signPhoto, HORSE_PHOTO_BUCKET } from "@/lib/storage/photos";
 import { TrainerCard } from "@/components/trainer-card";
 import { FollowNotify } from "./follow-notify";
 import { HorsePosts } from "./horse-posts";
@@ -117,7 +118,9 @@ export default async function HorseProfilePage({ params }: { params: Promise<{ i
   const trainer = one(row.trainer);
   const displayName = row.racing_name || row.display_name;
   const pedigreeLine = pedigree(row.sire, row.dam);
-  const coverUrl = row.photo_url ?? null;
+  // `photo_url` holds a bare object path in the PRIVATE `horse-photos` bucket;
+  // it must be signed before it can be rendered (see lib/storage/photos.ts).
+  const coverUrl = await signPhoto(sb, HORSE_PHOTO_BUCKET, row.photo_url);
   const about = row.story ?? null;
 
   const { data: nextRaceRows } = await sb

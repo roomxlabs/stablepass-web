@@ -10,6 +10,7 @@
 // GUARDRAIL: `trainer_contact` is admin-only PII and is NEVER selected here.
 import { ok, fail, UNAUTH, GATED } from "@/lib/api/envelope";
 import { supabaseServer } from "@/lib/supabase/server";
+import { signPhoto, TRAINER_PHOTO_BUCKET } from "@/lib/storage/photos";
 
 type TrainerRow = {
   id: string;
@@ -64,7 +65,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       stableName: t.stable_name,
       location: t.location,
       bio: t.bio,
-      coverUrl: t.photo_url ?? null,
+      // Signed, never the raw path: `trainer-photos` is a private bucket.
+      coverUrl: await signPhoto(sb, TRAINER_PHOTO_BUCKET, t.photo_url),
     },
     stats: { horses: horses.length, updates: updates ?? 0, wins },
     horses: horses.map((h) => ({ id: h.id, name: h.racing_name || h.display_name })),

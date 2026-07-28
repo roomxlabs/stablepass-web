@@ -14,6 +14,7 @@ import { ReactionBar } from "@/components/reaction-bar";
 import { RaceDayBand } from "@/components/race-day-band";
 import { TrainerCard } from "@/components/trainer-card";
 import { supabaseBrowser } from "@/lib/supabase/client";
+import { signPhotoMap, POST_MEDIA_BUCKET } from "@/lib/storage/photos";
 import type { FeedPost, PostMedia, ReactionEmoji, RaceDayEntry, TrainerSummary } from "@/components/types";
 
 const LIMIT = 10;
@@ -160,6 +161,9 @@ export function ExploreFeed({ viewerId }: { viewerId: string }) {
       const horseById = new Map(((horseRows ?? []) as HorseRow[]).map((h) => [h.id, h]));
       const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
       const mySet = new Set(((bookmarkRows ?? []) as BookmarkRow[]).map((b) => b.post_id));
+      // `media_url` is a bare path in the PRIVATE `post-media` bucket — sign it
+      // or the poster renders as a broken relative URL (absolute URLs pass through).
+      const postMedia = await signPhotoMap(sb, POST_MEDIA_BUCKET, rows.map((r) => r.media_url));
 
       const mapped: FeedPost[] = rows.map((r) => {
         const horse = horseById.get(r.horse_id);
@@ -171,7 +175,7 @@ export function ExploreFeed({ viewerId }: { viewerId: string }) {
           trainerName: trainer?.name ?? "Stablepass",
           postedAgo: relativeTime(r.published_at),
           body: r.body,
-          media: { type: r.type, posterUrl: r.media_url ?? null, duration: null },
+          media: { type: r.type, posterUrl: r.media_url ? postMedia.get(r.media_url) ?? null : null, duration: null },
           watermarked: r.watermarked,
           count: r.like_count,
           reacted: myReaction.get(r.id) ?? null,
