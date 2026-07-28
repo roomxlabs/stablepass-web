@@ -5,9 +5,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // itself awaitable (a plain `await sb.from(t).select(...).eq(...)` — no
 // terminal method — resolves the same fixture), matching how the route queries
 // `race_horse` directly.
-const { getUserMock, fromMock, tableData } = vi.hoisted(() => {
+const { getUserMock, fromMock, tableData, storageFromMock, createSignedUrlMock } = vi.hoisted(() => {
   const getUserMock = vi.fn();
   const tableData: Record<string, { data: unknown; error?: unknown }> = {};
+  // `horse-photos` is a PRIVATE bucket: the route must turn the stored object
+  // path into a signed URL, never hand the raw path to the client.
+  const createSignedUrlMock = vi.fn(async (path: string) => ({ data: { signedUrl: `https://sb.local/${path}?token=sig` } }));
+  const storageFromMock = vi.fn(() => ({ createSignedUrl: createSignedUrlMock }));
 
   function makeChain(table: string) {
     const result = () => tableData[table] ?? { data: null, error: null };
@@ -37,13 +41,14 @@ const { getUserMock, fromMock, tableData } = vi.hoisted(() => {
 
   const fromMock = vi.fn((table: string) => makeChain(table));
 
-  return { getUserMock, fromMock, tableData };
+  return { getUserMock, fromMock, tableData, storageFromMock, createSignedUrlMock };
 });
 
 vi.mock("@/lib/supabase/server", () => ({
   supabaseServer: vi.fn(async () => ({
     auth: { getUser: getUserMock },
     from: fromMock,
+    storage: { from: storageFromMock },
   })),
 }));
 
@@ -57,7 +62,32 @@ describe("GET /api/horses/:id", () => {
   beforeEach(() => {
     getUserMock.mockReset();
     fromMock.mockClear();
+    storageFromMock.mockClear();
+    createSignedUrlMock.mockClear();
     for (const key of Object.keys(tableData)) delete tableData[key];
+  });
+
+  it("signs a stored photo path — the raw path must never reach the client", async () => {
+    // REGRESSION: admin stores a BARE OBJECT PATH in a private bucket. Returned
+    // raw, the browser resolves it as a RELATIVE url and the cover silently 404s.
+    getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
+    tableData.subscription = { data: { status: "trial" } };
+    tableData.horse = {
+      data: {
+        id: "h1", display_name: "Kuda Ilham", racing_name: null, sire: null, dam: null,
+        sex: null, colour: null, foaling_year: null, training_status: null,
+        starts: 0, wins: 0, places: 0, prize_money_cents: 0, story: null,
+        photo_url: "2ab10ec3-919d-40bb-8a30-359d965751c5.jpg", trainer: null,
+      },
+    };
+    tableData.race_horse = { data: [] };
+
+    const res = await GET(new Request("http://localhost/api/horses/h1"), params("h1"));
+    const body = await res.json();
+
+    expect(storageFromMock).toHaveBeenCalledWith("horse-photos");
+    expect(body.data.horse.coverUrl).toBe("https://sb.local/2ab10ec3-919d-40bb-8a30-359d965751c5.jpg?token=sig");
+    expect(body.data.horse.coverUrl).not.toBe("2ab10ec3-919d-40bb-8a30-359d965751c5.jpg");
   });
 
   it("returns 401 with the error envelope when there is no session", async () => {

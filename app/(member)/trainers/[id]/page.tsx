@@ -9,6 +9,7 @@
 // A hidden/unknown trainer → notFound() (404, never 403).
 import { notFound } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
+import { signPhoto, TRAINER_PHOTO_BUCKET } from "@/lib/storage/photos";
 import type { HorseSummary } from "@/components/types";
 import { FollowNotify } from "./follow-notify";
 import { StableHorses } from "./stable-horses";
@@ -70,7 +71,9 @@ export default async function TrainerProfilePage({ params }: { params: Promise<{
 
   const displayName = t.display_name || t.name;
   const subtitle = [t.stable_name, t.location].filter(Boolean).join(" · ");
-  const coverUrl = t.photo_url ?? null;
+  // `photo_url` holds a bare object path in the PRIVATE `trainer-photos` bucket;
+  // it must be signed before it can be rendered (see lib/storage/photos.ts).
+  const coverUrl = await signPhoto(sb, TRAINER_PHOTO_BUCKET, t.photo_url);
 
   const [{ data: horseRows }, { count: updates }, { data: followRow }, { data: notifyRow }] = await Promise.all([
     sb.from("horse").select("id, display_name, racing_name, wins").eq("trainer_id", id).eq("status", "active").order("display_name"),

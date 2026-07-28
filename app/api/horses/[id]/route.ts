@@ -9,6 +9,7 @@
 // stable (see the mockup's stats-note copy), not derived from `race_horse`.
 import { ok, fail, UNAUTH, GATED } from "@/lib/api/envelope";
 import { supabaseServer } from "@/lib/supabase/server";
+import { signPhoto, HORSE_PHOTO_BUCKET } from "@/lib/storage/photos";
 
 type TrainerRow = { id: string; name: string; stable_name: string | null; location: string | null };
 type HorseRow = {
@@ -115,7 +116,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       pedigree: pedigree(row.sire, row.dam),
       ageSex: ageSex(row.foaling_year, row.sex),
       trainingStatus: row.training_status,
-      coverUrl: row.photo_url ?? null,
+      // Signed, never the raw path: `horse-photos` is a private bucket.
+      coverUrl: await signPhoto(sb, HORSE_PHOTO_BUCKET, row.photo_url),
       about: row.story ?? null,
     },
     trainer,

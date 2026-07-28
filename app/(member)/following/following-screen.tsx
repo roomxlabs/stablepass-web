@@ -11,6 +11,7 @@ import { useRouter } from "next/navigation";
 import { PostCard } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
+import { signPhotoMap, HORSE_PHOTO_BUCKET, TRAINER_PHOTO_BUCKET, POST_MEDIA_BUCKET } from "@/lib/storage/photos";
 import type { FeedPost, PostMedia, ReactionEmoji } from "@/components/types";
 
 const LIMIT = 10;
@@ -132,14 +133,24 @@ export function FollowingScreen({ viewerId }: { viewerId: string }) {
         sb.from("follow").select("created_at, horse:horse_id(id, display_name, racing_name, photo_url)").not("horse_id", "is", null).order("created_at", { ascending: false }),
         sb.from("follow").select("created_at, trainer:trainer_id(id, name, display_name, photo_url)").not("trainer_id", "is", null).order("created_at", { ascending: false }),
       ]);
-      const hItems: RailItem[] = ((hRows ?? []) as HorseFollowRow[])
+      const followedHorses = ((hRows ?? []) as HorseFollowRow[])
         .map((r) => one(r.horse))
-        .filter((h): h is FollowedHorse => h !== null)
-        .map((h) => ({ id: h.id, name: h.racing_name || h.display_name, photoUrl: h.photo_url, href: `/horses/${h.id}` }));
-      const tItems: RailItem[] = ((tRows ?? []) as TrainerFollowRow[])
+        .filter((h): h is FollowedHorse => h !== null);
+      const followedTrainers = ((tRows ?? []) as TrainerFollowRow[])
         .map((r) => one(r.trainer))
-        .filter((t): t is FollowedTrainer => t !== null)
-        .map((t) => ({ id: t.id, name: t.display_name || t.name, photoUrl: t.photo_url, href: `/trainers/${t.id}` }));
+        .filter((t): t is FollowedTrainer => t !== null);
+
+      // `photo_url` is a bare path in a PRIVATE bucket — sign it or the avatar
+      // renders as a broken relative URL. One batch call per bucket.
+      const [horsePhotos, trainerPhotos] = await Promise.all([
+        signPhotoMap(sb, HORSE_PHOTO_BUCKET, followedHorses.map((h) => h.photo_url)),
+        signPhotoMap(sb, TRAINER_PHOTO_BUCKET, followedTrainers.map((t) => t.photo_url)),
+      ]);
+
+      const hItems: RailItem[] = followedHorses
+        .map((h) => ({ id: h.id, name: h.racing_name || h.display_name, photoUrl: h.photo_url ? horsePhotos.get(h.photo_url) ?? null : null, href: `/horses/${h.id}` }));
+      const tItems: RailItem[] = followedTrainers
+        .map((t) => ({ id: t.id, name: t.display_name || t.name, photoUrl: t.photo_url ? trainerPhotos.get(t.photo_url) ?? null : null, href: `/trainers/${t.id}` }));
       setHorses(hItems);
       setTrainers(tItems);
       setFollowsLoaded(true);
@@ -194,6 +205,9 @@ export function FollowingScreen({ viewerId }: { viewerId: string }) {
       const horseById = new Map(((horseRows ?? []) as HorseRow[]).map((h) => [h.id, h]));
       const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
       const mySet = new Set(((bookmarkRows ?? []) as BookmarkRow[]).map((b) => b.post_id));
+      // `media_url` is a bare path in the PRIVATE `post-media` bucket — sign it
+      // or the poster renders as a broken relative URL (absolute URLs pass through).
+      const postMedia = await signPhotoMap(sb, POST_MEDIA_BUCKET, rows.map((r) => r.media_url));
 
       const mapped: FeedPost[] = rows.map((r) => {
         const horse = horseById.get(r.horse_id);
@@ -205,7 +219,7 @@ export function FollowingScreen({ viewerId }: { viewerId: string }) {
           trainerName: trainer?.name ?? "Stablepass",
           postedAgo: relativeTime(r.published_at),
           body: r.body,
-          media: { type: r.type, posterUrl: r.media_url ?? null, duration: null },
+          media: { type: r.type, posterUrl: r.media_url ? postMedia.get(r.media_url) ?? null : null, duration: null },
           watermarked: r.watermarked,
           count: r.like_count,
           reacted: myReaction.get(r.id) ?? null,
