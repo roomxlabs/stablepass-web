@@ -1,7 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { ReactionBar, REACTIONS } from "@/components/reaction-bar";
+
+// jsdom does not apply real stylesheets, so the visual contract (which state paints
+// what) is asserted against the stylesheet source itself.
+const readGlobalsCss = () => readFileSync(resolve(process.cwd(), "app/globals.css"), "utf8");
 
 describe("ReactionBar", () => {
   it("renders exactly the 7 positive reaction glyphs + a bookmark button, and no comment affordance", () => {
@@ -39,5 +45,93 @@ describe("ReactionBar", () => {
     await user.click(screen.getByRole("button", { name: "Bookmark" }));
 
     expect(onBookmark).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ReactionBar — reacted state is visible at rest", () => {
+  it("marks only the picked chip with .on and aria-pressed", () => {
+    const { container } = render(
+      <ReactionBar count={3} reacted="fire" bookmarked={false} onReact={vi.fn()} onBookmark={vi.fn()} />,
+    );
+    const on = container.querySelectorAll(".reactions-web button.on");
+    expect(on).toHaveLength(1);
+    expect(on[0].getAttribute("aria-label")).toBe("Fire");
+    expect(screen.getByRole("button", { name: "Fire" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Like" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("keeps the glyph wrapper a bare span so it cannot paint over the selected fill", () => {
+    const { container } = render(
+      <ReactionBar count={0} reacted="like" bookmarked={false} onReact={vi.fn()} onBookmark={vi.fn()} />,
+    );
+    // Regression guard: the glyph span used to share the button's rule and drew its
+    // own opaque white circle on top of `.on`'s green background.
+    const rule = readGlobalsCss();
+    expect(rule).not.toMatch(/\.reactions-web button,\s*\.reactions-web span\s*\{/);
+    expect(rule).toMatch(/\.reactions-web button > span\s*\{[^}]*background:\s*none/);
+    expect(container.querySelector(".reactions-web button.on > span")).toBeTruthy();
+  });
+
+  it("no longer overlaps the chips, which read as cramped", () => {
+    expect(readGlobalsCss()).not.toMatch(/\.reactions-web\s*\{[^}]*margin-left:\s*-4px/);
+  });
+});
+
+describe("ReactionBar — saved state and confirmation", () => {
+  it("labels the button Save when unsaved and Saved once saved", () => {
+    const { rerender } = render(
+      <ReactionBar count={0} reacted={null} bookmarked={false} onReact={vi.fn()} onBookmark={vi.fn()} />,
+    );
+    expect(screen.getByText("Save")).toBeInTheDocument();
+
+    rerender(<ReactionBar count={0} reacted={null} bookmarked onReact={vi.fn()} onBookmark={vi.fn()} />);
+    expect(screen.getByText("Saved")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove bookmark" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("does not inline-style the icon fill, which would outrank the stylesheet", () => {
+    const { container } = render(
+      <ReactionBar count={0} reacted={null} bookmarked onReact={vi.fn()} onBookmark={vi.fn()} />,
+    );
+    const icon = container.querySelector(".action-web.bookmarked .ic") as SVGElement | null;
+    expect(icon).toBeTruthy();
+    // The bug: style={{ fill: "currentColor" }} beat `.bookmarked .ic { fill: green }`,
+    // and `.bookmarked` set no colour, so "saved" painted muted grey.
+    expect(icon!.getAttribute("style")).toBeNull();
+    expect(readGlobalsCss()).toMatch(/\.action-web\.bookmarked\s*\{[^}]*color:\s*var\(--brand-green\)/);
+  });
+
+  it("confirms an add with a transient toast", async () => {
+    const user = userEvent.setup();
+    render(<ReactionBar count={0} reacted={null} bookmarked={false} onReact={vi.fn()} onBookmark={vi.fn()} />);
+
+    expect(screen.queryByTestId("saved-toast")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Bookmark" }));
+    expect(screen.getByTestId("saved-toast")).toHaveTextContent("Saved to your stable");
+    expect(screen.getByTestId("saved-toast")).toHaveAttribute("role", "status");
+  });
+
+  it("stays quiet when REMOVING a bookmark — a toast there would read as an error", async () => {
+    const user = userEvent.setup();
+    render(<ReactionBar count={0} reacted={null} bookmarked onReact={vi.fn()} onBookmark={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Remove bookmark" }));
+    expect(screen.queryByTestId("saved-toast")).toBeNull();
+  });
+});
+
+describe("post card spacing", () => {
+  it("pads the actions row only when no caption precedes it", () => {
+    const css = readGlobalsCss();
+    // Captionless posts render no .post-body-web, so the row butted against the media.
+    expect(css).toMatch(
+      /\.post-media-web \+ \.post-actions-web,\s*\n?\s*\.post-head-web \+ \.post-actions-web\s*\{[^}]*padding-top:\s*14px/,
+    );
+  });
+
+  it("anchors the toast above the actions row so it cannot cover the chips", () => {
+    const css = readGlobalsCss();
+    expect(css).toMatch(/\.post-actions-web\s*\{[^}]*position:\s*relative/);
+    expect(css).toMatch(/\.post-toast-web\s*\{[^}]*bottom:\s*calc\(100% - 6px\)/);
   });
 });
