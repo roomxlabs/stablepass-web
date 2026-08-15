@@ -151,3 +151,27 @@ route-level tests. Before trusting "extend the existing tests", run
 `toHaveBeenCalledWith` never sees it. Create the `"subscription"` chain ONCE in
 `vi.hoisted()` and return it for that table, exposing its `select`; `mockClear` it per
 test. Minimal, additive, leaves the other tables' per-call behaviour intact.
+
+## `.rx/mockups.md` pointed at a directory that never existed (fixed in ENG-571)
+The manifest named `../docs/dev-handover/mockups/web/`; `ls` fails on it. The real root
+is a SIBLING of this repo: `<workspace>/dev-handover/StablePass-mockups/mockups/web/`.
+`dev-handover/` is not a git repo, so nothing under it is versioned — superseded screens
+are archived by hand under `screens/_archive/`. `ls` the design path before building, and
+note that `CLAUDE.md`'s "Design source" line still repeats the old dead path.
+
+## `getByRole("alert")` is ambiguous in Playwright — Next's route announcer is one too
+`#__next-route-announcer__` is `role=alert`, so `page.getByRole("alert")` is a strict-mode
+violation on any App Router page that also renders a `.form-error`. Target the class
+(`page.locator(".form-error")`) in e2e specs. jsdom/RTL is unaffected — only Playwright.
+
+## `maxLength` really is enforced against Playwright's `fill()`
+`fill()` does NOT bypass `maxLength`, so a field with `maxLength={4}` can never receive a
+5-char or space-padded value from an e2e test — `'  0800  '` silently arrives as `'  08'`
+and the test fails on a validation error that looks inexplicable. Pin over-long/untrimmed
+input in ROUTE tests (where a non-browser client can really send it); in component tests
+use `fireEvent.change`, which does bypass it.
+
+## A real signup + a cold `/onboarding` outruns Playwright's 30s default
+Playwright's per-test timeout is 30s, so a `waitForURL` with a longer timeout still dies at
+30s. An e2e test that signs up for real and waits on a first-hit `next dev` route compile
+needs an explicit `test.setTimeout(120_000)`, not just a bigger `waitForURL` timeout.
