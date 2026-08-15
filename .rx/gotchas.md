@@ -175,3 +175,54 @@ use `fireEvent.change`, which does bypass it.
 Playwright's per-test timeout is 30s, so a `waitForURL` with a longer timeout still dies at
 30s. An e2e test that signs up for real and waits on a first-hit `next dev` route compile
 needs an explicit `test.setTimeout(120_000)`, not just a bigger `waitForURL` timeout.
+## A NUL byte in a source file makes git treat it as BINARY — and the PR shows no diff
+A sentinel written with a literal NUL escape (a `` that got emitted as the
+raw byte rather than the escape text) put one NUL into
+`app/(member)/expiry-banner.tsx`. Everything downstream stayed green — tsc,
+eslint, vitest, `next build` and Playwright all passed, because a NUL is a
+perfectly legal JS string character. The only symptom was `git show --stat`
+reporting `Bin 0 -> 9165 bytes` instead of a line count, which would have
+shipped the file to review as an unreadable binary blob with **no diff at all**.
+`file` also reports `data` rather than `JavaScript source`, and
+`grep -P '[\x00]'` does NOT reliably find it — use
+`python3 -c "print(open(p,'rb').read().count(b'\x00'))"`.
+Check `git show --stat` before pushing: any hand-written source file showing
+`Bin` is this bug. Use an ordinary ASCII string for sentinels.
+
+## `react-hooks/set-state-in-effect` is an ERROR here, not a warning
+The lint config errors on `setState` called synchronously in a `useEffect` body,
+so the usual "read `sessionStorage` in an effect and setState" hydration pattern
+fails `npm run lint` outright. Use `useSyncExternalStore` with a
+`getServerSnapshot` returning a sentinel — the server render and the hydration
+render both produce the same output (no mismatch), and the real value swaps in
+after hydration. `getSnapshot` must return a stable primitive or it render-loops.
+setState in an event handler is still fine.
+
+## Postgres hands timestamps back as `+00:00`, not `Z`
+An e2e that seeds `trial_ends_at` with a JS `toISOString()` (`...275Z`) and then
+asserts the value the browser stored will fail on an exact string compare — what
+came back through PostgREST is `...275+00:00`. Compare instants
+(`Date.parse(a) === Date.parse(b)`), not strings.
+
+## Server-rendered `toLocaleDateString` uses the HOST timezone
+`account/page.tsx` prints "Access to {date}" from `current_period_end` during a
+SERVER render, so without an explicit `timeZone` the date is formatted in
+whatever zone the container runs in: `2026-08-22T14:00:00Z` reads as 22 August
+on a UTC host and 23 August to the Sydney member it is a promise to. This is an
+AU-only product — pin `timeZone: "Australia/Sydney"` on any member-facing date.
+
+## The day-count formula now exists in four places
+`layout.tsx` (`trialLabel`), `account/page.tsx` (`trialDaysLeft`),
+`checkout/page.tsx`, and `expiry-banner.tsx` (`daysUntil`) all compute
+`Math.ceil(ms / 86_400_000)` independently. They agree today, and a divergence
+would show as the sidebar chip and the banner disagreeing by a day. `daysUntil`
+is exported from `expiry-banner.tsx` and `layout.tsx` already imports from that
+module, so consolidating is cheap when a ticket next touches these files.
+
+## `app/(member)/**` selects need their own column tests — e2e is not the guard
+The gotcha above about un-widened `.select()`s applies to the `(member)` screens
+too, but those are only exercised by Playwright specs that `test.skip()`
+themselves when local Supabase is unreachable — i.e. they are silently absent in
+CI, so a narrowed select there goes green everywhere. Pin the column list in a
+vitest test (see `test/account-page.test.tsx`) and mutation-check it by
+narrowing the select and confirming the test actually fails.
