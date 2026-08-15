@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // return the chain; single()/maybeSingle() resolve a per-table fixture; the chain
 // is awaitable (a `.select().eq()...` with no terminal method resolves the same
 // fixture — which is how the route reads `horse` (array) and `post` (count)).
-const { getUserMock, fromMock, tableData, fromCalls, storageFromMock, createSignedUrlMock } = vi.hoisted(() => {
+const { getUserMock, fromMock, tableData, fromCalls, storageFromMock, createSignedUrlMock, subSelectMock } = vi.hoisted(() => {
   const getUserMock = vi.fn();
   const tableData: Record<string, { data?: unknown; error?: unknown; count?: number }> = {};
   const fromCalls: string[] = [];
@@ -28,12 +28,17 @@ const { getUserMock, fromMock, tableData, fromCalls, storageFromMock, createSign
     return chain;
   }
 
+  // The subscription chain is created once (not per-call, unlike the other
+  // tables) so its `select` mock is a stable reference the tests can assert on.
+  const subChain = makeChain("subscription");
+  const subSelectMock = subChain.select as ReturnType<typeof vi.fn>;
+
   const fromMock = vi.fn((table: string) => {
     fromCalls.push(table);
-    return makeChain(table);
+    return table === "subscription" ? subChain : makeChain(table);
   });
 
-  return { getUserMock, fromMock, tableData, fromCalls, storageFromMock, createSignedUrlMock };
+  return { getUserMock, fromMock, tableData, fromCalls, storageFromMock, createSignedUrlMock, subSelectMock };
 });
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -45,6 +50,7 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import { GET } from "@/app/api/trainers/[id]/route";
+import { GET as trainerFeedGET } from "@/app/api/trainers/[id]/feed/route";
 
 function params(id: string) {
   return { params: Promise.resolve({ id }) };
@@ -57,6 +63,7 @@ describe("GET /api/trainers/:id", () => {
     fromCalls.length = 0;
     storageFromMock.mockClear();
     createSignedUrlMock.mockClear();
+    subSelectMock.mockClear();
     for (const key of Object.keys(tableData)) delete tableData[key];
   });
 
@@ -65,7 +72,7 @@ describe("GET /api/trainers/:id", () => {
     // in a private bucket. Returning it raw makes the browser resolve it as a
     // RELATIVE url (/trainers/<id>/ilham-....jpg) and the image silently 404s.
     getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
-    tableData.subscription = { data: { status: "trial" } };
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
     tableData.trainer = {
       data: {
         id: "t1", name: "Ilham", display_name: null, stable_name: null,
@@ -92,15 +99,39 @@ describe("GET /api/trainers/:id", () => {
 
   it("returns 402 when the subscription has lapsed", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
-    tableData.subscription = { data: { status: "lapsed" } };
+    tableData.subscription = { data: { status: "lapsed", trial_ends_at: null, current_period_end: null } };
     const res = await GET(new Request("http://localhost/api/trainers/t1"), params("t1"));
     expect(res.status).toBe(402);
     expect((await res.json()).error.code).toBe("subscription_required");
   });
 
+  it("returns 402 when the trial has expired even though status is still trial", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2020-01-01T00:00:00Z", current_period_end: null } };
+    const res = await GET(new Request("http://localhost/api/trainers/t1"), params("t1"));
+    expect(res.status).toBe(402);
+    expect((await res.json()).error.code).toBe("subscription_required");
+  });
+
+  it("returns 402 when an active member's current_period_end has passed", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2020-01-01T00:00:00Z" } };
+    const res = await GET(new Request("http://localhost/api/trainers/t1"), params("t1"));
+    expect(res.status).toBe(402);
+    expect((await res.json()).error.code).toBe("subscription_required");
+  });
+
+  it("selects the expiry columns, not just status", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.trainer = { data: null };
+    await GET(new Request("http://localhost/api/trainers/t1"), params("t1"));
+    expect(subSelectMock).toHaveBeenCalledWith("status,trial_ends_at,current_period_end");
+  });
+
   it("returns 404 not_found when there is no matching trainer row (never 403)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
-    tableData.subscription = { data: { status: "trial" } };
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
     tableData.trainer = { data: null };
     const res = await GET(new Request("http://localhost/api/trainers/t1"), params("t1"));
     expect(res.status).toBe(404);
@@ -109,7 +140,7 @@ describe("GET /api/trainers/:id", () => {
 
   it("returns 200 with trainer + derived stats (Horses/Updates/Wins) + horses", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
-    tableData.subscription = { data: { status: "trial" } };
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
     tableData.trainer = {
       data: {
         id: "t1",
@@ -144,7 +175,10 @@ describe("GET /api/trainers/:id", () => {
 
   it("GUARDRAIL: never queries trainer_contact and returns no contact PII (email/phone/role)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
-    tableData.subscription = { data: { status: "active" } };
+    // Entitled via an explicit FUTURE period end, not the `current_period_end:
+    // null` special case — this guardrail must not ride on the branch most
+    // likely to be revisited by a future "tighten the gate" ticket.
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
     // The fixture deliberately CARRIES contact PII (email/phone/role) so the
     // "no PII in response" assertion is load-bearing: it proves the route's
     // explicit-column projection strips them even if the row somehow had them. A
@@ -162,11 +196,93 @@ describe("GET /api/trainers/:id", () => {
     const res = await GET(new Request("http://localhost/api/trainers/t1"), params("t1"));
     const raw = JSON.stringify(await res.json());
 
+    // Load-bearing: every assertion below is a NEGATIVE, so without pinning a
+    // 200 (and a field we DO expect) this whole guardrail passes vacuously
+    // against a 402 `subscription_required` envelope.
+    expect(res.status).toBe(200);
+    expect(raw).toMatch(/Chris Waller/);
     expect(fromCalls).not.toContain("trainer_contact");
     expect(raw).not.toMatch(/"email"/);
     expect(raw).not.toMatch(/"phone"/);
     expect(raw).not.toMatch(/chris@waller\.example/);
     expect(raw).not.toMatch(/\+61400000000/);
     expect(raw).not.toMatch(/head trainer/);
+  });
+});
+
+describe("GET /api/trainers/:id/feed", () => {
+  beforeEach(() => {
+    getUserMock.mockReset();
+    fromMock.mockClear();
+    fromCalls.length = 0;
+    storageFromMock.mockClear();
+    createSignedUrlMock.mockClear();
+    subSelectMock.mockClear();
+    for (const key of Object.keys(tableData)) delete tableData[key];
+  });
+
+  it("returns 401 with the error envelope when there is no session", async () => {
+    getUserMock.mockResolvedValue({ data: { user: null } });
+
+    const res = await trainerFeedGET(new Request("http://localhost/api/trainers/t1/feed"), params("t1"));
+    const body = await res.json();
+
+    expect(res.status).toBe(401);
+    expect(body.error.code).toBe("unauthorized");
+  });
+
+  it("returns 402 when the subscription has lapsed", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
+    tableData.subscription = { data: { status: "lapsed", trial_ends_at: null, current_period_end: null } };
+
+    const res = await trainerFeedGET(new Request("http://localhost/api/trainers/t1/feed"), params("t1"));
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body.error.code).toBe("subscription_required");
+  });
+
+  it("returns 402 when the trial has expired even though status is still trial", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2020-01-01T00:00:00Z", current_period_end: null } };
+
+    const res = await trainerFeedGET(new Request("http://localhost/api/trainers/t1/feed"), params("t1"));
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body.error.code).toBe("subscription_required");
+  });
+
+  it("returns 402 for an active member whose current_period_end has passed", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2020-01-01T00:00:00Z" } };
+
+    const res = await trainerFeedGET(new Request("http://localhost/api/trainers/t1/feed"), params("t1"));
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body.error.code).toBe("subscription_required");
+  });
+
+  it("returns 200 with the trainer's published posts when entitled", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.post = { data: [{ id: "p1" }] };
+
+    const res = await trainerFeedGET(new Request("http://localhost/api/trainers/t1/feed"), params("t1"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data).toEqual([{ id: "p1" }]);
+  });
+
+  it("selects the expiry columns, not just status", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.post = { data: [] };
+
+    await trainerFeedGET(new Request("http://localhost/api/trainers/t1/feed"), params("t1"));
+
+    expect(subSelectMock).toHaveBeenCalledWith("status,trial_ends_at,current_period_end");
   });
 });

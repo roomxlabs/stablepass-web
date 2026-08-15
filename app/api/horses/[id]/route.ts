@@ -8,6 +8,7 @@
 // the About blurb (story) all live directly on `horse` — hand-maintained by the
 // stable (see the mockup's stats-note copy), not derived from `race_horse`.
 import { ok, fail, UNAUTH, GATED } from "@/lib/api/envelope";
+import { hasAccess, ACCESS_COLUMNS } from "@/lib/api/access";
 import { supabaseServer } from "@/lib/supabase/server";
 import { signPhoto, HORSE_PHOTO_BUCKET } from "@/lib/storage/photos";
 
@@ -69,8 +70,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return UNAUTH();
 
-  const { data: sub } = await sb.from("subscription").select("status").eq("user_id", user.id).single();
-  if (!sub || !["trial", "active"].includes(sub.status)) return GATED();
+  const { data: sub } = await sb.from("subscription").select(ACCESS_COLUMNS).eq("user_id", user.id).single();
+  if (!hasAccess(sub)) return GATED();
 
   const { data: horseRow } = await sb
     .from("horse")
