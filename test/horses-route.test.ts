@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // itself awaitable (a plain `await sb.from(t).select(...).eq(...)` — no
 // terminal method — resolves the same fixture), matching how the route queries
 // `race_horse` directly.
-const { getUserMock, fromMock, tableData, storageFromMock, createSignedUrlMock } = vi.hoisted(() => {
+const { getUserMock, fromMock, tableData, storageFromMock, createSignedUrlMock, subSelectMock } = vi.hoisted(() => {
   const getUserMock = vi.fn();
   const tableData: Record<string, { data: unknown; error?: unknown }> = {};
   // `horse-photos` is a PRIVATE bucket: the route must turn the stored object
@@ -39,9 +39,14 @@ const { getUserMock, fromMock, tableData, storageFromMock, createSignedUrlMock }
     return chain;
   }
 
-  const fromMock = vi.fn((table: string) => makeChain(table));
+  // The subscription chain is created once (not per-call, unlike the other
+  // tables) so its `select` mock is a stable reference the tests can assert on.
+  const subChain = makeChain("subscription");
+  const subSelectMock = subChain.select;
 
-  return { getUserMock, fromMock, tableData, storageFromMock, createSignedUrlMock };
+  const fromMock = vi.fn((table: string) => (table === "subscription" ? subChain : makeChain(table)));
+
+  return { getUserMock, fromMock, tableData, storageFromMock, createSignedUrlMock, subSelectMock };
 });
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -53,6 +58,7 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import { GET } from "@/app/api/horses/[id]/route";
+import { GET as horseFeedGET } from "@/app/api/horses/[id]/feed/route";
 
 function params(id: string) {
   return { params: Promise.resolve({ id }) };
@@ -64,6 +70,7 @@ describe("GET /api/horses/:id", () => {
     fromMock.mockClear();
     storageFromMock.mockClear();
     createSignedUrlMock.mockClear();
+    subSelectMock.mockClear();
     for (const key of Object.keys(tableData)) delete tableData[key];
   });
 
@@ -71,7 +78,7 @@ describe("GET /api/horses/:id", () => {
     // REGRESSION: admin stores a BARE OBJECT PATH in a private bucket. Returned
     // raw, the browser resolves it as a RELATIVE url and the cover silently 404s.
     getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
-    tableData.subscription = { data: { status: "trial" } };
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
     tableData.horse = {
       data: {
         id: "h1", display_name: "Kuda Ilham", racing_name: null, sire: null, dam: null,
@@ -102,7 +109,7 @@ describe("GET /api/horses/:id", () => {
 
   it("returns 402 when the subscription has lapsed", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    tableData.subscription = { data: { status: "lapsed" } };
+    tableData.subscription = { data: { status: "lapsed", trial_ends_at: null, current_period_end: null } };
 
     const res = await GET(new Request("http://localhost/api/horses/h1"), params("h1"));
     const body = await res.json();
@@ -111,9 +118,41 @@ describe("GET /api/horses/:id", () => {
     expect(body.error.code).toBe("subscription_required");
   });
 
+  it("returns 402 when the trial has expired even though status is still trial", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2020-01-01T00:00:00Z", current_period_end: null } };
+
+    const res = await GET(new Request("http://localhost/api/horses/h1"), params("h1"));
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body.error.code).toBe("subscription_required");
+  });
+
+  it("returns 402 when an active member's current_period_end has passed", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2020-01-01T00:00:00Z" } };
+
+    const res = await GET(new Request("http://localhost/api/horses/h1"), params("h1"));
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body.error.code).toBe("subscription_required");
+  });
+
+  it("selects the expiry columns, not just status", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.horse = { data: null };
+
+    await GET(new Request("http://localhost/api/horses/h1"), params("h1"));
+
+    expect(subSelectMock).toHaveBeenCalledWith("status,trial_ends_at,current_period_end");
+  });
+
   it("returns 200 with the horse's displayName + stats (from the horse row) when a row exists", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    tableData.subscription = { data: { status: "trial" } };
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
     tableData.horse = {
       data: {
         id: "h1",
@@ -150,7 +189,7 @@ describe("GET /api/horses/:id", () => {
 
   it("formats prize money at the k/M/plain thresholds", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    tableData.subscription = { data: { status: "trial" } };
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
     tableData.race_horse = { data: [] };
 
     const base = {
@@ -182,7 +221,7 @@ describe("GET /api/horses/:id", () => {
 
   it("returns 404 not_found when there is no matching horse row (never 403)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    tableData.subscription = { data: { status: "trial" } };
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
     tableData.horse = { data: null };
 
     const res = await GET(new Request("http://localhost/api/horses/h1"), params("h1"));
@@ -190,5 +229,81 @@ describe("GET /api/horses/:id", () => {
 
     expect(res.status).toBe(404);
     expect(body.error.code).toBe("not_found");
+  });
+});
+
+describe("GET /api/horses/:id/feed", () => {
+  beforeEach(() => {
+    getUserMock.mockReset();
+    fromMock.mockClear();
+    storageFromMock.mockClear();
+    createSignedUrlMock.mockClear();
+    subSelectMock.mockClear();
+    for (const key of Object.keys(tableData)) delete tableData[key];
+  });
+
+  it("returns 401 with the error envelope when there is no session", async () => {
+    getUserMock.mockResolvedValue({ data: { user: null } });
+
+    const res = await horseFeedGET(new Request("http://localhost/api/horses/h1/feed"), params("h1"));
+    const body = await res.json();
+
+    expect(res.status).toBe(401);
+    expect(body.error.code).toBe("unauthorized");
+  });
+
+  it("returns 402 when the subscription has lapsed", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    tableData.subscription = { data: { status: "lapsed", trial_ends_at: null, current_period_end: null } };
+
+    const res = await horseFeedGET(new Request("http://localhost/api/horses/h1/feed"), params("h1"));
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body.error.code).toBe("subscription_required");
+  });
+
+  it("returns 402 when the trial has expired even though status is still trial", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2020-01-01T00:00:00Z", current_period_end: null } };
+
+    const res = await horseFeedGET(new Request("http://localhost/api/horses/h1/feed"), params("h1"));
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body.error.code).toBe("subscription_required");
+  });
+
+  it("returns 402 for an active member whose current_period_end has passed", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2020-01-01T00:00:00Z" } };
+
+    const res = await horseFeedGET(new Request("http://localhost/api/horses/h1/feed"), params("h1"));
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body.error.code).toBe("subscription_required");
+  });
+
+  it("returns 200 with the horse's published posts when entitled", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.post = { data: [{ id: "p1" }] };
+
+    const res = await horseFeedGET(new Request("http://localhost/api/horses/h1/feed"), params("h1"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data).toEqual([{ id: "p1" }]);
+  });
+
+  it("selects the expiry columns, not just status", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.post = { data: [] };
+
+    await horseFeedGET(new Request("http://localhost/api/horses/h1/feed"), params("h1"));
+
+    expect(subSelectMock).toHaveBeenCalledWith("status,trial_ends_at,current_period_end");
   });
 });
