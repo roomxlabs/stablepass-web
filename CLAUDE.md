@@ -6,7 +6,7 @@ Member-facing **web app + BFF** (Next.js App Router, TS). Talks to the backend *
 - **Tokens in httpOnly cookies** via `@supabase/ssr`. Only `lib/supabase/server.ts` + `app/api/*` talk to Supabase server-side.
 - **Envelope:** `lib/api/envelope.ts` — `{ data }` / `{ error:{code,message} }`; `UNAUTH`=401, `GATED`=402, 404 for hidden content.
 - **Gate:** content routes check `subscription.status ∈ {trial,active}` → 402 when lapsed.
-- **Billing = embedded Stripe Elements** — `/api/subscription/checkout` returns a `clientSecret`; the FE confirms inline. No hosted redirect; cancel via `/api/subscription/cancel`.
+- **Billing = embedded Stripe Elements** — `/api/subscription/checkout` returns a `clientSecret`; the FE confirms inline. No hosted redirect. **The pass does not auto-renew** (a 30-day pass; the Subscription is created with `cancel_at_period_end: true`), so there is **no cancel route and no payment-method route** — an active member simply pays again to extend (early renewal → one-off PaymentIntent).
 - **Video** plays from a Mux **signed URL** minted by `/api/posts/:id/playback` (re-gated).
 - **Single-device login** — new sign-in revokes other sessions; no devices/sessions UI.
 

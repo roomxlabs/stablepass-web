@@ -2,39 +2,163 @@ import { getStripe } from "@/lib/stripe";
 import { supabaseServer } from "@/lib/supabase/server";
 import { ok, UNAUTH, fail } from "@/lib/api/envelope";
 
-// POST /api/subscription/checkout — Customer + Subscription(incomplete) +
-// PaymentIntent; return clientSecret for the embedded Payment Element. No redirect.
-// The card never touches our server — we only create Stripe objects here and
-// hand back the clientSecret for the FE to confirm inline.
+// POST /api/subscription/checkout — the non-renewing 30-day pass.
+//
+// Two branches, one screen:
+//  - Branch A (status !== "active"): first purchase / lapsed return. Creates a
+//    Stripe Subscription with `cancel_at_period_end: true` SET AT CREATION —
+//    that pre-armed cancel is the whole point: nothing auto-renews. Stripe still
+//    needs a recurring price to make a Subscription; the cancel stops period 2.
+//  - Branch B (status === "active"): early renewal. A one-off PaymentIntent.
+//    Previously this returned 409 already_active; that rule is gone.
+//
+// The amount is NEVER hardcoded — `STRIPE_PRICE_ID` is the single source of
+// truth for both amount and currency, retrieved on every request and echoed to
+// the FE as `unitAmount`/`currency` so the screen and the charge can never
+// disagree (sandbox is A$1.00, production A$19.00 — same code, no cutover edit).
+//
+// The card never touches our server (.rx/guardrails.md #4): we only create
+// Stripe objects here and hand back a clientSecret for the FE to confirm inline.
+// `STRIPE_SECRET_KEY` is server-only; only the publishable key crosses to the
+// browser. This route NEVER writes `status='active'` — only the be webhook does.
+
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+type SubscriptionRow = {
+  status: string | null;
+  stripe_customer_id: string | null;
+  current_period_end: string | null;
+};
+
+// first_name / last_name / postcode are the identity split ENG-566 adds to
+// `app_user` in the be repo. Until that migration lands the select errors and
+// `data` is null — every field below is therefore read defensively and simply
+// omitted from the Stripe Customer rather than blocking checkout.
+type IdentityRow = {
+  first_name: string | null;
+  last_name: string | null;
+  postcode: string | null;
+};
+
 export async function POST() {
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return UNAUTH();
 
-  const { data: sub } = await sb
-    .from("subscription")
-    .select("status,stripe_customer_id")
-    .eq("user_id", user.id)
-    .single();
-  if (sub?.status === "active") return fail("already_active", "Already subscribed.", 409);
-
   const stripe = getStripe();
+  // getStripe() returns null by design when the key is unset — keeps `next
+  // build` working with no Stripe env and keeps the screen's disabled
+  // placeholder reachable. Never throw at module scope.
   if (!stripe) return fail("stripe_unavailable", "Payment provider not configured.", 502);
 
+  const { data: subData } = await sb
+    .from("subscription")
+    .select("status,stripe_customer_id,current_period_end")
+    .eq("user_id", user.id)
+    .single();
+  const sub = subData as SubscriptionRow | null;
+
+  const { data: identityData } = await sb
+    .from("app_user")
+    .select("first_name,last_name,postcode")
+    .eq("id", user.id)
+    .maybeSingle();
+  const identity = identityData as IdentityRow | null;
+
   try {
-    const customerId = sub?.stripe_customer_id
-      ?? (await stripe.customers.create({
+    // Resolve the price FIRST, in both branches. A failed retrieve or a null
+    // unit_amount is a hard 502 — we never guess or fall back to a literal.
+    const price = await stripe.prices.retrieve(process.env.STRIPE_PRICE_ID!);
+    if (price?.unit_amount == null) {
+      return fail("stripe_unavailable", "Payment provider unavailable.", 502);
+    }
+    const unitAmount = price.unit_amount;
+    const currency = price.currency;
+
+    // The Stripe Customer carries identity: full name, AU postcode, and the
+    // app_user_id the be webhook resolves the member by.
+    const name = [identity?.first_name, identity?.last_name]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    const postcode = identity?.postcode?.trim();
+    // A member with no postcode (pre-existing account) must not be blocked — the
+    // key is omitted entirely rather than sent as an empty string.
+    const address = postcode ? { postal_code: postcode, country: "AU" } : undefined;
+
+    let customerId = sub?.stripe_customer_id ?? null;
+    if (customerId) {
+      // Existing customer: refresh the identity rather than creating a second one.
+      //
+      // `address` is sent ONLY when we actually have a postcode. Stripe treats an
+      // address hash on update as a FULL REPLACEMENT — sending a bare
+      // `{ country: "AU" }` would null out whatever postal_code/line1/city Stripe
+      // already holds for this customer, on every single checkout POST.
+      await stripe.customers.update(customerId, {
+        name: name || undefined,
+        ...(address ? { address } : {}),
+        metadata: { app_user_id: user.id },
+      });
+    } else {
+      // On create there is nothing to overwrite, so country can be stated even
+      // when the member has no postcode.
+      customerId = (await stripe.customers.create({
         email: user.email,
+        name: name || undefined,
+        address: address ?? { country: "AU" },
         metadata: { app_user_id: user.id },
       })).id;
+    }
 
+    if (sub?.status === "active") {
+      // ---- Branch B: early renewal -------------------------------------
+      // Extend from the EXISTING end, never from today, so days already paid
+      // for are never lost. The absolute value is stamped on the intent; the
+      // be webhook applies it verbatim, which makes a redelivered event a
+      // no-op. Do not let the webhook recompute it.
+      const currentEndMs = Date.parse(sub.current_period_end ?? "");
+      const base = Math.max(Number.isNaN(currentEndMs) ? Date.now() : currentEndMs, Date.now());
+      const newPeriodEnd = Math.floor((base + THIRTY_DAYS_MS) / 1000);
+
+      const intent = await stripe.paymentIntents.create({
+        amount: unitAmount,
+        currency,
+        customer: customerId,
+        automatic_payment_methods: { enabled: true },
+        // REQUIRED — the be `stripe-webhook` fn resolves the subscriber by
+        // app_user_id, and applies new_period_end as an absolute value.
+        metadata: {
+          app_user_id: user.id,
+          kind: "renewal",
+          new_period_end: String(newPeriodEnd),
+        },
+      });
+
+      await sb.from("subscription").update({ stripe_customer_id: customerId }).eq("user_id", user.id);
+
+      return ok({
+        clientSecret: intent.client_secret ?? null,
+        publishableKey: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
+        mode: "renewal",
+        unitAmount,
+        currency,
+        // Echoed so the screen renders the AUTHORITATIVE dates rather than
+        // recomputing (and potentially disagreeing with) them client-side.
+        currentPeriodEnd: sub.current_period_end ?? null,
+        newPeriodEnd: new Date(newPeriodEnd * 1000).toISOString(),
+      });
+    }
+
+    // ---- Branch A: first purchase / lapsed return ----------------------
     const subscription = await stripe.subscriptions.create({
       customer: customerId,
       items: [{ price: process.env.STRIPE_PRICE_ID! }],
       payment_behavior: "default_incomplete",
+      // The whole point — armed at creation so the pass never renews itself.
+      cancel_at_period_end: true,
       expand: ["latest_invoice.payment_intent"],
-      // REQUIRED — the be `stripe-webhook` fn (B2) resolves the subscriber by
-      // this metadata key. Do not rename/remove it.
+      // REQUIRED — the be `stripe-webhook` fn resolves the subscriber by this
+      // metadata key. Do not rename/remove it.
       metadata: { app_user_id: user.id },
     });
 
@@ -49,6 +173,9 @@ export async function POST() {
     return ok({
       clientSecret,
       publishableKey: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
+      mode: "purchase",
+      unitAmount,
+      currency,
       subscriptionId: subscription.id,
     });
   } catch {

@@ -13,7 +13,36 @@ Use `lib/api/envelope.ts` (`ok`/`created`/`noContent`/`fail`/`UNAUTH`/`GATED`). 
 `supabaseServer()` (RLS as the user, cookies) for BFF routes; `supabaseBrowser()` (anon) only for non-sensitive client reads. Never the service role in this repo.
 
 ## Stripe is embedded (no redirect)
-`/api/subscription/checkout` returns a **clientSecret**; the FE confirms with `@stripe/react-stripe-js`. There is **no** hosted-checkout redirect and **no** billing portal — cancel is `/api/subscription/cancel`.
+`/api/subscription/checkout` returns a **clientSecret**; the FE confirms with `@stripe/react-stripe-js`. There is **no** hosted-checkout redirect and **no** billing portal.
+
+## The pass does NOT auto-renew — there is no cancel route
+`/api/subscription/cancel` and `/api/subscription/payment-method` were **deleted** (ENG-567).
+The 30-day pass never renews: the Stripe Subscription is created with
+`cancel_at_period_end: true` at creation, so there is nothing to cancel and no
+future charge to re-card for. An `active` member hitting `/api/subscription/checkout`
+is an **early renewal** (a one-off PaymentIntent), not a `409 already_active` —
+`/checkout` therefore no longer redirects active members away. `docs/specs/*`
+still describes the old cancel/payment-method endpoints; those docs are stale.
+
+## The checkout route is only safe against the ENG-568 webhook — release order matters
+`/api/subscription/checkout` writes the contract the **new** be `stripe-webhook` expects.
+Against the **old** webhook (be `main`) it breaks two ways, both silent:
+1. `cancel_at_period_end: true` is set at CREATION, and the old webhook treats any
+   `customer.subscription.updated` carrying that flag as `status = "canceled"` — so a
+   member pays and is immediately 402'd out of the content gate.
+2. Early renewal stamps `metadata.new_period_end`, but the old webhook reads
+   `metadata.current_period_end` → `Number(undefined)` → NaN → the period is never
+   extended. The member is charged and gets zero days.
+**ENG-568 must merge and DEPLOY before this route is live.** On the shared
+`feature/stripe-trial-v1` integration branch this is the gate ticket's job to sequence.
+
+## Never hardcode the price — derive it from the Stripe price
+The sandbox price is **A$1.00** and production is **A$19.00**. `/api/subscription/checkout`
+retrieves `STRIPE_PRICE_ID` and returns `unitAmount`/`currency`; the FE formats every
+amount from those. A hardcoded `1900`/`"AU$19.00"`/`1.73` makes the screen claim one
+number while Stripe charges another. GST is display-only: `unitAmount / 11` (AU prices
+are GST-inclusive). `Intl.NumberFormat("en-US", { currency: "AUD" })` renders the
+unambiguous `A$19.00`; an `en-AU` locale would render a bare `$19.00`.
 
 ## Design system comes from the mockups
 Colours/fonts/spacing/components are translated from `docs/dev-handover/mockups/web/style.css` into tokens — don't hardcode ad-hoc values. Screen tickets cite `.rx/mockups.md`.
