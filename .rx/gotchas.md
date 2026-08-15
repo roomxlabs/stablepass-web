@@ -24,6 +24,31 @@ is an **early renewal** (a one-off PaymentIntent), not a `409 already_active` �
 `/checkout` therefore no longer redirects active members away. `docs/specs/*`
 still describes the old cancel/payment-method endpoints; those docs are stale.
 
+## `.rx/mockups.md` points at a DEAD path — the real mockups are outside the repo
+The manifest says `../docs/dev-handover/mockups/web/`. That directory does not exist.
+The real HTML mockups live at `<workspace>/dev-handover/StablePass-mockups/mockups/web/screens/`
+(e.g. `04-checkout.html`). `ls` the path before building a screen; don't trust the
+manifest until the fix lands. Same for the `docs/dev-handover/mockups/web/*` claim in
+`CLAUDE.md` § Design source.
+
+## Screenshotting a screen whose data needs an unconfigured third party
+With no `STRIPE_*` keys the checkout BFF 502s before it can resolve a price or a mode,
+so the populated/renewal states are simply unreachable end-to-end. Use Playwright's
+`page.route()` to fulfil the BFF call with the route's **exact** response shape, and keep
+one unstubbed test for the genuine failure path. Say so in the PR — a stubbed screenshot
+proves the SCREEN, not the route→screen contract.
+
+## `undefined` values vanish from a JSON response — pin the key SET in tests
+`ok({ publishableKey: process.env.NEXT_PUBLIC_... })` with the env var unset serialises to
+a body with **no such key**. Per-field assertions on a mocked env miss this, and renaming a
+response field kept the whole suite green while making checkout permanently unpayable.
+Assert `Object.keys(body.data).sort()` for each branch of any route the FE destructures.
+
+## Stripe `customers.update` REPLACES the whole `address` hash
+Sending `address: { country: "AU" }` to update a customer nulls any `postal_code`/`line1`/
+`city` Stripe already holds. Only send `address` when you actually have the sub-fields;
+on `customers.create` there is nothing to overwrite, so a country-only address is fine.
+
 ## The checkout route is only safe against the ENG-568 webhook — release order matters
 `/api/subscription/checkout` writes the contract the **new** be `stripe-webhook` expects.
 Against the **old** webhook (be `main`) it breaks two ways, both silent:
