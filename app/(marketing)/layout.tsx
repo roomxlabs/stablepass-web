@@ -1,6 +1,8 @@
+import type { Metadata, Viewport } from "next";
 import "./marketing.css";
 import MarketingFooter from "./footer";
 import MarketingNav from "./nav";
+import { CANONICAL_ORIGIN, MARKETING_IS_INDEXABLE, canonicalFor } from "@/lib/seo";
 
 /**
  * Marketing shell (ENG-587 / W1).
@@ -59,6 +61,66 @@ setTimeout(function(){
 els.forEach(function(e){if(!e.classList.contains('in')&&e.getBoundingClientRect().top<innerHeight*3){e.classList.add('in')}});
 },2500);
 })();`;
+
+/**
+ * Head metadata (ENG-591 / W5), ported from the mockup head.
+ *
+ * Title, description, keywords, `og:*` and `twitter:*` are the mockup's copy
+ * verbatim — the description is Justin's authored text from the Stablepass
+ * Overview deck. Three deliberate departures from that head:
+ *
+ *   - `canonical` and `og:url` pointed at the `.com` of the same name, which
+ *     belongs to an unrelated third party (a password generator). Both now
+ *     derive from the real apex via `lib/seo.ts`.
+ *   - `<meta name="robots" content="index,follow">` becomes the single
+ *     `MARKETING_IS_INDEXABLE` flag, `false` until real trainer bios land.
+ *   - The `x-concept` working note and the "editable from the admin portal"
+ *     comment are dropped: the first is a build marker, the second describes a
+ *     CMS that does not exist.
+ *
+ * This sits on the marketing layout, not the root one, so the member app keeps
+ * its own plain "StablePass" title and inherits none of the social card.
+ */
+const TITLE = "stablepass. | Behind the scenes thoroughbred racing subscription";
+const DESCRIPTION =
+  "stablepass. is a monthly racing experience subscription giving fans access to behind-the-scenes stable updates, horse content, photos, videos, and race day stories.";
+
+export const metadata: Metadata = {
+  // Makes the relative og:image below resolve against the apex, never against
+  // whichever host happened to serve the request.
+  metadataBase: new URL(CANONICAL_ORIGIN),
+  title: TITLE,
+  description: DESCRIPTION,
+  keywords: [
+    "thoroughbred racing subscription",
+    "horse racing behind the scenes",
+    "follow a racehorse",
+    "stable updates",
+    "racing content Australia",
+    "racehorse trainer updates",
+  ],
+  alternates: { canonical: canonicalFor("/") },
+  robots: { index: MARKETING_IS_INDEXABLE, follow: MARKETING_IS_INDEXABLE },
+  openGraph: {
+    type: "website",
+    siteName: "stablepass.",
+    title: TITLE,
+    description: DESCRIPTION,
+    url: canonicalFor("/"),
+    locale: "en_AU",
+    images: [{ url: "/og.jpg", width: 1200, height: 630 }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: TITLE,
+    description: DESCRIPTION,
+    images: ["/og.jpg"],
+  },
+};
+
+// `theme-color` belongs to the viewport export in the App Router; leaving it in
+// `metadata` builds with a warning and is ignored.
+export const viewport: Viewport = { themeColor: "#285D50" };
 
 export default function MarketingLayout({
   children,
