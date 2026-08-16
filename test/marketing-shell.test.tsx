@@ -325,90 +325,92 @@ describe("extracted marketing assets", () => {
  * a nudged breakpoint or a dropped rule would have gone unnoticed. This re-derives
  * the port from the mockup and diffs it.
  */
-describe.skipIf(!MOCKUP)("marketing.css is a faithful port of the mockup", () => {
-  const mockupStyle = /<style>([\s\S]*?)<\/style>/.exec(readFileSync(MOCKUP!, "utf8"))![1];
-  // The port swapped two inlined backgrounds for public/ paths; do the same here
-  // so the comparison is like for like.
-  const expected = cssRules(
-    mockupStyle.replace(/data:image\/([a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+?)(?=["')])/g, (_m, mime, b64) => {
-      const raw = Buffer.from(String(b64).replace(/\s+/g, ""), "base64");
-      const ext = String(mime).toLowerCase() === "png" ? "png" : "jpg";
-      return `/marketing/${createHash("md5").update(raw).digest("hex").slice(0, 8)}.${ext}`;
-    }),
-  );
-
-  // Undo the one sanctioned transform so the two sheets are comparable.
-  const unscope = (selector: string) =>
-    selector
-      .split(",")
-      .map((part) => {
-        if (part.startsWith(".marketing.js ")) return `.js ${part.slice(".marketing.js ".length)}`;
-        if (part.startsWith(".marketing[")) return part.slice(".marketing".length);
-        if (part.startsWith(".marketing ")) return part.slice(".marketing ".length);
-        return part;
-      })
-      .join(",");
-
-  // `:root`, `body`, `html` and the `*` reset are the documented exceptions,
-  // asserted separately below. Everything else must survive untouched.
-  const EXCEPTIONS = new Set([":root", "body", "html", "*,*::before,*::after", "*"]);
-  const isException = (selector: string) =>
-    EXCEPTIONS.has(selector) || selector.includes(".marketing") || selector.startsWith("body:has");
-
-  // Compared as ORDERED LISTS, not as a selector->declarations map. Selectors
-  // legitimately repeat — nearly every component has a base rule plus one or
-  // more @media overrides — so a map silently keeps only the last and ends up
-  // comparing a base rule against its own breakpoint override.
-  const wantRules = expected.filter((r) => !EXCEPTIONS.has(r.selector));
-  const gotRules = cssRules(MARKETING_CSS)
-    .map((r) => ({ selector: unscope(r.selector), decls: r.decls }))
-    .filter((r) => !isException(r.selector));
-
-  it("carries every rule of the mockup, in order, with identical declarations", () => {
-    const drifted: string[] = [];
-    for (let i = 0; i < Math.max(wantRules.length, gotRules.length); i += 1) {
-      const want = wantRules[i];
-      const got = gotRules[i];
-      if (!want) drifted.push(`ADDED    ${got.selector} { ${got.decls} }`);
-      else if (!got) drifted.push(`MISSING  ${want.selector} { ${want.decls} }`);
-      else if (want.selector !== got.selector)
-        drifted.push(`SELECTOR at ${i}\n  want: ${want.selector}\n  got:  ${got.selector}`);
-      else if (want.decls !== got.decls)
-        drifted.push(`CHANGED  ${want.selector}\n  want: ${want.decls}\n  got:  ${got.decls}`);
-    }
-    expect(drifted).toEqual([]);
-    expect(gotRules).toHaveLength(wantRules.length);
-  });
-
-  it("keeps the mockup's tokens verbatim, just moved off :root", () => {
-    const tokens = expected.find((r) => r.selector === ":root")!.decls;
-    // `--paper:` with the colon — `includes("--paper")` also matches every
-    // var(--paper) reference and would select the wrong rule.
-    const ported = cssRules(MARKETING_CSS).find((r) => r.selector === ".marketing" && r.decls.includes("--paper:"));
-    expect(ported?.decls).toBe(tokens);
-  });
-
-  // The mockup's body rule is split across body:has(.marketing) and .marketing.
-  // Together they must still say exactly what the mockup said, plus the UA margin
-  // globals.css resets away.
-  it("splits the body rule without losing or inventing a declaration", () => {
-    const all = cssRules(MARKETING_CSS);
-    const wanted = new Set(expected.find((r) => r.selector === "body")!.decls.split(";"));
-    wanted.add("margin:8px");
-
-    const got = new Set(
-      [
-        ...(all.find((r) => r.selector === "body:has(.marketing)")?.decls ?? "").split(";"),
-        ...all
-          .filter((r) => r.selector === ".marketing" && !r.decls.includes("--paper:"))
-          .flatMap((r) => r.decls.split(";")),
-      ]
-        // the tokens live on .marketing, so var(--paper) cannot resolve on <body>;
-        // the literal there is the same colour by definition.
-        .map((decl) => decl.replace("background:#FAF9F4", "background:var(--paper)")),
+if (MOCKUP) {
+  describe("marketing.css is a faithful port of the mockup", () => {
+    const mockupStyle = /<style>([\s\S]*?)<\/style>/.exec(readFileSync(MOCKUP, "utf8"))![1];
+    // The port swapped two inlined backgrounds for public/ paths; do the same here
+    // so the comparison is like for like.
+    const expected = cssRules(
+      mockupStyle.replace(/data:image\/([a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+?)(?=["')])/g, (_m, mime, b64) => {
+        const raw = Buffer.from(String(b64).replace(/\s+/g, ""), "base64");
+        const ext = String(mime).toLowerCase() === "png" ? "png" : "jpg";
+        return `/marketing/${createHash("md5").update(raw).digest("hex").slice(0, 8)}.${ext}`;
+      }),
     );
 
-    expect([...wanted].filter((d) => !got.has(d))).toEqual([]);
-    expect([...got].filter((d) => !wanted.has(d))).toEqual([]);
+    // Undo the one sanctioned transform so the two sheets are comparable.
+    const unscope = (selector: string) =>
+      selector
+        .split(",")
+        .map((part) => {
+          if (part.startsWith(".marketing.js ")) return `.js ${part.slice(".marketing.js ".length)}`;
+          if (part.startsWith(".marketing[")) return part.slice(".marketing".length);
+          if (part.startsWith(".marketing ")) return part.slice(".marketing ".length);
+          return part;
+        })
+        .join(",");
+
+    // `:root`, `body`, `html` and the `*` reset are the documented exceptions,
+    // asserted separately below. Everything else must survive untouched.
+    const EXCEPTIONS = new Set([":root", "body", "html", "*,*::before,*::after", "*"]);
+    const isException = (selector: string) =>
+      EXCEPTIONS.has(selector) || selector.includes(".marketing") || selector.startsWith("body:has");
+
+    // Compared as ORDERED LISTS, not as a selector->declarations map. Selectors
+    // legitimately repeat — nearly every component has a base rule plus one or
+    // more @media overrides — so a map silently keeps only the last and ends up
+    // comparing a base rule against its own breakpoint override.
+    const wantRules = expected.filter((r) => !EXCEPTIONS.has(r.selector));
+    const gotRules = cssRules(MARKETING_CSS)
+      .map((r) => ({ selector: unscope(r.selector), decls: r.decls }))
+      .filter((r) => !isException(r.selector));
+
+    it("carries every rule of the mockup, in order, with identical declarations", () => {
+      const drifted: string[] = [];
+      for (let i = 0; i < Math.max(wantRules.length, gotRules.length); i += 1) {
+        const want = wantRules[i];
+        const got = gotRules[i];
+        if (!want) drifted.push(`ADDED    ${got.selector} { ${got.decls} }`);
+        else if (!got) drifted.push(`MISSING  ${want.selector} { ${want.decls} }`);
+        else if (want.selector !== got.selector)
+          drifted.push(`SELECTOR at ${i}\n  want: ${want.selector}\n  got:  ${got.selector}`);
+        else if (want.decls !== got.decls)
+          drifted.push(`CHANGED  ${want.selector}\n  want: ${want.decls}\n  got:  ${got.decls}`);
+      }
+      expect(drifted).toEqual([]);
+      expect(gotRules).toHaveLength(wantRules.length);
+    });
+
+    it("keeps the mockup's tokens verbatim, just moved off :root", () => {
+      const tokens = expected.find((r) => r.selector === ":root")!.decls;
+      // `--paper:` with the colon — `includes("--paper")` also matches every
+      // var(--paper) reference and would select the wrong rule.
+      const ported = cssRules(MARKETING_CSS).find((r) => r.selector === ".marketing" && r.decls.includes("--paper:"));
+      expect(ported?.decls).toBe(tokens);
+    });
+
+    // The mockup's body rule is split across body:has(.marketing) and .marketing.
+    // Together they must still say exactly what the mockup said, plus the UA margin
+    // globals.css resets away.
+    it("splits the body rule without losing or inventing a declaration", () => {
+      const all = cssRules(MARKETING_CSS);
+      const wanted = new Set(expected.find((r) => r.selector === "body")!.decls.split(";"));
+      wanted.add("margin:8px");
+
+      const got = new Set(
+        [
+          ...(all.find((r) => r.selector === "body:has(.marketing)")?.decls ?? "").split(";"),
+          ...all
+            .filter((r) => r.selector === ".marketing" && !r.decls.includes("--paper:"))
+            .flatMap((r) => r.decls.split(";")),
+        ]
+          // the tokens live on .marketing, so var(--paper) cannot resolve on <body>;
+          // the literal there is the same colour by definition.
+          .map((decl) => decl.replace("background:#FAF9F4", "background:var(--paper)")),
+      );
+
+      expect([...wanted].filter((d) => !got.has(d))).toEqual([]);
+      expect([...got].filter((d) => !wanted.has(d))).toEqual([]);
+    });
   });
-});
+}
