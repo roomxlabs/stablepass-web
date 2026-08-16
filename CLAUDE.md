@@ -33,7 +33,8 @@ npm test
 ```
 
 ## Conventions
-- **Never commit or offer to commit.** Stop at `git add` + `git status`.
+- **Never commit or offer to commit** in an interactive session. Stop at `git add` + `git status`.
+  - Exception: the rx implement loop MAY commit on its own ticket branch and open a PR. Never to `main`, never to a shared branch, and only its declared file surface.
 - Node 22. Git over SSH via `../claudekey`.
 - Every change needs a **machine-checkable test** (route/component test asserting status + envelope, incl. 401/402).
 - This is standard Next.js 15 App Router (async `params`/`cookies`). No custom framework surprises.
