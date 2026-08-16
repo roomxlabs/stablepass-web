@@ -51,10 +51,48 @@ and log `error` anyway — RLS (`has_content_access`) and FK violations both pro
 a silent 204-with-no-row that is otherwise invisible for months.
 
 ## No CSRF/origin check anywhere in this repo
-There is no `middleware.ts` and no route does an origin check. Cookie-auth POSTs
-with no custom headers are CORS-simple and forgeable cross-origin. RLS still pins
-rows to the victim's own user_id, so impact is data pollution, not disclosure —
-but assume it repo-wide rather than re-discovering it per ticket.
+No route does an origin check. Cookie-auth POSTs with no custom headers are
+CORS-simple and forgeable cross-origin. RLS still pins rows to the victim's own
+user_id, so impact is data pollution, not disclosure — but assume it repo-wide
+rather than re-discovering it per ticket. There IS a `middleware.ts` as of
+ENG-591, but it is host ROUTING only and deliberately not a security boundary:
+do not reach for it as the place to add an origin check without deciding that
+separately.
+
+## `middleware.ts` builds but Next 16 has renamed the convention to `proxy.ts`
+`npm run build` on Next 16.2 prints `The "middleware" file convention is
+deprecated. Please use "proxy" instead.` and lists the entry as
+`ƒ Proxy (Middleware)`. It is a warning, not an error — the file is picked up and
+works. ENG-591 kept the `middleware.ts` name because the ticket, its surface and
+its acceptance criteria all name that file. Renaming to `proxy.ts` is a real
+follow-up, but it is a repo-wide convention change and wants its own ticket, not
+a silent rename inside a feature slice.
+
+## Two host env vars, inlined at BUILD time, with working defaults
+`NEXT_PUBLIC_MARKETING_HOST` (default `stablepass.co`) and `NEXT_PUBLIC_APP_HOST`
+(default `app.stablepass.co`), both in `lib/hosts.ts`. There is no `.env.example`
+in this repo, so this is the only place they are written down. Two traps: they
+are `NEXT_PUBLIC_*`, so a change needs a REBUILD, not just a redeploy of env; and
+because the defaults are already correct for production, a deployment that never
+sets them works — nobody discovers the knobs exist until a domain changes.
+Setting the two to the SAME value would loop every member route on the apex;
+`redirectHost` guards against that rather than trusting the dashboard.
+
+## Middleware runs on the edge — keep it synchronous and I/O free
+`middleware.ts` must not call Supabase or await anything: a network round-trip on
+every request makes the whole app dynamic and defeats the caching the
+marketing/member subdomain split exists to protect. It checks only whether an
+auth cookie EXISTS. A stale cookie sending someone to `/explore` is fine — the
+member layout's own server-side check is the real gate.
+
+## Auth cookies are CHUNKED — match by prefix, never by exact name
+`@supabase/ssr` splits a large session across `sb-stablepass-web-auth.0`, `.1`, …
+so the bare name is often absent and an exact-name lookup silently fails for the
+majority of signed-in members. Match "base name, or base name + `.`". Do NOT use
+a loose `startsWith(AUTH_COOKIE_NAME)`: that also matches
+`…-code-verifier`, the PKCE cookie present DURING sign-in before any session
+exists, which would treat a mid-sign-in visitor as authenticated. Always import
+`AUTH_COOKIE_NAME` from `lib/supabase/cookie-name.ts`; never retype the string.
 
 ## Guardrail #8 cannot be checked by grep — it lives inside the JPEGs
 The signed-off marketing mockup's inlined photographs are real racecourse shots, so
