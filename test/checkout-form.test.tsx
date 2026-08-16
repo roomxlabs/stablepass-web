@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 // Kept light per the ticket: this exercises the mount → POST /api/subscription/checkout
@@ -49,9 +49,21 @@ function mockFetch(body: unknown, ok = true, status = 200) {
 }
 
 describe("CheckoutForm", () => {
+  // The component now logs on EVERY not-ready path (that loud logging is the
+  // point of ENG-581). Several tests below deliberately drive those paths while
+  // asserting something else entirely, so silence console.error suite-wide
+  // rather than letting real failures drown in expected noise. Tests that assert
+  // on logging install their own spy on top, which still records calls.
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
     pushMock.mockClear();
     stripeRef.current = null;
+    consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
   });
 
   it("posts to /api/subscription/checkout on mount with no body (no card data is ever posted)", async () => {
@@ -129,9 +141,105 @@ describe("CheckoutForm", () => {
 
     render(<CheckoutForm trialDaysLeft={12} />);
 
-    expect(await screen.findByText(/connect a Stripe key to enable checkout/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Payments are not configured yet/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Pay/ })).toBeDisabled();
     expect(screen.getByText("Order summary")).toBeInTheDocument();
+  });
+
+  it("200 with a null clientSecret renders an ERROR state, never the configuration hint, and logs", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockFetch({
+      data: { clientSecret: null, publishableKey: "pk_test_dummy", mode: "purchase", unitAmount: 100, currency: "aud" },
+    });
+
+    render(<CheckoutForm trialDaysLeft={12} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/couldn.t start a secure payment/i);
+    expect(document.body.textContent).not.toMatch(/not configured/i);
+    expect(document.body.textContent).not.toMatch(/Stripe key/i);
+    expect(consoleErrorSpy).toHaveBeenCalled();
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("502 stripe_unavailable renders the configuration message and NOT the error alert", async () => {
+    mockFetch({ error: { code: "stripe_unavailable", message: "Payment provider not configured." } }, false, 502);
+
+    render(<CheckoutForm trialDaysLeft={12} />);
+
+    expect(await screen.findByText(/Payments are not configured yet/i)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("a non-502 failure renders the error state, not a configuration hint", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockFetch({ error: { code: "server_error", message: "boom" } }, false, 500);
+
+    render(<CheckoutForm trialDaysLeft={12} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/couldn.t start a secure payment/i);
+    expect(document.body.textContent).not.toMatch(/not configured/i);
+    expect(consoleErrorSpy).toHaveBeenCalled();
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("the misleading 'connect a Stripe key' copy is gone for every not-ready state", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    mockFetch({ error: { code: "stripe_unavailable", message: "Payment provider not configured." } }, false, 502);
+    const { unmount } = render(<CheckoutForm trialDaysLeft={12} />);
+    await screen.findByText(/Payments are not configured yet/i);
+    expect(document.body.textContent).not.toMatch(/connect a Stripe key/i);
+    unmount();
+
+    mockFetch({
+      data: { clientSecret: null, publishableKey: "pk_test_dummy", mode: "purchase", unitAmount: 100, currency: "aud" },
+    });
+    render(<CheckoutForm trialDaysLeft={12} />);
+    await screen.findByRole("alert");
+    expect(document.body.textContent).not.toMatch(/connect a Stripe key/i);
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  // A 502 is NOT automatically a configuration problem. Only the route's
+  // `stripe_unavailable` (no STRIPE_SECRET_KEY) is; a Stripe outage / bad price
+  // id now returns `stripe_error` and must read as a real error.
+  it("502 with a NON-configuration code (stripe_error) renders the error state, not the config hint", async () => {
+    mockFetch({ error: { code: "stripe_error", message: "Payment provider unavailable." } }, false, 502);
+
+    render(<CheckoutForm trialDaysLeft={12} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/couldn.t start a secure payment/i);
+    expect(document.body.textContent).not.toMatch(/not configured/i);
+    expect(consoleErrorSpy).toHaveBeenCalled();
+  });
+
+  it("a network failure renders the error state and logs — never the configuration hint", async () => {
+    // The server was never reached, so we know NOTHING about whether a key
+    // exists; claiming a configuration problem here would be a guess.
+    global.fetch = vi.fn(() => Promise.reject(new Error("network down"))) as unknown as typeof fetch;
+
+    render(<CheckoutForm trialDaysLeft={12} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/couldn.t start a secure payment/i);
+    expect(document.body.textContent).not.toMatch(/not configured/i);
+    expect(document.body.textContent).not.toMatch(/connect a Stripe key/i);
+    expect(consoleErrorSpy).toHaveBeenCalled();
+  });
+
+  it("while the POST is still in flight it shows the neutral loading copy — no error, no config hint", async () => {
+    // A never-resolving fetch pins the initial paint. Flashing either an error
+    // or "not configured" before the answer arrives is a lie in both directions.
+    global.fetch = vi.fn(() => new Promise(() => {})) as unknown as typeof fetch;
+
+    render(<CheckoutForm trialDaysLeft={12} />);
+
+    expect(await screen.findByText(/Preparing secure payment/i)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/not configured/i);
+    expect(document.body.textContent).not.toMatch(/connect a Stripe key/i);
   });
 
   it("never renders a raw card-number/CVC input", async () => {

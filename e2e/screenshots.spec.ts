@@ -377,7 +377,9 @@ test("W10 checkout screen renders (order summary + graceful no-Stripe-keys place
     await page.goto("/checkout");
     await expect(page.getByText("Order summary")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Continue your access." })).toBeVisible();
-    await expect(page.getByText(/connect a Stripe key to enable checkout/i)).toBeVisible();
+    // ENG-581: state-specific not-ready copy. With no Stripe key the route 502s
+    // with stripe_unavailable, which is the one state allowed to cite configuration.
+    await expect(page.getByText(/Payments are not configured yet/i)).toBeVisible();
 
     await page.screenshot({ path: ".rx/review/w10-checkout.png", fullPage: true });
   } finally {

@@ -136,9 +136,11 @@ describe("POST /api/subscription/checkout", () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
     tableData.subscription = { data: { status: "trial", stripe_customer_id: null, current_period_end: null } };
     stripeMocks.customersCreate.mockResolvedValue({ id: "cus_new" });
+    // Mirrors Stripe at API version 2026-06-24.dahlia: `latest_invoice.payment_intent`
+    // no longer exists — the client secret lives at `confirmation_secret` instead.
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
-      latest_invoice: { payment_intent: { client_secret: "pi_new_secret" } },
+      latest_invoice: { confirmation_secret: { type: "payment_intent", client_secret: "pi_new_secret" } },
     });
 
     const res = await checkoutPOST();
@@ -154,6 +156,135 @@ describe("POST /api/subscription/checkout", () => {
     expect(createCall.payment_behavior).toBe("default_incomplete");
   });
 
+  it("expands latest_invoice.confirmation_secret — the legacy payment_intent path alone yields no secret at 2026-06-24.dahlia", async () => {
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = { data: { status: "trial", stripe_customer_id: null, current_period_end: null } };
+    stripeMocks.customersCreate.mockResolvedValue({ id: "cus_new" });
+    stripeMocks.subscriptionsCreate.mockResolvedValue({
+      id: "sub_new",
+      latest_invoice: { confirmation_secret: { type: "payment_intent", client_secret: "pi_new_secret" } },
+    });
+
+    await checkoutPOST();
+
+    const expandArg = stripeMocks.subscriptionsCreate.mock.calls[0][0].expand;
+    expect(expandArg).toContain("latest_invoice.confirmation_secret");
+    // Kept as a cross-version fallback for an account pinned to an older API version.
+    expect(expandArg).toContain("latest_invoice.payment_intent");
+  });
+
+  it("new shape only (no payment_intent key): still returns a usable clientSecret", async () => {
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = { data: { status: "trial", stripe_customer_id: null, current_period_end: null } };
+    stripeMocks.customersCreate.mockResolvedValue({ id: "cus_new" });
+    stripeMocks.subscriptionsCreate.mockResolvedValue({
+      id: "sub_new",
+      latest_invoice: { confirmation_secret: { type: "payment_intent", client_secret: "pi_conf_secret" } },
+    });
+
+    const res = await checkoutPOST();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.clientSecret).toBe("pi_conf_secret");
+  });
+
+  it("legacy shape only: the payment_intent fallback still resolves (older pinned API version)", async () => {
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = { data: { status: "trial", stripe_customer_id: null, current_period_end: null } };
+    stripeMocks.customersCreate.mockResolvedValue({ id: "cus_new" });
+    stripeMocks.subscriptionsCreate.mockResolvedValue({
+      id: "sub_new",
+      latest_invoice: { payment_intent: { client_secret: "pi_legacy_secret" } },
+    });
+
+    const res = await checkoutPOST();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.clientSecret).toBe("pi_legacy_secret");
+  });
+
+  it("confirmation_secret wins over a legacy payment_intent when both are present", async () => {
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = { data: { status: "trial", stripe_customer_id: null, current_period_end: null } };
+    stripeMocks.customersCreate.mockResolvedValue({ id: "cus_new" });
+    stripeMocks.subscriptionsCreate.mockResolvedValue({
+      id: "sub_new",
+      latest_invoice: {
+        confirmation_secret: { type: "payment_intent", client_secret: "pi_conf_secret" },
+        payment_intent: { client_secret: "pi_legacy_secret" },
+      },
+    });
+
+    const res = await checkoutPOST();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.clientSecret).toBe("pi_conf_secret");
+  });
+
+  it("neither shape present: returns a null clientSecret AND logs loudly (never silently dead)", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = { data: { status: "trial", stripe_customer_id: null, current_period_end: null } };
+    stripeMocks.customersCreate.mockResolvedValue({ id: "cus_new" });
+    stripeMocks.subscriptionsCreate.mockResolvedValue({
+      id: "sub_new",
+      latest_invoice: {},
+    });
+
+    const res = await checkoutPOST();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.clientSecret).toBeNull();
+    expect(consoleErrorSpy).toHaveBeenCalled();
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  // confirmation_secret is a TAGGED union. A $0 invoice (100%-off coupon, credit
+  // balance) yields a SetupIntent secret; handing a `seti_…` to Elements as a
+  // payment secret fails at confirmPayment, so it must not be accepted.
+  it("confirmation_secret of type setup_intent is REJECTED, not handed to Elements as a payment secret", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = { data: { status: "trial", stripe_customer_id: null, current_period_end: null } };
+    stripeMocks.customersCreate.mockResolvedValue({ id: "cus_new" });
+    stripeMocks.subscriptionsCreate.mockResolvedValue({
+      id: "sub_new",
+      latest_invoice: { confirmation_secret: { type: "setup_intent", client_secret: "seti_x_secret_y" } },
+    });
+
+    const res = await checkoutPOST();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.clientSecret).toBeNull();
+    expect(consoleErrorSpy).toHaveBeenCalled();
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("an empty-string client_secret normalises to null rather than serialising an empty string", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = { data: { status: "trial", stripe_customer_id: null, current_period_end: null } };
+    stripeMocks.customersCreate.mockResolvedValue({ id: "cus_new" });
+    stripeMocks.subscriptionsCreate.mockResolvedValue({
+      id: "sub_new",
+      latest_invoice: { confirmation_secret: { type: "payment_intent", client_secret: "" } },
+    });
+
+    const res = await checkoutPOST();
+    const body = await res.json();
+
+    expect(body.data.clientSecret).toBeNull();
+
+    consoleErrorSpy.mockRestore();
+  });
+
   it("customer identity: builds name + address from app_user when no stripe_customer_id exists", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
     tableData.subscription = { data: { status: "trial", stripe_customer_id: null, current_period_end: null } };
@@ -161,7 +292,7 @@ describe("POST /api/subscription/checkout", () => {
     stripeMocks.customersCreate.mockResolvedValue({ id: "cus_new" });
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
-      latest_invoice: { payment_intent: { client_secret: "pi_new_secret" } },
+      latest_invoice: { confirmation_secret: { type: "payment_intent", client_secret: "pi_new_secret" } },
     });
 
     await checkoutPOST();
@@ -182,7 +313,7 @@ describe("POST /api/subscription/checkout", () => {
     stripeMocks.customersCreate.mockResolvedValue({ id: "cus_new" });
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
-      latest_invoice: { payment_intent: { client_secret: "pi_new_secret" } },
+      latest_invoice: { confirmation_secret: { type: "payment_intent", client_secret: "pi_new_secret" } },
     });
 
     await checkoutPOST();
@@ -198,7 +329,7 @@ describe("POST /api/subscription/checkout", () => {
     tableData.app_user = { data: { first_name: "Jane", last_name: "Doe", postcode: "3000" } };
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
-      latest_invoice: { payment_intent: { client_secret: "pi_new_secret" } },
+      latest_invoice: { confirmation_secret: { type: "payment_intent", client_secret: "pi_new_secret" } },
     });
 
     await checkoutPOST();
@@ -295,7 +426,7 @@ describe("POST /api/subscription/checkout", () => {
     expect(intentArg.currency).toBe("aud");
   });
 
-  it("prices.retrieve rejecting returns 502 stripe_unavailable without charging", async () => {
+  it("prices.retrieve rejecting returns 502 stripe_error (NOT stripe_unavailable — the key is fine)", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
     stripeMocks.pricesRetrieve.mockRejectedValue(new Error("stripe down"));
     tableData.subscription = { data: { status: "trial", stripe_customer_id: null, current_period_end: null } };
@@ -304,12 +435,15 @@ describe("POST /api/subscription/checkout", () => {
     const body = await res.json();
 
     expect(res.status).toBe(502);
-    expect(body.error.code).toBe("stripe_unavailable");
+    // ENG-581: a working key that Stripe rejected is NOT a configuration
+    // problem. Sharing `stripe_unavailable` here is what made the screen tell a
+    // correctly-configured operator their key was missing.
+    expect(body.error.code).toBe("stripe_error");
     expect(stripeMocks.subscriptionsCreate).not.toHaveBeenCalled();
     expect(stripeMocks.paymentIntentsCreate).not.toHaveBeenCalled();
   });
 
-  it("prices.retrieve resolving a null unit_amount returns 502 stripe_unavailable without charging", async () => {
+  it("prices.retrieve resolving a null unit_amount returns 502 stripe_error without charging", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
     stripeMocks.pricesRetrieve.mockResolvedValue({ unit_amount: null, currency: "aud" });
     tableData.subscription = { data: { status: "trial", stripe_customer_id: null, current_period_end: null } };
@@ -318,7 +452,7 @@ describe("POST /api/subscription/checkout", () => {
     const body = await res.json();
 
     expect(res.status).toBe(502);
-    expect(body.error.code).toBe("stripe_unavailable");
+    expect(body.error.code).toBe("stripe_error");
     expect(stripeMocks.subscriptionsCreate).not.toHaveBeenCalled();
     expect(stripeMocks.paymentIntentsCreate).not.toHaveBeenCalled();
   });
@@ -330,7 +464,7 @@ describe("POST /api/subscription/checkout", () => {
     stripeMocks.customersCreate.mockResolvedValue({ id: "cus_new" });
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
-      latest_invoice: { payment_intent: { client_secret: "pi_new_secret" } },
+      latest_invoice: { confirmation_secret: { type: "payment_intent", client_secret: "pi_new_secret" } },
     });
 
     const purchaseRes = await checkoutPOST();
@@ -352,7 +486,7 @@ describe("POST /api/subscription/checkout", () => {
     expect(renewalBody.data.clientSecret).toBe("pi_renew_secret");
   });
 
-  it("returns 502 stripe_unavailable when Stripe throws creating the Subscription", async () => {
+  it("returns 502 stripe_error when Stripe throws creating the Subscription", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
     tableData.subscription = { data: { status: "trial", stripe_customer_id: "cus_existing", current_period_end: null } };
     stripeMocks.subscriptionsCreate.mockRejectedValue(new Error("stripe boom"));
@@ -361,7 +495,7 @@ describe("POST /api/subscription/checkout", () => {
     const body = await res.json();
 
     expect(res.status).toBe(502);
-    expect(body.error.code).toBe("stripe_unavailable");
+    expect(body.error.code).toBe("stripe_error");
   });
 
   // CONTRACT: pins the exact key set the screen destructures. Renaming any of
@@ -374,7 +508,7 @@ describe("POST /api/subscription/checkout", () => {
     tableData.subscription = { data: { status: "trial", stripe_customer_id: "cus_existing", current_period_end: null } };
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
-      latest_invoice: { payment_intent: { client_secret: "pi_new_secret" } },
+      latest_invoice: { confirmation_secret: { type: "payment_intent", client_secret: "pi_new_secret" } },
     });
 
     const body = await (await checkoutPOST()).json();
@@ -435,7 +569,7 @@ describe("POST /api/subscription/checkout", () => {
     tableData.app_user = { data: { first_name: "Jane", last_name: "Doe", postcode: null } };
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
-      latest_invoice: { payment_intent: { client_secret: "pi_new_secret" } },
+      latest_invoice: { confirmation_secret: { type: "payment_intent", client_secret: "pi_new_secret" } },
     });
 
     await checkoutPOST();
@@ -459,7 +593,7 @@ describe("POST /api/subscription/checkout", () => {
     stripeMocks.customersCreate.mockResolvedValue({ id: "cus_new" });
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
-      latest_invoice: { payment_intent: { client_secret: "pi_new_secret" } },
+      latest_invoice: { confirmation_secret: { type: "payment_intent", client_secret: "pi_new_secret" } },
     });
 
     expect((await checkoutPOST()).status).toBe(200);
