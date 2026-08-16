@@ -360,3 +360,44 @@ truncating rule must also set `display: block` (or inline-block/flex). This bit
 `.sidebar-user .meta .email` (ENG-583) while its sibling `strong` worked purely
 because it already set `display: block`. A unitless `line-height` means the swap
 costs no height, so nothing below it moves.
+
+## Playwright silently reuses whatever is on :3000 — check whose server that is
+`playwright.config.ts` sets `reuseExistingServer: true` with `baseURL
+http://localhost:3000`. If a colleague already has `npm run dev` there (and
+theirs may point at the **Sydney** project, not local Supabase), the whole e2e
+run exercises *their* branch against *live* data and the results are meaningless
+— it does not fail, it just lies. Before trusting an e2e run, confirm who owns
+:3000 (`ss -ltnp | grep :3000`). To run in isolation, copy the config, set
+`baseURL` to another port and `command: "npm run dev -- --port 3100"` with
+`reuseExistingServer: false`, and keep it out of the commit.
+
+## `subscription.trial_ends_at` is NOT NULL
+Any fixture that seeds an `active` member must still supply a `trial_ends_at`
+(the past date their trial ran to before they converted). Passing `null` fails
+with `23502 null value in column "trial_ends_at" violates not-null constraint`.
+`current_period_end` IS nullable — and on an `active` row a null there means
+ENTITLED (paid, webhook in flight), never expired.
+
+## "not entitled" does NOT mean "the date has passed"
+`hasAccess()` denies `canceled`/`lapsed` on the STATUS alone without reading the
+date, and those rows legitimately keep a FUTURE `current_period_end`
+(`docs/specs/database.sql`: "canceled keeps access until this"). Any copy that
+narrates the date in the past tense must test the clock, not `!entitled`, or it
+prints "Ended <date>" days before that date arrives.
+
+## The lint rule forbids `Date.now()` during render
+`Error: Cannot call impure function during render` — put clock reads in a
+module-scope helper with an injectable `now` (see `hasAccess`, `trialDaysLeft`,
+`formatEndDate`, `hasPassed`), never inline in a component body.
+
+## `lib/api/access.ts` must stay client-safe
+It is imported by `"use client"` components (the expiry banner and four content
+gates), so it may hold only pure predicates. Anything needing `supabaseServer`
+goes in `lib/api/subscription-state.ts` instead. Corollary: resolve
+`stripe_customer_id` server-side and pass the derived boolean — never the row —
+across a client boundary.
+
+## CLAUDE.md's "never commit" is stale for the rx loop
+The Conventions section says to stop at `git add`. The implement loop's whole
+contract is commit → push → PR, and every ticket in the stripe-trial epic landed
+that way. Treat that line as applying to interactive sessions only.
