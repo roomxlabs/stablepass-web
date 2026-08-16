@@ -10,6 +10,8 @@
 import { notFound } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
 import { signPhoto, TRAINER_PHOTO_BUCKET } from "@/lib/storage/photos";
+import { readSubscriptionState } from "@/lib/api/subscription-state";
+import { AccessWall } from "@/components/access-wall";
 import type { HorseSummary } from "@/components/types";
 import { FollowNotify } from "./follow-notify";
 import { StableHorses } from "./stable-horses";
@@ -42,20 +44,15 @@ export default async function TrainerProfilePage({ params }: { params: Promise<{
   const { data: { user } } = await sb.auth.getUser();
   const userId = user!.id;
 
-  const { data: sub } = await sb.from("subscription").select("status").eq("user_id", userId).single();
-  const gated = !sub || !["trial", "active"].includes(sub.status);
+  // ENG-585 — same raw-status gate as the horse profile; same fix. See the note
+  // in app/(member)/horses/[id]/page.tsx.
+  const { entitled, everSubscribed } = await readSubscriptionState(userId);
 
-  if (gated) {
+  if (!entitled) {
     return (
       <main className="main profile-page">
         <div className="profile-main" style={{ marginTop: 60 }}>
-          <div className="aside-card">
-            <h3>Your trial has ended.</h3>
-            <p style={{ color: "var(--muted)", marginBottom: 16 }}>
-              Reactivate your subscription to see this trainer&rsquo;s stable.
-            </p>
-            <a className="btn btn-primary" href="/checkout">Reactivate</a>
-          </div>
+          <AccessWall everSubscribed={everSubscribed} />
         </div>
       </main>
     );

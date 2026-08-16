@@ -8,6 +8,8 @@
 // Explore. Unfollow is NOT here — it lives on the horse/trainer profiles.
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
+import { AccessWall } from "@/components/access-wall";
 import { PostCard } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
@@ -99,7 +101,9 @@ function Rail({ title, items, onOpen }: { title: string; items: RailItem[]; onOp
   );
 }
 
-export function FollowingScreen({ viewerId }: { viewerId: string }) {
+// `everSubscribed` — see the note in ../explore/explore-feed.tsx (server-resolved
+// boolean; the Stripe id never reaches the browser).
+export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string; everSubscribed: boolean }) {
   const router = useRouter();
   const [horses, setHorses] = useState<RailItem[]>([]);
   const [trainers, setTrainers] = useState<RailItem[]>([]);
@@ -123,9 +127,18 @@ export function FollowingScreen({ viewerId }: { viewerId: string }) {
       // Content gate FIRST (mirrors SavedFeed/HorsesGrid) — don't read or render
       // follows before the subscription check resolves, so a lapsed member never
       // sees the rails flash before the reactivate prompt.
-      const { data: sub } = await sb.from("subscription").select("status").eq("user_id", viewerId).maybeSingle();
-      const status = (sub as { status?: string } | null)?.status;
-      if (!status || !["trial", "active"].includes(status)) {
+      const { data: sub } = await sb.from("subscription").select(ACCESS_COLUMNS).eq("user_id", viewerId).maybeSingle();
+      // ENG-585: this was `!["trial","active"].includes(status)` on a
+      // status-only select, so an `active` member whose `current_period_end`
+      // had passed counted as entitled here, ran the read, got nothing back
+      // (RLS denies them correctly) and saw an EMPTY screen instead of the
+      // wall. `hasAccess()` is the shared rule (lib/api/access.ts) — pure and
+      // client-safe, already imported this way by the expiry banner.
+      //
+      // Strictly stricter than the test it replaces: identical for entitled,
+      // lapsed and canceled rows, and it additionally catches expired ones. It
+      // can only wall MORE members, never reveal content to one.
+      if (!hasAccess(sub as AccessRow | null)) {
         setGated(true);
         setFollowsLoaded(true);
         return;
@@ -309,15 +322,7 @@ export function FollowingScreen({ viewerId }: { viewerId: string }) {
       <div className="feed-col">
         <h1 className="section-title-web" style={{ marginBottom: 20 }}>Following</h1>
 
-        {gated && (
-          <div className="aside-card">
-            <h3>Your trial has ended.</h3>
-            <p style={{ color: "var(--muted)", marginBottom: 16 }}>
-              Reactivate your subscription to keep up with the horses you follow.
-            </p>
-            <a className="btn btn-primary" href="/checkout">Reactivate</a>
-          </div>
-        )}
+        {gated && <AccessWall everSubscribed={everSubscribed} />}
 
         {!gated && (
           <>

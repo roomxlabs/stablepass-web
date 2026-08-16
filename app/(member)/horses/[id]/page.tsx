@@ -11,6 +11,8 @@
 import { notFound } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
 import { signPhoto, HORSE_PHOTO_BUCKET } from "@/lib/storage/photos";
+import { readSubscriptionState } from "@/lib/api/subscription-state";
+import { AccessWall } from "@/components/access-wall";
 import { TrainerCard } from "@/components/trainer-card";
 import { FollowNotify } from "./follow-notify";
 import { HorsePosts } from "./horse-posts";
@@ -86,20 +88,19 @@ export default async function HorseProfilePage({ params }: { params: Promise<{ i
   const { data: { user } } = await sb.auth.getUser();
   const userId = user!.id;
 
-  const { data: sub } = await sb.from("subscription").select("status").eq("user_id", userId).single();
-  const gated = !sub || !["trial", "active"].includes(sub.status);
+  // ENG-585: was `!["trial","active"].includes(sub.status)` on a status-only
+  // select — an expired `active` member sailed past this gate and fell through
+  // to a profile RLS then refused to populate. `hasAccess()` (via
+  // readSubscriptionState) is the shared rule; it is strictly stricter than the
+  // status test it replaces, so this can only ever wall MORE members, never
+  // reveal content to one.
+  const { entitled, everSubscribed } = await readSubscriptionState(userId);
 
-  if (gated) {
+  if (!entitled) {
     return (
       <main className="main profile-page">
         <div className="profile-main" style={{ marginTop: 60 }}>
-          <div className="aside-card">
-            <h3>Your trial has ended.</h3>
-            <p style={{ color: "var(--muted)", marginBottom: 16 }}>
-              Reactivate your subscription to see this horse&rsquo;s profile.
-            </p>
-            <a className="btn btn-primary" href="/checkout">Reactivate</a>
-          </div>
+          <AccessWall everSubscribed={everSubscribed} />
         </div>
       </main>
     );

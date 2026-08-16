@@ -34,3 +34,28 @@ export function hasAccess(sub: AccessRow | null, now: number = Date.now()): bool
   }
   return false;
 }
+
+// ── ENG-585: the second question the SCREENS ask ────────────────────────────
+// `hasAccess()` answers "can this member see content right now". The walls need
+// one more bit to say the right sentence: has this member EVER paid us?
+//
+// The rule is `stripe_customer_id !== null` and it is written HERE, once, for
+// the same reason `hasAccess` is: mobile (ENG-573) branches its wall copy on
+// exactly this, and a second web-side copy is how the two platforms start
+// telling the same member different things. Whoever widens this rule widens
+// every wall at once.
+//
+// `stripe_customer_id` is a Stripe identifier, not member data, and it never
+// leaves the server: every call site turns it into a BOOLEAN before it crosses
+// into a client component. Pass `everSubscribed`, never the row.
+export type SubscriptionRow = AccessRow & { stripe_customer_id: string | null };
+
+// The column list for any select that feeds BOTH helpers below. Same structural
+// trick as ACCESS_COLUMNS: `sb` is untyped, so a hand-written select that forgot
+// `stripe_customer_id` type-checks clean and silently tells a paying member their
+// trial ended. Use the constant.
+export const SUBSCRIPTION_COLUMNS = `${ACCESS_COLUMNS},stripe_customer_id`;
+
+export function everSubscribed(sub: { stripe_customer_id: string | null } | null): boolean {
+  return (sub?.stripe_customer_id ?? null) !== null;
+}
