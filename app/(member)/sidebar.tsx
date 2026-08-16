@@ -144,10 +144,20 @@ export function Sidebar({ user }: { user: SidebarUser }) {
 
         <div className="sidebar-footer">
           <div className="sidebar-user">
-            <div className="avatar">{user.initial}</div>
+            {/* The 900-1279 rail hides .meta entirely (globals.css), so the avatar
+                is the ONLY account affordance at that width — carry the address on
+                it too, or a rail member cannot tell which account they are in. */}
+            <div className="avatar" title={user.email}>
+              {user.initial}
+            </div>
             <div className="meta">
               <strong>{user.name}</strong>
-              <span className="email">{user.email}</span>
+              {/* title keeps the FULL address reachable once the CSS ellipsis
+                  truncates it — the member has to be able to confirm which
+                  account they are signed in as. */}
+              <span className="email" title={user.email}>
+                {user.email}
+              </span>
             </div>
           </div>
           {user.trialLabel && <div className="trial-badge-sidebar">{user.trialLabel}</div>}

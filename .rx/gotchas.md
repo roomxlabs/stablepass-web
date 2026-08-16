@@ -343,3 +343,20 @@ Reuse filters must re-assert every invariant the create call sets — price **an
 metadata **and** the pre-armed cancel. Same rule for the Customer lookup (match on
 `metadata.app_user_id`, and re-check it locally rather than trusting the search query
 string to have scoped the result).
+
+## The sign-in mockup still carries copy we deliberately changed
+`mockups/web/screens/02-signin.html:50` still reads *"Not subscribed yet? Start
+30 days free"*. ENG-583 replaced that in `app/signin/sign-in-form.tsx` because it
+never said it CREATES AN ACCOUNT and produced duplicate accounts (it sits right
+under "Forgot your password?"). The live copy is *"Don't have an account? Create
+an account — 30 days free"*. **Rebuilding /signin from the mockup would regress
+it** — the mockup is the design source for layout/type, not for this string.
+
+## `overflow`/`text-overflow` do nothing on an inline element
+Truncating text with `overflow:hidden; text-overflow:ellipsis; white-space:nowrap`
+silently no-ops on a `<span>`: those properties need a block-level box, so the
+text overflows and is hard-clipped by an ancestor with no ellipsis. Any new
+truncating rule must also set `display: block` (or inline-block/flex). This bit
+`.sidebar-user .meta .email` (ENG-583) while its sibling `strong` worked purely
+because it already set `display: block`. A unitless `line-height` means the swap
+costs no height, so nothing below it moves.
