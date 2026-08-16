@@ -1,0 +1,127 @@
+/* ====================================================================
+   Legal pages — prose styling (ENG-590 / W4)
+
+   The design source is the signed-off mockup's policy overlay
+   (`#sheet-privacy` / `#sheet-terms` -> `.sheet-card`), REFLOWED from a
+   dialog to a standalone page. The dialog chrome goes — the fixed
+   overlay, the scrim, the 26px radius, the drop shadow, the 88vh
+   scroll box — and the prose treatment stays, verbatim:
+
+       .sheet-card            width:min(720px,100%); padding:44px 46px 40px
+       .sheet-card .eyebrow   display:block; margin-bottom:14px
+       .sheet-card h3         font-size:1.9rem; margin-bottom:8px
+       .sheet-card h4         font-family:var(--serif); font-size:1.15rem;
+                              margin:22px 0 7px
+       .sheet-card p          color:var(--mut); font-size:14.5px;
+                              margin-bottom:9px
+       @media (max-width:640px) .sheet-card  padding:32px 24px 30px
+
+   Only the page-level frame is new, and it is three deliberate
+   deviations, recorded here so a reviewer diffing against the mockup
+   knows they were chosen rather than missed:
+
+     1. the vertical section rhythm — the mockup's own 84px/96px band
+        spacing, eased to 72px/96px because a prose page has no hero art
+        to carry — and the horizontal gutter, from the ported `.wrap`;
+     2. the 720px measure is LEFT-aligned in the 1180px `.wrap`, where
+        the dialog centred its card in the viewport. On a page the card
+        has no scrim to sit against, and the left edge lines the prose up
+        with the nav wordmark and the footer brand, which share that
+        gutter. Centring it would float the text off the shell's grid;
+     3. the title drops 1.9rem -> 1.7rem below 640px. The mockup's only
+        phone rule for `.sheet-card` is padding, because a dialog is
+        already inset from the viewport; a full-bleed page is not, so the
+        heading needs the step-down to keep "Terms & Conditions" on two
+        lines at 390px rather than three.
+
+   A CSS MODULE rather than more rules in marketing.css, for two reasons.
+   marketing.css is a verbatim port that test/marketing-shell.test.tsx
+   re-derives from the mockup rule-for-rule — a page-specific rule added
+   there fails that test, correctly. And the module's hashed names cannot
+   collide with app/globals.css, which loads on every route from the root
+   layout and defines its own `.btn`/`.btn-ghost`.
+
+   Every selector is nested under `.doc` on purpose, not for tidiness:
+   the ported globals are `.marketing h1` and `.marketing p` at (0,1,1),
+   so a bare `.title` at (0,1,0) would LOSE to `.marketing h1{margin:0}`.
+   `.doc .title` is (0,2,0) and wins on specificity rather than on load
+   order, which is not guaranteed between a layout's stylesheet and a
+   page's module.
+
+   Tokens (--paper, --ink, --mut, --serif, --mono) are declared on the
+   `.marketing` wrapper by marketing.css and resolve here by inheritance.
+   ==================================================================== */
+
+.page {
+  padding: 72px 0 96px;
+}
+
+/* The sheet-card's measure, kept: 720px is the width the copy was signed
+   off at, and prose is unreadable across a 1180px .wrap. */
+.doc {
+  max-width: 720px;
+}
+
+.doc .kicker {
+  display: block;
+  margin-bottom: 14px;
+}
+
+.doc .title {
+  font-size: 1.9rem;
+  margin-bottom: 8px;
+}
+
+/* Not in the mockup — the overlay had no dated revision. Requirement 6
+   wants the frontmatter date visible, and the mono/uppercase treatment is
+   the marketing sheet's own `.eyebrow` idiom at a quieter weight, so it
+   reads as metadata rather than as a second kicker. */
+.doc .updated {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--mut);
+  margin-bottom: 4px;
+}
+
+.doc .section {
+  font-family: var(--serif);
+  font-size: 1.15rem;
+  margin: 22px 0 7px;
+}
+
+/* `###` is supported by the content reader but unused by the shipped copy.
+   It gets a real step down so a future sub-clause cannot render visually
+   identical to the section it sits under. */
+.doc .subsection {
+  font-family: var(--serif);
+  font-size: 1rem;
+  margin: 16px 0 6px;
+}
+
+.doc .body {
+  color: var(--mut);
+  font-size: 14.5px;
+  margin-bottom: 9px;
+}
+
+.doc .list {
+  color: var(--mut);
+  font-size: 14.5px;
+  margin: 0 0 9px;
+  padding-left: 1.15em;
+}
+
+.doc .list li {
+  margin-bottom: 4px;
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding: 48px 0 72px;
+  }
+
+  .doc .title {
+    font-size: 1.7rem;
+  }
+}
