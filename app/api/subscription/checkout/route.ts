@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
 import { supabaseServer } from "@/lib/supabase/server";
 import { ok, UNAUTH, fail } from "@/lib/api/envelope";
@@ -49,6 +51,115 @@ type IdentityRow = {
   postcode: string | null;
 };
 
+// IDEMPOTENCY (ENG-582) ------------------------------------------------------
+// This route CANNOT remember anything between requests. It reads
+// `subscription.stripe_customer_id`, but it can never WRITE it: `public.subscription`
+// carries only `subscription_select_self` / `subscription_select_admin` — both
+// SELECT — because subscription writes are service-role-only by design. Only the
+// be `stripe-webhook` persists these ids, and only AFTER a payment lands. So on
+// every visit before the first successful payment the DB value is null, and the
+// route must recover the member's existing Stripe objects from STRIPE ITSELF or
+// it will create a fresh Customer + Subscription on every single page load
+// (5 loads produced 5 of each in the live sandbox).
+//
+// Ordering rule for anything that can legitimately be duplicated: newest first,
+// with the id as the tie-break. `created` is only second-granular, so two objects
+// made in the same second would otherwise be free to come back in either order —
+// and an UNSTABLE choice just moves the duplication problem instead of fixing it.
+// Two successive loads must resolve to the same object.
+function newestFirst<T extends { id: string; created: number }>(rows: readonly T[]): T[] {
+  return [...rows].sort((a, b) => b.created - a.created || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+}
+
+// Look the member's Customer up in Stripe when our DB has not got it yet.
+//
+// `customers.list({ email })` is the PRIMARY lookup because it is STRONGLY
+// consistent: verified against the live sandbox at 2026-06-24.dahlia, a Customer
+// created at t+0 is returned by the very next list call.
+//
+// `customers.search` is NOT safe as the primary path. It is backed by an
+// eventually-consistent index that measured a **36 second** lag on this account.
+// The five duplicate Customers this ticket exists to stop were created 24s, 36s,
+// 30s and ~38min apart — three of those gaps sit INSIDE that window, so a
+// search-only fix would still have re-created the Customer.
+//
+// Search is therefore the FALLBACK, and it runs whenever the email lookup cannot
+// answer: no email on the auth record, or an email that has since changed (the
+// Customer is then still findable by metadata). Note that means it also runs — and
+// harmlessly returns [] — on a brand-new member's first visit, which costs one
+// extra Stripe round-trip on that one request. That is the deliberate trade: a
+// stale index is still strictly better than no lookup, and it is never the only
+// thing standing between us and a duplicate.
+//
+// Members who visited /checkout before this fix shipped already have several
+// Customers under one `app_user_id`; that is pre-existing production data, not an
+// edge case. We pick the NEWEST deterministically and never delete or merge the
+// others — destroying payment records is not this route's job:
+//   * the newest is the one whose name/postcode the pre-fix route refreshed last;
+//   * it carries the freshest `incomplete` Subscription (Stripe expires those
+//     after ~23h, so the oldest Customer's pending Subscription is the one most
+//     likely to be gone, forcing yet another create);
+//   * it is what the webhook will ultimately record, since it is the Customer the
+//     member is about to pay against;
+//   * and once reuse engages we stop creating, so "newest" stops moving.
+async function findExistingCustomer(
+  stripe: Stripe,
+  appUserId: string,
+  email: string | undefined,
+): Promise<Stripe.Customer | null> {
+  if (email) {
+    // NEVER call customers.list() without the email filter — an unfiltered list
+    // returns other members' Customers, and picking one would cross-wire billing.
+    const byEmail = await stripe.customers.list({ email, limit: 100 });
+    // Match on the metadata this route stamps, so a shared/recycled email can
+    // never hand this member a Customer belonging to a different app user.
+    const mine = byEmail.data.filter((c) => c.metadata?.app_user_id === appUserId);
+    if (mine.length > 0) return newestFirst(mine)[0];
+  }
+
+  const found = await stripe.customers.search({
+    query: `metadata['app_user_id']:'${appUserId}'`,
+    limit: 100,
+  });
+  // Re-check the metadata locally instead of trusting the query string to have
+  // scoped the result. `appUserId` is a server-derived Supabase UUID and is never
+  // request-controlled, so this is defence in depth rather than a live hole — but
+  // it makes "this customer belongs to this member" a property of OUR code rather
+  // than of Stripe's query parser, and it sidesteps the fact that Stripe's
+  // metadata matching is case-insensitive.
+  return newestFirst(found.data.filter((c) => c.metadata?.app_user_id === appUserId))[0] ?? null;
+}
+
+// A deterministic idempotency key closes the only window `findExistingCustomer`
+// cannot: two requests racing between the lookup and the create (a double click,
+// or React StrictMode double-invoking the effect) both miss, and both create.
+// Same key => Stripe returns the SAME Customer for the second one.
+//
+// The request body is digested INTO the key on purpose. Stripe rejects a reused
+// key whose parameters differ (`idempotency_error`, confirmed live), and a
+// member's name or postcode can legitimately change between visits — digesting
+// gives each distinct body its own key, so a profile edit can never turn into a
+// hard 502. Genuinely concurrent requests read the same identity row and so
+// produce the same digest, which is exactly the case being collapsed.
+// Stripe replays a key for 24h. That is far longer than the race being closed
+// (milliseconds) and long enough to do harm, so the key is bucketed to 10 minutes:
+//   * if anyone deletes a duplicate Customer — the obvious cleanup after this
+//     ticket — a 24h key would replay the cached create and hand back the id of a
+//     DELETED customer, 502ing that member until the key aged out;
+//   * Stripe expires an untouched `incomplete` Subscription at ~23h, so a 24h key
+//     has a window where the list correctly misses the expired subscription, the
+//     create replays, and we return an EXPIRED secret — reintroducing ENG-581's
+//     dead Pay button from a new direction.
+// Ten minutes is comfortably longer than a double-click or a StrictMode double
+// effect (the only races that need collapsing) and far shorter than either hazard.
+const IDEMPOTENCY_BUCKET_MS = 10 * 60 * 1000;
+
+function idempotencyKey(scope: string, appUserId: string, body: unknown): string {
+  const digest = createHash("sha256").update(JSON.stringify(body)).digest("hex").slice(0, 16);
+  const bucket = Math.floor(Date.now() / IDEMPOTENCY_BUCKET_MS);
+  return `eng582-${scope}-${appUserId}-${bucket}-${digest}`;
+}
+
 export async function POST() {
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
@@ -98,7 +209,14 @@ export async function POST() {
     // key is omitted entirely rather than sent as an empty string.
     const address = postcode ? { postal_code: postcode, country: "AU" } : undefined;
 
+    // Prefer the DB value — once the webhook has written it, it is authoritative
+    // and costs no Stripe round-trip. Before the first payment it is always null
+    // (see the IDEMPOTENCY note above), so fall back to asking Stripe.
     let customerId = sub?.stripe_customer_id ?? null;
+    if (!customerId) {
+      customerId = (await findExistingCustomer(stripe, user.id, user.email))?.id ?? null;
+    }
+
     if (customerId) {
       // Existing customer: refresh the identity rather than creating a second one.
       //
@@ -106,7 +224,17 @@ export async function POST() {
       // address hash on update as a FULL REPLACEMENT — sending a bare
       // `{ country: "AU" }` would null out whatever postal_code/line1/city Stripe
       // already holds for this customer, on every single checkout POST.
+      //
+      // `email` is refreshed here too. Before ENG-582 this branch was DEAD — it
+      // keyed off a `stripe_customer_id` that RLS guaranteed stayed null — so its
+      // contents had never actually run. It is now the hot path, and the email is
+      // no longer cosmetic: `customers.list({ email })` is the primary, strongly
+      // consistent lookup, so letting it drift would permanently demote this
+      // member to the 36s-stale search fallback (and send Stripe's receipts to
+      // the old address). Unlike `address`, `email` is a scalar — updating it
+      // replaces nothing else.
       await stripe.customers.update(customerId, {
+        email: user.email,
         name: name || undefined,
         ...(address ? { address } : {}),
         metadata: { app_user_id: user.id },
@@ -114,11 +242,14 @@ export async function POST() {
     } else {
       // On create there is nothing to overwrite, so country can be stated even
       // when the member has no postcode.
-      customerId = (await stripe.customers.create({
+      const createParams: Stripe.CustomerCreateParams = {
         email: user.email,
         name: name || undefined,
         address: address ?? { country: "AU" },
         metadata: { app_user_id: user.id },
+      };
+      customerId = (await stripe.customers.create(createParams, {
+        idempotencyKey: idempotencyKey("customer", user.id, createParams),
       })).id;
     }
 
@@ -146,7 +277,15 @@ export async function POST() {
         },
       });
 
-      await sb.from("subscription").update({ stripe_customer_id: customerId }).eq("user_id", user.id);
+      // DO NOT re-add a `sb.from("subscription").update(...)` here. It was
+      // removed in ENG-582 because it never worked and never could: `sb` is the
+      // MEMBER's RLS-scoped client, and `public.subscription` exposes only
+      // SELECT policies to `authenticated`. The update matched zero rows,
+      // returned no error, and its result was unchecked — a silent no-op that
+      // made this route look idempotent while it stacked a Customer per visit.
+      // Persisting `stripe_customer_id` / `stripe_subscription_id` is the be
+      // `stripe-webhook`'s job (it runs as service role). Giving the BFF a write
+      // path here would break the service-role-only guardrail.
 
       return ok({
         clientSecret: intent.client_secret ?? null,
@@ -162,7 +301,54 @@ export async function POST() {
     }
 
     // ---- Branch A: first purchase / lapsed return ----------------------
-    const subscription = await stripe.subscriptions.create({
+    // Reuse the member's already-pending Subscription instead of stacking
+    // another one (ENG-582). `subscriptions.list` is STRONGLY consistent —
+    // verified live: a Subscription created at t+0 comes back from the very next
+    // list call, already carrying a usable `confirmation_secret` — so a rapid
+    // SEQUENTIAL second page load always sees the first one's work.
+    //
+    // Strong consistency does NOT close the CONCURRENT case: two overlapping
+    // requests both list before either creates, so both miss. That is a
+    // list-then-create TOCTOU, and it is closed by the idempotency key on the
+    // create below — not by this lookup.
+    //
+    // Nothing is ever deleted here: Stripe expires an untouched `incomplete`
+    // Subscription after ~23h, so stale ones fall out of this list by themselves.
+    const pending = await stripe.subscriptions.list({
+      customer: customerId,
+      status: "incomplete",
+      limit: 100,
+      // Re-expanded so a REUSED Subscription hands back its CURRENT secret
+      // rather than a remembered one — ENG-581's `confirmation_secret` read
+      // applied to the reuse path. Both expand paths verified accepted (HTTP
+      // 200) on the list endpoint at 2026-06-24.dahlia.
+      expand: ["data.latest_invoice.confirmation_secret", "data.latest_invoice.payment_intent"],
+    });
+    // A member can legitimately hold several pending Subscriptions (anyone who
+    // loaded /checkout before this fix shipped does). Pick deterministically —
+    // newest first, id as tie-break — so two loads in a row resolve to the SAME
+    // Subscription instead of alternating between them.
+    //
+    // Adopting a Stripe object into the billing flow means re-asserting every
+    // property the create path guarantees, not just the price. A subscription
+    // made under this Customer by the Stripe dashboard, a support action, or a
+    // future flow would otherwise be reused with:
+    //  - no `metadata.app_user_id` → the member pays, the be `stripe-webhook`
+    //    cannot resolve the subscriber, and they are charged but never activated
+    //    (silent, and the worst outcome in this file);
+    //  - `cancel_at_period_end: false` → we would silently hand them an
+    //    AUTO-RENEWING pass, breaking the one rule the product is built on.
+    const reusable =
+      newestFirst(
+        pending.data.filter(
+          (s) =>
+            s.items?.data?.some((item) => item.price?.id === process.env.STRIPE_PRICE_ID) &&
+            s.metadata?.app_user_id === user.id &&
+            s.cancel_at_period_end === true,
+        ),
+      )[0] ?? null;
+
+    const subCreateParams: Stripe.SubscriptionCreateParams = {
       customer: customerId,
       items: [{ price: process.env.STRIPE_PRICE_ID! }],
       payment_behavior: "default_incomplete",
@@ -190,7 +376,22 @@ export async function POST() {
       // REQUIRED — the be `stripe-webhook` fn resolves the subscriber by this
       // metadata key. Do not rename/remove it.
       metadata: { app_user_id: user.id },
-    });
+    };
+
+    // The list above closes the SEQUENTIAL race; this key closes the CONCURRENT
+    // one. Two overlapping POSTs — a double click, two tabs, or React StrictMode
+    // double-invoking the checkout screen's on-mount effect (which does not abort
+    // its in-flight request) — both find nothing pending and both create. Same
+    // key => Stripe returns the SAME Subscription to both.
+    //
+    // Without this, the Customer was collapsed by its own key while the
+    // Subscription was not, so concurrent loads still stacked Subscriptions —
+    // i.e. exactly the bug this ticket exists to kill, just harder to see.
+    const subscription =
+      reusable ??
+      (await stripe.subscriptions.create(subCreateParams, {
+        idempotencyKey: idempotencyKey("subscription", user.id, subCreateParams),
+      }));
 
     const latestInvoice = subscription.latest_invoice as {
       confirmation_secret?: { type?: string | null; client_secret?: string | null } | null;
@@ -216,16 +417,23 @@ export async function POST() {
       // screen renders a dead Pay button with no error anywhere. Never let that
       // pass silently again — this log is the tripwire.
       console.error(
-        "[checkout] subscription %s created but no client secret found on latest_invoice (keys: %s)",
+        "[checkout] subscription %s (%s) has no client secret on latest_invoice (keys: %s)",
         subscription.id,
+        reusable ? "reused" : "created",
         latestInvoice && typeof latestInvoice === "object" ? Object.keys(latestInvoice).join(",") : String(latestInvoice),
       );
     }
 
-    await sb.from("subscription").update({
-      stripe_customer_id: customerId,
-      stripe_subscription_id: subscription.id,
-    }).eq("user_id", user.id);
+    // DO NOT re-add a `sb.from("subscription").update(...)` here — see the note
+    // in Branch B. RLS denies it silently (0 rows, no error), which is exactly
+    // why `stripe_customer_id` stayed null and this route stacked a Customer and
+    // a Subscription on every visit. The be `stripe-webhook` writes both ids as
+    // service role once a payment lands; that is the only supported write path.
+    //
+    // A side effect worth naming (ENG-582): because the route now hands back the
+    // SAME pending Subscription on every load, two open tabs can no longer pay
+    // against different Subscriptions — so the webhook can no longer record a
+    // `stripe_subscription_id` that differs from the one actually paid.
 
     return ok({
       clientSecret,

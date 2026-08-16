@@ -262,3 +262,84 @@ already serving :3000, the e2e suite tests **that** code and reports green.
 - **Gotcha:** use `localhost`, **not** `127.0.0.1` — Next dev blocks cross-origin
   dev resources from `127.0.0.1`, hydration never completes, and the sign-in form
   silently degrades to a native GET (it looks like an auth failure, it is not).
+
+## The BFF cannot write `subscription` — and the dead write hid a duplicate-object bug
+**(2026-08-16, ENG-582)** `/api/subscription/checkout` created a NEW Stripe Customer
+**and** a NEW Subscription on every single page load — 5 loads produced 5 of each in
+the live sandbox.
+- **Symptom:** duplicate Customers/Subscriptions pile up; the route's existing
+  `if (customerId) { reuse } else { create }` never takes the reuse branch.
+- **Cause:** the reuse branch keys off `subscription.stripe_customer_id`, which this
+  route can never persist. `public.subscription` has only `subscription_select_self`
+  / `subscription_select_admin` — **both SELECT**. `sb.from("subscription").update(...)`
+  therefore matches **zero rows, returns no error, and the result was unchecked.**
+  A silent no-op that made the route *look* idempotent.
+- **Do this:** never add a write path or an RLS policy for `subscription` — writes are
+  service-role-only and the be `stripe-webhook` owns them. When a BFF route needs to
+  remember something it cannot store, recover it from the third party instead.
+
+## Stripe `customers.search` is eventually consistent — ~36s lag, measured
+**(2026-08-16, ENG-582)** Do NOT use `customers.search` as a primary "does this
+already exist?" lookup. Measured live at `2026-06-24.dahlia`: a Customer created at
+t+0 did **not** appear in `customers.search({ query: "metadata['app_user_id']:'…'" })`
+for **36 seconds**. The duplicates it was supposed to prevent were created 24-36s
+apart — squarely inside that window, so a search-only fix still duplicates.
+- **Strongly consistent alternatives (both verified at t+0):**
+  `customers.list({ email })` and `subscriptions.list({ customer, status })`.
+  Use those; keep `search` only as a fallback (e.g. no email on the auth record).
+- **Never call `customers.list()` without a filter** — it returns other members'
+  Customers, and picking one cross-wires billing. Guard on the email being present.
+- `subscriptions.list` accepts `expand: ["data.latest_invoice.confirmation_secret"]`
+  (and the legacy `data.latest_invoice.payment_intent`), so a REUSED subscription can
+  hand back a current, payable `client_secret` rather than a remembered one.
+
+## Deduping against Stripe: sort deterministically AND stably, `created` ties are real
+**(2026-08-16, ENG-582)** Any member who hit the buggy route already owns several
+Customers under one `app_user_id`, so lookups return N results in production, not one.
+Take the newest by `created` **with the id as a tie-break** — `created` is only
+second-granular, so ties are real: a probe run that seeded 5 customers back-to-back
+produced tied timestamps (2 in one second, 3 in the next). (The 5 duplicates that
+prompted the ticket happen to be 24-36s apart, i.e. untied — the tie-break is for the
+back-to-back case, which is exactly what a double-click produces.) Without the
+tie-break the pick can alternate between requests, which just relocates the
+duplication. Assert stability in tests by resolving twice and comparing, not merely
+that *a* result came back. Never auto-delete or merge the
+duplicates — destroying payment records is not a route's job; stale `incomplete`
+subscriptions expire on their own after ~23h.
+
+## Stripe idempotency keys: digest the body INTO the key
+**(2026-08-16, ENG-582)** A deterministic `idempotencyKey` on `customers.create`
+collapses two genuinely concurrent requests (double-click, React StrictMode's double
+effect) into one Customer — verified live. But Stripe **rejects a reused key whose
+parameters differ** (`idempotency_error`, also verified), and a member's name/postcode
+legitimately change between visits. Include a hash of the request body in the key so
+each distinct body gets its own key; identical concurrent requests still collapse, and
+a profile edit can never turn into a hard 502.
+
+**Bucket the key in time (10 min), and key EVERY create in the flow.** Two follow-ons,
+both found in review:
+- Stripe replays a key for **24h**, which outlives what the key protects. A deleted
+  Customer replays as a dead `cus_…` id (→ 502 until the key ages out), and an
+  untouched `incomplete` Subscription expires at ~23h, so a 24h key has a window where
+  the list correctly misses the expired sub, the create replays, and you hand back an
+  **expired** `client_secret` — ENG-581's dead Pay button from a new direction. Add a
+  short bucket: `Math.floor(Date.now() / 600_000)` in the key.
+- **A strongly-consistent lookup does NOT close the concurrent case.** `list`-then-
+  `create` is a TOCTOU: two overlapping requests both list before either creates, so
+  both miss. Keying only `customers.create` collapsed the Customer while Subscriptions
+  still stacked — the same bug, harder to see. Key every create in the flow, and prove
+  it with a `Promise.all([POST(), POST()])` test; every sequential
+  `await POST(); await POST();` test passes while the concurrent bug is live.
+
+## Adopting a third-party object? Re-assert EVERY property the create path guarantees
+**(2026-08-16, ENG-582)** When `/checkout` started reusing an existing `incomplete`
+Stripe Subscription, the filter checked only the price. That silently accepts a
+subscription made by the Stripe dashboard, a support action, or a future flow:
+- missing `metadata.app_user_id` → the member pays and the be `stripe-webhook` cannot
+  resolve the subscriber: **charged but never activated**, with no error anywhere;
+- `cancel_at_period_end: false` → we hand out an **auto-renewing** pass, breaking the
+  one rule the product is built on.
+Reuse filters must re-assert every invariant the create call sets — price **and**
+metadata **and** the pre-armed cancel. Same rule for the Customer lookup (match on
+`metadata.app_user_id`, and re-check it locally rather than trusting the search query
+string to have scoped the result).
