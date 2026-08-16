@@ -78,6 +78,41 @@ describe("Sidebar nav icons", () => {
   });
 });
 
+// ENG-583/2. The visual half of this (the CSS ellipsis actually engaging) can only
+// be proven with a real layout engine — see e2e/signin-cta-sidebar-email.spec.ts.
+// What is assertable here is that the markup never truncates or masks the address
+// itself, and that the full value stays reachable once CSS clips it.
+describe("Sidebar account email", () => {
+  const LONG: SidebarUser = { ...USER, email: "renofathoni23+2@gmail.com" };
+
+  it("renders the full address in the DOM — truncation is CSS's job, not the markup's", () => {
+    const { container } = render(<Sidebar user={LONG} />);
+    const email = container.querySelector(".sidebar-user .meta .email");
+    expect(email?.textContent).toBe("renofathoni23+2@gmail.com");
+  });
+
+  it("exposes the full address via title so a clipped email is still confirmable", () => {
+    const { container } = render(<Sidebar user={LONG} />);
+    const email = container.querySelector(".sidebar-user .meta .email");
+    expect(email?.getAttribute("title")).toBe("renofathoni23+2@gmail.com");
+  });
+
+  it("carries the address on the avatar too, for the rail that hides .meta", () => {
+    const { container } = render(<Sidebar user={LONG} />);
+    const avatar = container.querySelector(".sidebar-user .avatar");
+    expect(avatar?.getAttribute("title")).toBe("renofathoni23+2@gmail.com");
+  });
+
+  it("keeps the Sign out button after the account block, not displaced by it", () => {
+    const { container } = render(<Sidebar user={LONG} />);
+    const footer = container.querySelector(".sidebar-footer");
+    const signout = footer?.querySelector(".sidebar-signout");
+    expect(signout?.textContent?.trim()).toBe("Sign out");
+    // Still the last child of the footer — the email block must not reorder it.
+    expect(footer?.lastElementChild).toBe(signout);
+  });
+});
+
 describe("Sidebar drawer", () => {
   it("starts closed", () => {
     const { container } = render(<Sidebar user={USER} />);
