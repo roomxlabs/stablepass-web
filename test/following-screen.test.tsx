@@ -19,7 +19,7 @@ const FEED_POSTS = [
 ];
 const FEED_HORSES = [{ id: "fh1", display_name: "Mahogany", trainer: { name: "G. Waterhouse" } }];
 
-let subStatus: string;
+let subRow: { status: string; trial_ends_at: string | null; current_period_end: string | null };
 let horseFollows: unknown[];
 let trainerFollows: unknown[];
 let feedStatus: 200 | 402;
@@ -66,7 +66,9 @@ function fetchImpl() {
 }
 
 beforeEach(() => {
-  subStatus = "trial";
+  // Not-gated default: an in-flight trial (future `trial_ends_at`) — matches the
+  // pre-ENG-585 default of `subStatus = "trial"` under the old status-only check.
+  subRow = { status: "trial", trial_ends_at: "2099-01-01T00:00:00.000Z", current_period_end: null };
   horseFollows = HORSE_FOLLOWS;
   trainerFollows = TRAINER_FOLLOWS;
   feedStatus = 200;
@@ -74,7 +76,7 @@ beforeEach(() => {
   fromMock.mockReset();
   pushMock.mockClear();
   fromMock.mockImplementation((table: string) => {
-    if (table === "subscription") return chainable({ data: { status: subStatus }, error: null });
+    if (table === "subscription") return chainable({ data: subRow, error: null });
     if (table === "follow") return followBuilder();
     if (table === "horse") return chainable({ data: FEED_HORSES, error: null });
     return chainable({ data: [], error: null }); // reaction, bookmark
@@ -85,7 +87,7 @@ beforeEach(() => {
 describe("FollowingScreen", () => {
   it("renders the followed horses + trainers rails, newest-followed first, with avatar links to the profile", async () => {
     const user = userEvent.setup();
-    render(<FollowingScreen viewerId={VIEWER_ID} />);
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
 
     expect(await screen.findByRole("button", { name: "Nature Strip" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Winx" })).toBeInTheDocument();
@@ -101,7 +103,7 @@ describe("FollowingScreen", () => {
 
   it("hides an empty section (trainers empty → only the horses rail shows)", async () => {
     trainerFollows = [];
-    render(<FollowingScreen viewerId={VIEWER_ID} />);
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
 
     expect(await screen.findByRole("button", { name: "Nature Strip" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Horses" })).toBeInTheDocument();
@@ -112,24 +114,34 @@ describe("FollowingScreen", () => {
     horseFollows = [];
     trainerFollows = [];
     feedPosts = [];
-    render(<FollowingScreen viewerId={VIEWER_ID} />);
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
 
     expect(await screen.findByText(/not following anyone yet/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Nature Strip" })).not.toBeInTheDocument();
   });
 
   it("renders the following feed from /api/feed/following", async () => {
-    render(<FollowingScreen viewerId={VIEWER_ID} />);
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
     expect(await screen.findByText("Mahogany")).toBeInTheDocument();
   });
 
-  it("shows the reactivate prompt (and never the rails) when the subscription is lapsed", async () => {
-    subStatus = "lapsed";
+  it("shows the free-trial-ended wall (and never the rails) when the subscription is lapsed and the member never subscribed", async () => {
+    subRow = { status: "lapsed", trial_ends_at: null, current_period_end: null };
     feedStatus = 402;
-    render(<FollowingScreen viewerId={VIEWER_ID} />);
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
 
-    expect(await screen.findByText(/trial has ended/i)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Reactivate" })).toHaveAttribute("href", "/checkout");
+    expect(await screen.findByText(/your free trial has ended/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Get full access" })).toHaveAttribute("href", "/checkout");
+    expect(screen.queryByRole("button", { name: "Nature Strip" })).not.toBeInTheDocument();
+  });
+
+  it("shows the access-paused wall (and never the rails) when the subscription is lapsed and the member has subscribed before", async () => {
+    subRow = { status: "lapsed", trial_ends_at: null, current_period_end: null };
+    feedStatus = 402;
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={true} />);
+
+    expect(await screen.findByText(/your access has paused/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Buy 30 days" })).toHaveAttribute("href", "/checkout");
     expect(screen.queryByRole("button", { name: "Nature Strip" })).not.toBeInTheDocument();
   });
 });

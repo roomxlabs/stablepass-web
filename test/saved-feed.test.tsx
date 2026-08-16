@@ -17,7 +17,7 @@ const HORSES = [
 ];
 
 // Per-test knobs.
-let subStatus: string;
+let subRow: { status: string; trial_ends_at: string | null; current_period_end: string | null };
 let bookmarkData: unknown[];
 let bookmarkError: { message: string } | null;
 let bookmarkDeleteError: { message: string } | null;
@@ -58,7 +58,9 @@ function bookmarkBuilder() {
 }
 
 beforeEach(() => {
-  subStatus = "trial";
+  // Not-gated default: an in-flight trial (future `trial_ends_at`) — matches the
+  // pre-ENG-585 default of `subStatus = "trial"` under the old status-only check.
+  subRow = { status: "trial", trial_ends_at: "2099-01-01T00:00:00.000Z", current_period_end: null };
   bookmarkData = BOOKMARKS;
   bookmarkError = null;
   bookmarkDeleteError = null;
@@ -66,7 +68,7 @@ beforeEach(() => {
   upsertMock.mockClear();
   orderMock.mockClear();
   fromMock.mockImplementation((table: string) => {
-    if (table === "subscription") return chainable({ data: { status: subStatus }, error: null });
+    if (table === "subscription") return chainable({ data: subRow, error: null });
     if (table === "bookmark") return bookmarkBuilder();
     if (table === "horse") return chainable({ data: HORSES, error: null });
     if (table === "reaction") {
@@ -80,7 +82,7 @@ beforeEach(() => {
 
 describe("SavedFeed", () => {
   it("renders the saved posts, newest-saved-first (query ordered by created_at desc)", async () => {
-    render(<SavedFeed viewerId={VIEWER_ID} />);
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
 
     expect(await screen.findByText("Nature Strip")).toBeInTheDocument();
     expect(screen.getByText("Winx")).toBeInTheDocument();
@@ -95,7 +97,7 @@ describe("SavedFeed", () => {
 
   it("unsave removes the card from the list", async () => {
     const user = userEvent.setup();
-    render(<SavedFeed viewerId={VIEWER_ID} />);
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
     await screen.findByText("Nature Strip");
 
     // Every card is saved → its bookmark button is labelled "Remove bookmark".
@@ -108,7 +110,7 @@ describe("SavedFeed", () => {
   it("restores the card if the unsave delete fails", async () => {
     bookmarkDeleteError = { message: "delete failed" };
     const user = userEvent.setup();
-    render(<SavedFeed viewerId={VIEWER_ID} />);
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
     await screen.findByText("Nature Strip");
 
     await user.click(screen.getAllByRole("button", { name: "Remove bookmark" })[0]);
@@ -120,7 +122,7 @@ describe("SavedFeed", () => {
 
   it("shows the empty state when there are no saved posts", async () => {
     bookmarkData = [];
-    render(<SavedFeed viewerId={VIEWER_ID} />);
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
 
     expect(await screen.findByText(/saved any posts yet/i)).toBeInTheDocument();
     expect(screen.queryByText("Nature Strip")).not.toBeInTheDocument();
@@ -128,18 +130,27 @@ describe("SavedFeed", () => {
 
   it("shows the error state when the bookmark read fails", async () => {
     bookmarkError = { message: "boom" };
-    render(<SavedFeed viewerId={VIEWER_ID} />);
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
 
     expect(await screen.findByText(/couldn.t load your saved posts/i)).toBeInTheDocument();
     expect(screen.queryByText("Nature Strip")).not.toBeInTheDocument();
   });
 
-  it("shows the reactivate prompt when the subscription is lapsed (gated)", async () => {
-    subStatus = "lapsed";
-    render(<SavedFeed viewerId={VIEWER_ID} />);
+  it("shows the free-trial-ended wall when the subscription is lapsed (gated) and the member never subscribed", async () => {
+    subRow = { status: "lapsed", trial_ends_at: null, current_period_end: null };
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
 
-    expect(await screen.findByText(/trial has ended/i)).toBeInTheDocument();
+    expect(await screen.findByText(/your free trial has ended/i)).toBeInTheDocument();
     expect(screen.queryByText("Nature Strip")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Reactivate" })).toHaveAttribute("href", "/checkout");
+    expect(screen.getByRole("link", { name: "Get full access" })).toHaveAttribute("href", "/checkout");
+  });
+
+  it("shows the access-paused wall when the subscription is lapsed (gated) and the member has subscribed before", async () => {
+    subRow = { status: "lapsed", trial_ends_at: null, current_period_end: null };
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={true} />);
+
+    expect(await screen.findByText(/your access has paused/i)).toBeInTheDocument();
+    expect(screen.queryByText("Nature Strip")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Buy 30 days" })).toHaveAttribute("href", "/checkout");
   });
 });

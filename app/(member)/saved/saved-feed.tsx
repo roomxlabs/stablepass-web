@@ -6,6 +6,8 @@
 // (RLS-scoped supabaseBrowser) instead of the ranked feed BFF, records NO impressions,
 // and — since this IS the "saved" list — an unsave removes the card.
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
+import { AccessWall } from "@/components/access-wall";
 import { PostCard } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
@@ -50,7 +52,9 @@ export function relativeTime(iso: string | null): string {
   return `${days}d ago`;
 }
 
-export function SavedFeed({ viewerId }: { viewerId: string }) {
+// `everSubscribed` — see the note in ../explore/explore-feed.tsx (server-resolved
+// boolean; the Stripe id never reaches the browser).
+export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; everSubscribed: boolean }) {
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [cursor, setCursor] = useState<string | null>(null); // last bookmark.created_at seen
   const [hasMore, setHasMore] = useState(false);
@@ -73,9 +77,18 @@ export function SavedFeed({ viewerId }: { viewerId: string }) {
       // Content gate (client-side, mirrors HorsesGrid/TrainersGrid) — first page only.
       if (!forCursor) {
         const { data: sub } = await sb
-          .from("subscription").select("status").eq("user_id", viewerId).maybeSingle();
-        const status = (sub as { status?: string } | null)?.status;
-        if (!status || !["trial", "active"].includes(status)) {
+          .from("subscription").select(ACCESS_COLUMNS).eq("user_id", viewerId).maybeSingle();
+        // ENG-585: this was `!["trial","active"].includes(status)` on a
+        // status-only select, so an `active` member whose `current_period_end`
+        // had passed counted as entitled here, ran the read, got nothing back
+        // (RLS denies them correctly) and saw an EMPTY screen instead of the
+        // wall. `hasAccess()` is the shared rule (lib/api/access.ts) — pure and
+        // client-safe, already imported this way by the expiry banner.
+        //
+        // Strictly stricter than the test it replaces: identical for entitled,
+        // lapsed and canceled rows, and it additionally catches expired ones. It
+        // can only wall MORE members, never reveal content to one.
+        if (!hasAccess(sub as AccessRow | null)) {
           setGated(true);
           return;
         }
@@ -225,15 +238,7 @@ export function SavedFeed({ viewerId }: { viewerId: string }) {
       <div className="feed-col">
         <h1 className="section-title-web" style={{ marginBottom: 20 }}>Saved</h1>
 
-        {gated && (
-          <div className="aside-card">
-            <h3>Your trial has ended.</h3>
-            <p style={{ color: "var(--muted)", marginBottom: 16 }}>
-              Reactivate your subscription to see your saved posts.
-            </p>
-            <a className="btn btn-primary" href="/checkout">Reactivate</a>
-          </div>
-        )}
+        {gated && <AccessWall everSubscribed={everSubscribed} />}
 
         {!gated && error && (
           <p style={{ color: "var(--muted)", padding: "24px 0" }}>Couldn&rsquo;t load your saved posts.</p>

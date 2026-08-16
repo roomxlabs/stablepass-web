@@ -103,7 +103,7 @@ describe("ExploreFeed", () => {
   it("renders a PostCard per enriched post row (horse names from the enrichment lookup)", async () => {
     global.fetch = fetchImpl(200) as unknown as typeof fetch;
 
-    render(<ExploreFeed viewerId={VIEWER_ID} />);
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
 
     expect(await screen.findByText("Mahogany")).toBeInTheDocument();
     expect(screen.getByText("Winx")).toBeInTheDocument();
@@ -113,7 +113,7 @@ describe("ExploreFeed", () => {
     const fetchMock = fetchImpl(200);
     global.fetch = fetchMock as unknown as typeof fetch;
 
-    render(<ExploreFeed viewerId={VIEWER_ID} />);
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
     await screen.findByText("Mahogany");
 
     await waitFor(() => {
@@ -125,21 +125,31 @@ describe("ExploreFeed", () => {
     });
   });
 
-  it("shows the reactivate prompt (no posts) when the feed is gated (402)", async () => {
+  it("shows the free-trial-ended wall (no posts) when the feed is gated (402) and the member never subscribed", async () => {
     global.fetch = fetchImpl(402) as unknown as typeof fetch;
 
-    render(<ExploreFeed viewerId={VIEWER_ID} />);
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
 
-    expect(await screen.findByText(/trial has ended/i)).toBeInTheDocument();
+    expect(await screen.findByText(/your free trial has ended/i)).toBeInTheDocument();
     expect(screen.queryByText("Mahogany")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Reactivate" })).toHaveAttribute("href", "/checkout");
+    expect(screen.getByRole("link", { name: "Get full access" })).toHaveAttribute("href", "/checkout");
+  });
+
+  it("shows the access-paused wall (no posts) when the feed is gated (402) and the member has subscribed before", async () => {
+    global.fetch = fetchImpl(402) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={true} />);
+
+    expect(await screen.findByText(/your access has paused/i)).toBeInTheDocument();
+    expect(screen.queryByText("Mahogany")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Buy 30 days" })).toHaveAttribute("href", "/checkout");
   });
 
   it("clicking a reaction button upserts the viewer's own reaction row", async () => {
     global.fetch = fetchImpl(200) as unknown as typeof fetch;
     const user = userEvent.setup();
 
-    render(<ExploreFeed viewerId={VIEWER_ID} />);
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
     await screen.findByText("Mahogany");
 
     const fireButtons = screen.getAllByRole("button", { name: "Fire" });
@@ -156,7 +166,7 @@ describe("ExploreFeed", () => {
   it("renders no Following tab (Explore is a single view since W13)", async () => {
     global.fetch = fetchImpl(200) as unknown as typeof fetch;
 
-    render(<ExploreFeed viewerId={VIEWER_ID} />);
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
     await screen.findByText("Mahogany");
 
     expect(screen.queryByRole("button", { name: "Following" })).not.toBeInTheDocument();
