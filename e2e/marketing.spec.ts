@@ -175,16 +175,47 @@ test.describe("with JavaScript disabled", () => {
     await expect(page.locator(".foot-col h4")).toHaveText(["Explore", "Support", "Legal"]);
     await expect(page.locator(".nav-logo img")).toBeVisible();
 
-    const invisible = await page.evaluate(() =>
-      [...document.querySelectorAll<HTMLElement>(".marketing *")]
-        .filter((el) => getComputedStyle(el).opacity === "0")
-        .map((el) => el.tagName + "." + el.className),
+    // ENG-588: four of the mockup's components are opacity:0 until :hover /
+    // :focus-visible — the tile overlays (.t-over), the trainer card overlays
+    // (.tr-over), and the CTA band's fill and trial line (.cta-fill,
+    // .cta-trial-line). That is the design, not a section stuck behind a failed
+    // reveal, and it is pure CSS, so it behaves identically with scripting off.
+    //
+    // Nothing is unreachable as a result: marketing.css closes with an
+    // `@media (hover:none)` block that shows all of them outright on touch, where
+    // hover never fires. This sweep runs on hover-capable desktop Chromium, which
+    // is why they read as 0 here.
+    //
+    // W1 wrote this sweep against a shell that had none of them, so it saw nothing
+    // and its comment says as much. Excluding them by exact class keeps the
+    // assertion biting on everything else, rather than deleting it or loosening it
+    // to a pattern that would swallow a real regression.
+    const HOVER_AFFORDANCES = ["t-over", "tr-over", "cta-fill", "cta-trial-line"];
+    const invisible = await page.evaluate(
+      (affordances) =>
+        [...document.querySelectorAll<HTMLElement>(".marketing *")]
+          .filter((el) => getComputedStyle(el).opacity === "0")
+          .filter((el) => !affordances.some((cls) => el.classList.contains(cls)))
+          .map((el) => el.tagName + "." + el.className),
+      HOVER_AFFORDANCES,
     );
     expect(invisible).toEqual([]);
 
-    // The sweep above is vacuous while the shell has no .rv markup, so measure the
-    // gate itself: with the page's scripts blocked the js class never lands, and a
-    // revealable section must therefore be fully visible rather than at opacity 0.
+    // ...and the exclusion cannot quietly grow: it is by exact class name, and the
+    // excluded set must be precisely the overlays the mockup defines — one per
+    // tile and one per trainer card. Anything else at opacity 0 still fails above.
+    const excluded = await page.evaluate((affordances) =>
+      Object.fromEntries(
+        affordances.map((cls) => [cls, document.querySelectorAll(`.marketing .${cls}`).length]),
+      ),
+      HOVER_AFFORDANCES,
+    );
+    expect(excluded).toEqual({ "t-over": 4, "tr-over": 19, "cta-fill": 1, "cta-trial-line": 1 });
+
+    // ENG-588 filled the shell with .rv markup, so the sweep above is no longer
+    // vacuous. Keep measuring the gate itself anyway: with the page's scripts
+    // blocked the js class never lands, and a revealable section must therefore be
+    // fully visible rather than at opacity 0.
     expect(await revealProbeOpacity(page)).toBe("1");
 
     // The nav anchors are plain hrefs, so they still work without a handler.

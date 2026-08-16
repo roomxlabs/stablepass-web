@@ -201,3 +201,33 @@ on a free port from your worktree and run with a THROWAWAY config that sets
 `use.baseURL` to it and declares no `webServer`; delete the config before
 committing. Confirm the server is yours: `lsof -a -p <pid> -d cwd -Fn` must print
 your worktree path.
+## Playwright's `reuseExistingServer: true` makes parallel worktrees test each other
+`playwright.config.ts` pins port 3000 with `reuseExistingServer: true`. When the loop
+runs several per-ticket worktrees at once, the first worker to start owns :3000 and
+**every other worker's suite silently runs against that worker's branch**. Hit for real
+on ENG-588: the suite reported 6 failures ("#how has no target", 0 trainer cards)
+because it was driving ENG-590's dev server, and an earlier run had already overwritten
+this ticket's screenshots with the other branch's page. It fails green just as easily as
+it fails red.
+
+Symptom → `curl -s localhost:3000/ | head` does not match your branch, and
+`lsof -ti :3000 | xargs -I{} lsof -a -p {} -d cwd -Fn` names someone else's worktree.
+
+Do-this → run with a throwaway config that pins a unique port, `cwd` to your worktree
+and `reuseExistingServer: false`; keep `testMatch` scoped to your specs so the member
+specs (which need Supabase) do not drag the run down. Do not kill the other worker's
+server. The permanent fix — a per-worktree port — is not yet ticketed.
+
+## The mockup's hover affordances are `opacity:0` by design
+`.t-over`, `.tr-over`, `.cta-fill` and `.cta-trial-line` sit at opacity 0 until
+`:hover`/`:focus-visible`, and `marketing.css` ends with an `@media (hover:none)` block
+that shows them outright on touch. A blanket "nothing is stuck at opacity 0" sweep will
+flag all 25 of them on desktop Chromium. Exclude them by exact class name rather than
+loosening the sweep, or it stops catching a genuinely failed reveal.
+
+## W1's reveal script forces `suppressHydrationWarning` on every `.rv` element
+The layout's inline script adds `.in` to `.rv` during parse, before React hydrates, so
+each reveal element mismatches at hydration. W1 put `suppressHydrationWarning` on the
+`.marketing` wrapper for the same reason, but the prop does not cascade — every `.rv`
+element needs its own. Loudest under `prefers-reduced-motion`, where the script reveals
+everything up front instead of waiting on the observer.
