@@ -174,7 +174,10 @@ test("ENG-567 checkout — with no Stripe keys the full layout still renders wit
 
     await expect(page.getByText("Order summary")).toBeVisible();
     await expect(page.getByText("30 days of full access", { exact: true })).toBeVisible();
-    await expect(page.getByText(/connect a Stripe key to enable checkout/i)).toBeVisible();
+    // ENG-581: the not-ready copy is now state-specific. This is the genuine
+    // 502 stripe_unavailable path, so it — and only it — may mention configuration.
+    await expect(page.getByText(/Payments are not configured yet/i)).toBeVisible();
+    await expect(page.getByText(/connect a Stripe key/i)).toHaveCount(0);
     await expect(page.getByRole("button", { name: /Pay/ })).toBeDisabled();
 
     await page.screenshot({ path: ".rx/review/eng-567-checkout-no-stripe.png", fullPage: true });

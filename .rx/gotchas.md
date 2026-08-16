@@ -226,3 +226,39 @@ themselves when local Supabase is unreachable — i.e. they are silently absent 
 CI, so a narrowed select there goes green everywhere. Pin the column list in a
 vitest test (see `test/account-page.test.tsx`) and mutation-check it by
 narrowing the select and confirming the test actually fails.
+
+## Stripe object shapes move between API versions — never trust a mock alone
+**(2026-08-16, ENG-581)** Checkout returned `clientSecret: null` on a **200**, so
+Elements never mounted and nobody could pay — invisible for weeks because every
+test mocked the *old* Stripe shape.
+- **Symptom:** `/api/subscription/checkout` 200s, `clientSecret` is `null`, the
+  Pay button renders disabled, no error anywhere.
+- **Cause:** `stripe@22` pins `2026-06-24.dahlia`, where `Invoice.payment_intent`
+  **no longer exists**. The first-purchase secret moved to
+  `Invoice.confirmation_secret` (`{ type, client_secret }`). Stripe does **not**
+  error on the stale expand — the field just reads back absent.
+- **Do this:** expand + read `latest_invoice.confirmation_secret` first. Verify
+  any Stripe shape against the **live sandbox** (raw REST or a node script), not
+  against a mock or the SDK's `.d.ts`. `expand` **is** strictly validated (an
+  unknown path 400s "This property cannot be expanded"), so a path that is
+  accepted is a real property. `confirmation_secret` is a tagged union — accept
+  only `type === "payment_intent"`; a $0 invoice yields a SetupIntent secret.
+- **Note:** `lib/stripe.ts` calls `new Stripe(key)` with **no** `apiVersion`, so
+  every request uses the SDK default, not the account's pinned version. Bumping
+  the `stripe` package silently changes the wire shape for every route.
+
+## Don't let a mocked unit test be the only gate on a Stripe/BFF contract
+**(2026-08-16, ENG-581)** The suite was green against a checkout that could not
+take a payment. When a route's shape comes from a third party, add a test that
+mocks **only** the new shape (no legacy key at all) and confirm it **fails
+against the pre-fix code** — otherwise the test is proving nothing.
+
+## Two dev servers: `reuseExistingServer` will silently test the wrong worktree
+**(2026-08-16, ENG-581)** `playwright.config.ts` hardcodes
+`baseURL: localhost:3000` + `reuseExistingServer: true`. If another worktree is
+already serving :3000, the e2e suite tests **that** code and reports green.
+- **Do this:** when a sibling worktree is running, start your own server on a
+  different port and run Playwright with a config overriding `baseURL`.
+- **Gotcha:** use `localhost`, **not** `127.0.0.1` — Next dev blocks cross-origin
+  dev resources from `127.0.0.1`, hydration never completes, and the sign-in form
+  silently degrades to a native GET (it looks like an auth failure, it is not).

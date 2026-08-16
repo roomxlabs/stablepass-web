@@ -36,9 +36,23 @@ type Pricing = {
   newPeriodEnd: string | null;
 };
 
+// The not-ready states are deliberately SPLIT. They used to be one
+// ("unavailable") rendering one hardcoded line — "connect a Stripe key to enable
+// checkout" — for every possible failure. When the route started returning 200
+// with a null clientSecret (ENG-581), that copy told a correctly-configured
+// operator their key was missing and sent them hunting a misconfiguration that
+// did not exist. A configuration hint must therefore be shown ONLY when the
+// server actually reported "no payment provider configured".
 type CheckoutState =
   | { status: "loading" }
-  | { status: "unavailable" }
+  // 502 stripe_unavailable — the designed degradation for a genuinely absent
+  // STRIPE_SECRET_KEY. This is the ONLY state that may mention configuration.
+  | { status: "unconfigured" }
+  // Anything else: the call succeeded (or failed unexpectedly) but we have no
+  // usable secret. That is a real error, not an environment hint — and it is
+  // always logged, because rendering a dead Pay button silently is what hid the
+  // original bug for weeks.
+  | { status: "error" }
   | { status: "ready"; clientSecret: string; publishableKey: string };
 
 // A$ rather than a bare $ — an en-AU locale renders AUD as the local "$19.00",
@@ -196,10 +210,43 @@ function PayLabel({ pricing }: { pricing: Pricing | null }) {
   return <>Pay {formatMoney(pricing.unitAmount, pricing.currency)} · 30 days</>;
 }
 
-// No real Stripe keys in this environment (and the graceful-degradation state
-// for any other checkout failure) — a complete, screenshot-able layout with a
-// disabled Pay affordance instead of a live Payment Element.
-function PaymentPlaceholder({ pricing }: { pricing: Pricing | null }) {
+// The not-ready payment slot — a complete, screenshot-able layout with a
+// disabled Pay affordance instead of a live Payment Element. The layout is the
+// mockup's (04-checkout.html) in every variant; only the message block changes,
+// so the screen never jumps between states.
+// Derived from CheckoutState rather than restated, so adding a fourth state is a
+// compile error here instead of a silently-mismapped placeholder.
+type PlaceholderVariant = Exclude<CheckoutState["status"], "ready">;
+
+function PaymentNotice({ variant }: { variant: PlaceholderVariant }) {
+  if (variant === "error") {
+    // Uses the design system's existing .form-error (red rule + red text) rather
+    // than a bespoke style, and role="alert" so it is announced — this is a real
+    // failure, not a passive hint. Deliberately says NOTHING about keys or
+    // configuration: the key is fine, the payment could not be started.
+    return (
+      <div className="form-error" role="alert">
+        We couldn&rsquo;t start a secure payment. Nothing has been charged — please refresh to try again, and contact
+        support if it keeps happening.
+      </div>
+    );
+  }
+
+  const message =
+    variant === "unconfigured"
+      ? // The genuinely-absent-key degradation (route said 502 stripe_unavailable).
+        // Deliberately free of dev-speak: if a production key were ever missing a
+        // paying member reads this, and "this environment" means nothing to them.
+        // The operator gets the specifics from the console log + the 502 code.
+        "Payments are not configured yet. Please try again shortly."
+      : "Preparing secure payment…";
+
+  return (
+    <p style={{ fontSize: 13.5, color: "var(--muted)", margin: "0 0 20px", lineHeight: 1.55 }}>{message}</p>
+  );
+}
+
+function PaymentPlaceholder({ pricing, variant }: { pricing: Pricing | null; variant: PlaceholderVariant }) {
   return (
     <>
       <div className="input-group">
@@ -211,9 +258,7 @@ function PaymentPlaceholder({ pricing }: { pricing: Pricing | null }) {
           </div>
         </div>
       </div>
-      <p style={{ fontSize: 13.5, color: "var(--muted)", margin: "0 0 20px", lineHeight: 1.55 }}>
-        Secure payment — connect a Stripe key to enable checkout.
-      </p>
+      <PaymentNotice variant={variant} />
       <div className="checkout-actions">
         <button type="button" className="btn btn-primary btn-large btn-block" disabled>
           <PayLabel pricing={pricing} />
@@ -236,10 +281,13 @@ export function CheckoutForm({ trialDaysLeft }: { trialDaysLeft: number }) {
       let res: Response;
       try {
         res = await fetch("/api/subscription/checkout", { method: "POST" });
-      } catch {
+      } catch (err) {
         // A network failure must land on the placeholder, not leave the screen
-        // stuck on "loading" forever with an unhandled rejection.
-        if (!cancelled) setState({ status: "unavailable" });
+        // stuck on "loading" forever with an unhandled rejection. It is an
+        // error, NOT a configuration problem — the server was never reached, so
+        // we know nothing about whether a key is present.
+        console.error("[checkout] request to /api/subscription/checkout failed", err);
+        if (!cancelled) setState({ status: "error" });
         return;
       }
       if (cancelled) return;
@@ -257,13 +305,38 @@ export function CheckoutForm({ trialDaysLeft }: { trialDaysLeft: number }) {
       }
 
       if (!res.ok) {
-        setState({ status: "unavailable" });
+        // ONLY the route's designed "no payment provider configured" 502 earns
+        // the configuration message (.rx/guardrails.md #4 keeps that
+        // degradation working). Every other non-ok status is a real error.
+        const code: string | undefined = body?.error?.code;
+        // `stripe_unavailable` means specifically "no STRIPE_SECRET_KEY". Stripe
+        // outages / bad price ids now come back as `stripe_error` and fall
+        // through to the error state below.
+        if (res.status === 502 && code === "stripe_unavailable") {
+          console.error("[checkout] payments are not configured (502 stripe_unavailable)");
+          setState({ status: "unconfigured" });
+          return;
+        }
+        console.error("[checkout] /api/subscription/checkout returned %s (code: %s)", res.status, code ?? "none");
+        setState({ status: "error" });
         return;
       }
       const clientSecret: string | undefined = data?.clientSecret;
       const publishableKey: string | undefined = data?.publishableKey;
       if (!clientSecret || !publishableKey) {
-        setState({ status: "unavailable" });
+        // 200 OK but nothing to pay with. This is ENG-581's exact signature —
+        // the key was valid and Stripe answered, but the secret had moved to
+        // `latest_invoice.confirmation_secret` and we read a field that no
+        // longer exists. It must NOT render the configuration hint (that is what
+        // sent the DRI chasing an env problem that did not exist), and it must
+        // be logged, because a silently-dead Pay button is invisible in prod.
+        console.error(
+          "[checkout] 200 OK but no usable payment secret (clientSecret: %s, publishableKey: %s, mode: %s)",
+          clientSecret ? "present" : "MISSING",
+          publishableKey ? "present" : "MISSING",
+          data?.mode ?? "unknown",
+        );
+        setState({ status: "error" });
         return;
       }
       setState({ status: "ready", clientSecret, publishableKey });
@@ -289,7 +362,15 @@ export function CheckoutForm({ trialDaysLeft }: { trialDaysLeft: number }) {
               <PayForm pricing={pricing} />
             </Elements>
           ) : (
-            <PaymentPlaceholder pricing={pricing} />
+            <PaymentPlaceholder
+              pricing={pricing}
+              // "loading" keeps the first paint neutral — flashing either an
+              // error or a configuration hint while the POST is still in flight
+              // would be a lie in both directions.
+              // "ready" only lands here if loadStripe hasn't resolved a promise
+              // yet, which is still a loading condition — never an error.
+              variant={state.status === "ready" ? "loading" : state.status}
+            />
           )}
         </div>
         <OrderSummary pricing={pricing} />
