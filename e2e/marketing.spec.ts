@@ -212,9 +212,10 @@ test.describe("with JavaScript disabled", () => {
     );
     expect(excluded).toEqual({ "t-over": 4, "tr-over": 19, "cta-fill": 1, "cta-trial-line": 1 });
 
-    // The sweep above is vacuous while the shell has no .rv markup, so measure the
-    // gate itself: with the page's scripts blocked the js class never lands, and a
-    // revealable section must therefore be fully visible rather than at opacity 0.
+    // ENG-588 filled the shell with .rv markup, so the sweep above is no longer
+    // vacuous. Keep measuring the gate itself anyway: with the page's scripts
+    // blocked the js class never lands, and a revealable section must therefore be
+    // fully visible rather than at opacity 0.
     expect(await revealProbeOpacity(page)).toBe("1");
 
     // The nav anchors are plain hrefs, so they still work without a handler.

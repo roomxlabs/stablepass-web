@@ -216,11 +216,46 @@ describe("guardrails", () => {
   });
 
   // Guardrail #8 — no betting or bookmaker anything on the page.
+  //
+  // ENG-588 split this in two. These terms may never appear at all:
   it("carries no betting or bookmaker copy", () => {
     const offenders = routeGroupSources.filter(({ body }) =>
-      /\b(odds|bookmaker|wager|betting|sportsbet|tab\.com)\b/i.test(body),
+      /\b(odds|bookmaker|wager|sportsbet|tab\.com)\b/i.test(body),
     );
     expect(offenders.map((o) => o.file)).toEqual([]);
+  });
+
+  // ...but "betting" cannot be banned outright, because the two strings that make
+  // guardrail #8 legally true both name it in order to DISCLAIM it: the Important
+  // note and the FAQ answer about shares and prize money. Both are client
+  // signed-off and must ship character for character, so a blanket ban would
+  // forbid the very copy the guardrail exists to require.
+  //
+  // The rule instead: strip the sanctioned prohibitions, and the word must be
+  // gone. That still fails on "bet with us" while permitting "does not sell
+  // betting products" — and if either sentence is ever paraphrased, its strip
+  // stops matching and this test fails too, which is the behaviour we want.
+  const SANCTIONED_PROHIBITIONS = [
+    "does not sell shares in racehorses, syndicates, financial products, betting products, prize money rights, or investment returns",
+    "do not receive prize money, financial returns, betting returns, or sale proceeds",
+  ];
+
+  it("mentions betting only inside a sanctioned prohibition", () => {
+    const offenders = routeGroupSources.filter(({ body }) => {
+      // Source wraps copy across lines; the sentences are contiguous only once
+      // whitespace is collapsed the way the DOM will render it.
+      let rest = body.replace(/\s+/g, " ");
+      for (const allowed of SANCTIONED_PROHIBITIONS) rest = rest.split(allowed).join("");
+      return /\bbetting\b/i.test(rest);
+    });
+    expect(offenders.map((o) => o.file)).toEqual([]);
+  });
+
+  it("still finds both prohibitions in the route group, so the allowance is not dead", () => {
+    const all = routeGroupSources.map(({ body }) => body.replace(/\s+/g, " ")).join(" ");
+    for (const prohibition of SANCTIONED_PROHIBITIONS) {
+      expect(all, `sanctioned prohibition no longer present: ${prohibition}`).toContain(prohibition);
+    }
   });
 
   it("inlines no image anywhere in the route group", () => {
@@ -298,10 +333,14 @@ describe("extracted marketing assets", () => {
         referenced.add(match[1]);
       }
     }
-    // Pin the exact set W1 uses: the wordmark (nav + footer) and the two CSS
-    // backgrounds. A count-based check would not notice a dropped reference.
-    expect([...referenced].sort()).toEqual(["3499d96c.png", "59b40037.jpg", "8d95c6f2.jpg"]);
-    expect([...referenced].filter((name) => !assets.includes(name))).toEqual([]);
+    // W1 pinned the exact three its shell used — the wordmark and the two CSS
+    // backgrounds — because a count-based check would not notice a dropped
+    // reference. ENG-588 ported the twelve content sections, and the route group
+    // now uses the WHOLE extracted set, so the pin becomes an exact set equality.
+    // That keeps W1's intent and strengthens it in both directions: a dropped
+    // reference and an asset nobody uses each break the equality, and neither
+    // needs this list rewritten when the design changes.
+    expect([...referenced].sort()).toEqual([...assets].sort());
   });
 
   // The md5-8 naming makes the set internally consistent, but internal

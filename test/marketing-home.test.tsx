@@ -242,14 +242,26 @@ describe("marketing home — works with scripting off", () => {
    * all twenty-two. See the note in sections/index.tsx.
    */
   it("opts every reveal element out of the hydration check", () => {
+    // Matched per JSX opening TAG rather than per line, so a Prettier reflow that
+    // pushes className onto its own line cannot turn this into a false failure.
+    // `[^<>]` keeps a match inside one tag. The real DOM-level proof that this
+    // works is the "hydrates cleanly" test in e2e/marketing-home.spec.ts; this one
+    // is the cheap guard that catches a new section forgetting the prop.
+    let checked = 0;
     for (const file of sectionFiles()) {
-      for (const line of file.body.split("\n")) {
-        if (!/className="[^"]*\brv\b[^"]*"/.test(line)) continue;
-        expect(line, `${file.name}: .rv element without suppressHydrationWarning`).toContain(
+      // No `s` flag needed (and it would raise the tsconfig target): `[^<>]`
+      // already spans newlines, which is what makes this reflow-proof.
+      for (const [tag] of file.body.matchAll(/<[a-zA-Z][a-zA-Z0-9]*(?:\s[^<>]*?)?\/?>/g)) {
+        if (!/className="[^"]*\brv\b[^"]*"/.test(tag)) continue;
+        checked += 1;
+        expect(tag, `${file.name}: .rv element without suppressHydrationWarning`).toContain(
           "suppressHydrationWarning",
         );
       }
     }
+    // ...and the scan actually found them, rather than the regex silently matching
+    // nothing and the loop passing vacuously.
+    expect(checked).toBe(22);
   });
 
   it("marks no section file as a client component", () => {
@@ -328,43 +340,71 @@ describe("marketing home — assets", () => {
   });
 });
 
+const signatureOf = (el: HTMLElement) => `${el.tagName.toLowerCase()}#${el.id}.${norm(el.className)}`;
+const imagesOf = (el: HTMLElement) => [...el.querySelectorAll("img")].map((i) => i.getAttribute("src"));
+
 /**
- * Copy fidelity. The strongest guard in this file: it diffs the rendered text of
- * every block against the same block in the signed-off mockup, so a reworded
- * heading, a dropped paragraph or a "corrected" Australian spelling all fail.
+ * COPY FIDELITY — LAYER 1, always on, including CI.
+ *
+ * The signed-off mockup lives in a sibling design tree that is deliberately not in
+ * this repo, so a check that reads it directly can only run on a machine that has
+ * that tree — it skips on CI and on any fresh clone, and the copy freeze quietly
+ * stops being enforced exactly where it matters most.
+ *
+ * So the mockup is distilled into a committed fixture by
+ * scripts/extract-marketing-copy.mjs, and this layer diffs the rendered page
+ * against that. Layer 2 below keeps the fixture honest.
  */
-describe.skipIf(!MOCKUP)("marketing home — copy matches the signed-off mockup verbatim", () => {
-  it("matches block for block", () => {
-    const mock = mockupDocument();
+describe("marketing home — copy matches the frozen fixture", () => {
+  const fixture = JSON.parse(
+    readFileSync(path.join(REPO, "test", "fixtures", "marketing-copy.json"), "utf8"),
+  ) as { blocks: { signature: string; runs: string[]; images: (string | null)[] }[] };
+
+  it("renders the same blocks, in the same order", () => {
     const { container } = render(<HomeSections />);
+    expect(blocksOf(container, "main").map(signatureOf)).toEqual(fixture.blocks.map((b) => b.signature));
+  });
 
-    const mockBlocks = blocksOf(mock, "body");
-    const ours = blocksOf(container, "main");
-
-    expect(ours).toHaveLength(mockBlocks.length);
-
-    ours.forEach((block, i) => {
-      const expected = mockBlocks[i];
-      const label = `${expected.tagName.toLowerCase()}${expected.id ? "#" + expected.id : ""}.${expected.className}`;
-      expect(textRuns(block), `copy drift in ${label}`).toEqual(textRuns(expected));
+  it("renders every string verbatim", () => {
+    const { container } = render(<HomeSections />);
+    blocksOf(container, "main").forEach((block, i) => {
+      expect(textRuns(block), `copy drift in ${fixture.blocks[i].signature}`).toEqual(fixture.blocks[i].runs);
     });
   });
 
-  it("keeps the same section ids and classes", () => {
-    const mock = mockupDocument();
+  it("points at the same extracted asset in the same place", () => {
     const { container } = render(<HomeSections />);
-
-    const signature = (el: HTMLElement) => `${el.tagName.toLowerCase()}#${el.id}.${norm(el.className)}`;
-    expect(blocksOf(container, "main").map(signature)).toEqual(blocksOf(mock, "body").map(signature));
+    blocksOf(container, "main").forEach((block, i) => {
+      expect(imagesOf(block), `asset drift in ${fixture.blocks[i].signature}`).toEqual(fixture.blocks[i].images);
+    });
   });
 
-  it("points at the same extracted asset in the same place", () => {
-    const mock = mockupDocument();
-    const { container } = render(<HomeSections />);
+  it("covers the whole page, so none of the above can pass vacuously", () => {
+    expect(fixture.blocks).toHaveLength(13);
+    expect(fixture.blocks.reduce((n, b) => n + b.runs.length, 0)).toBeGreaterThan(250);
+  });
+});
 
-    const sources = (root: ParentNode, scope: string) =>
-      blocksOf(root, scope).flatMap((b) => [...b.querySelectorAll("img")].map((i) => i.getAttribute("src")));
+/**
+ * COPY FIDELITY — LAYER 2, only where the design tree is reachable.
+ *
+ * Proves the committed fixture is still a faithful distillation of the mockup. On
+ * its own layer 1 would happily freeze a typo forever; this is what stops that.
+ * It skips cleanly when the mockup is absent — and note the reads sit inside the
+ * `it` bodies, not the describe callback, which is the ENG-596 trap.
+ */
+describe.skipIf(!MOCKUP)("marketing home — the frozen fixture still matches the mockup", () => {
+  it("matches the mockup block for block", () => {
+    const fixture = JSON.parse(
+      readFileSync(path.join(REPO, "test", "fixtures", "marketing-copy.json"), "utf8"),
+    ) as { blocks: { signature: string; runs: string[]; images: (string | null)[] }[] };
 
-    expect(sources(container, "main")).toEqual(sources(mock, "body"));
+    const live = blocksOf(mockupDocument(), "body").map((el) => ({
+      signature: signatureOf(el),
+      runs: textRuns(el),
+      images: imagesOf(el),
+    }));
+
+    expect(live).toEqual(fixture.blocks);
   });
 });
