@@ -106,3 +106,60 @@ The loop runs in a worktree at `.claude/worktrees/<ticket>/`, which is two level
 deeper than a normal checkout, so a hard-coded `../../` to a sibling design tree
 resolves to `stablepass-web/.claude/...` and the script dies. Search upward for the
 target instead.
+
+## Adding a route can turn ANOTHER ticket's file red — `no-html-link-for-pages`
+`@next/next/no-html-link-for-pages` only fires once the href resolves to a page
+that **actually exists**. So a ticket that creates `/legal/[slug]` retroactively
+makes every pre-existing `<a href="/legal/...">` elsewhere in the repo a lint
+error — ENG-590 turned `app/start/trial-start-form.tsx:90-91` red without
+touching it, and that file was on its do-not-touch list, making the ticket's
+"lint green" criterion unsatisfiable as written.
+Check before you claim a route ticket: `grep -rn 'href="/<your-route>' app/` and,
+if the hits are outside your surface, negotiate the swap up front rather than
+discovering it at the gate. Prove causation with a holdout — move your route dir
+aside and re-run eslint; exit 0 means it is yours.
+
+## A source-grep guardrail cannot see the layout chain — assert the build instead
+"These routes stay static" greped over the route's own directory passes happily
+while a `headers()` in `app/(marketing)/layout.tsx` (or the root layout) flips
+them from `●` to `ƒ`. Measured: the whole suite stayed green through exactly that
+regression. Assert the property against Next's own record instead —
+`.next/prerender-manifest.json` must list each path with
+`initialRevalidateSeconds: false`, and `dynamicRoutes["/x/[slug]"].fallback` must
+be `false`. Guard it with `existsSync`: the documented gate is
+`typecheck && lint && build && test`, so the manifest exists where it matters and
+a bare `npm test` just skips that one assertion.
+
+## Page metadata must set its own `alternates.canonical` — inheritance is silent
+Next merges metadata layout→page per top-level key. A canonical set on
+`app/(marketing)/layout.tsx` is inherited by every page under it, so a nested
+route advertises the LAYOUT's URL as its canonical unless it sets its own. It
+fails silently and only in the served HTML. Any page whose canonical must differ
+from its layout's needs an explicit `alternates` in `generateMetadata` plus a test
+on the emitted tag — asserting the metadata object alone does not prove what
+shipped.
+
+## `next start` on macOS poisons its own prerender cache via case-insensitive FS
+One request to `/legal/PRIVACY` on APFS serves `privacy.html` off the file cache
+(the lookup case-collides), then writes the computed 404 back to `PRIVACY.meta` —
+the same inode as `privacy.meta`. The real page then 404s until the next build.
+Does not reproduce on Linux/Vercel, where the two names are distinct files. If a
+local prod server starts 404ing routes that demonstrably built, `rm -rf .next &&
+npm run build` rather than hunting a routing bug.
+
+## `it.skipIf` is safe where `describe.skipIf` is not
+Vitest's `describe.skipIf` still runs the describe callback at collection time to
+enumerate tests, so a `readFileSync(MAYBE_NULL!)` at describe scope throws and
+takes the whole FILE down (that is #32). `it.skipIf(...)` never runs the test body
+when skipped, so doing the risky read INSIDE the test body is the safe shape. Same
+for `it.skipIf(cond).each(...)`.
+
+## Playwright's shared :3000 makes a green e2e run meaningless (see ENG-597)
+`playwright.config.ts` hardcodes `baseURL`/`webServer.url` to `localhost:3000`
+with `reuseExistingServer: true`, so with concurrent worktree workers Playwright
+silently attaches to whichever branch already holds the port — and it passes green
+just as easily as it fails. To produce trustworthy evidence, start your own server
+on a free port from your worktree and run with a THROWAWAY config that sets
+`use.baseURL` to it and declares no `webServer`; delete the config before
+committing. Confirm the server is yours: `lsof -a -p <pid> -d cwd -Fn` must print
+your worktree path.
