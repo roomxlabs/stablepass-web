@@ -658,10 +658,10 @@ test("ENG-612 post media takes the asset's real aspect ratio on a neutral ground
       expect(ground).toBe("rgb(26, 26, 26)");
       expect(ground).not.toBe("rgb(31, 74, 64)");
 
-      await box.screenshot({ path: `.rx/review/eng612-${label}.png` });
+      await box.screenshot({ path: `.rx/review/eng-612-${label}.png` });
     }
 
-    await page.screenshot({ path: ".rx/review/eng612-horse-profile-all.png", fullPage: true });
+    await page.screenshot({ path: ".rx/review/eng-612-horse-profile-all.png", fullPage: true });
   } finally {
     // Best-effort cleanup, matching the W6/W7 convention (content rows are
     // left behind; only the throwaway user is removed).
