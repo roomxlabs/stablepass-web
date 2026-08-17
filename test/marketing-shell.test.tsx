@@ -79,8 +79,22 @@ describe("marketing nav", () => {
     const { container } = render(<MarketingNav />);
     const hrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href"));
 
-    // Wordmark -> #top, the five links, and the CTA (which shares #subscription).
-    expect(hrefs).toEqual(["#top", "#how", "#app", "#subscription", "#trainers", "#faq", "#subscription"]);
+    // Wordmark -> #top, then the five section anchors. ENG-600: the last two are
+    // the product destinations, and they are the whole point of that ticket — the
+    // marketing site previously had NO route to the app at all, for new or
+    // returning visitors. They are root-relative on purpose: middleware already
+    // 307s a non-shared apex path onto the app host, and an absolute URL would
+    // send local dev at production.
+    expect(hrefs).toEqual(["#top", "#how", "#app", "#subscription", "#trainers", "#faq", "/signin", "/start"]);
+  });
+
+  it("keeps the two product destinations reachable and relative", () => {
+    // Guards the regression ENG-600 fixes: if either of these reverts to an
+    // in-page anchor the funnel silently becomes a loop again, and every test
+    // above would still pass.
+    const { container } = render(<MarketingNav />);
+    expect(container.querySelector("a.nav-cta")).toHaveAttribute("href", "/start");
+    expect(container.querySelector("a.nav-signin")).toHaveAttribute("href", "/signin");
   });
 
   it("labels the links with the mockup's copy and keeps the join CTA", () => {
@@ -145,20 +159,36 @@ describe("marketing footer", () => {
     }
   });
 
-  // The footer carries the mockup's review stamp, which moves with the design
-  // version (V2.6 -> V2.7 when the post-race tile was re-cut). Pinning it to a
-  // hard-coded string would just go stale silently, so read it off the source:
-  // if the mockup is bumped again and this component is not, this fails.
-  it.skipIf(!MOCKUP)("reproduces the copyright row exactly as the mockup has it", () => {
+  // The mockup's copyright row carries TWO spans: the copyright line, and a
+  // review stamp reading "Concept B · Race Day · V2.x · RX Labs". ENG-600 drops
+  // the stamp — it named the internal concept and the agency on a customer-facing
+  // page — and keeps the copyright line pinned to the mockup so a copy change
+  // there still fails here.
+  it.skipIf(!MOCKUP)("reproduces the mockup's copyright line, without the review stamp", () => {
     const mockup = readFileSync(MOCKUP!, "utf8").replace(/data:image\/[^"')]+/g, "X");
     const row = /<div class="row">([\s\S]*?)<\/div>/.exec(mockup)![1];
-    const wanted = [...row.matchAll(/<span>([\s\S]*?)<\/span>/g)].map((m) =>
-      m[1].replace(/&amp;/g, "&").trim(),
-    );
+    const wanted = [...row.matchAll(/<span>([\s\S]*?)<\/span>/g)]
+      .map((m) => m[1].replace(/&amp;/g, "&").trim())
+      .filter((text) => !/Concept B|RX Labs/.test(text));
+
+    // The mockup must actually still have a stamp for this test to mean anything;
+    // if it is ever removed at source, this filter would quietly become a no-op.
+    expect(wanted).toHaveLength(1);
 
     const { container } = render(<MarketingFooter />);
     const got = [...container.querySelectorAll(".foot-legal .row span")].map((s) => s.textContent);
     expect(got).toEqual(wanted);
+  });
+
+  it("ships no mockup review artefacts in the footer", () => {
+    const { container } = render(<MarketingFooter />);
+    const text = container.textContent ?? "";
+    for (const artefact of ["Concept B", "RX Labs", "V2."]) {
+      expect(text).not.toContain(artefact);
+    }
+    // The three social icons were `href="#"` placeholders with no accounts behind
+    // them. Dead links are worse than no icons; re-add once the handles exist.
+    expect(container.querySelectorAll('a[href="#"]')).toHaveLength(0);
   });
 
   /**
@@ -420,10 +450,34 @@ if (MOCKUP) {
     // legitimately repeat — nearly every component has a base rule plus one or
     // more @media overrides — so a map silently keeps only the last and ends up
     // comparing a base rule against its own breakpoint override.
-    const wantRules = expected.filter((r) => !EXCEPTIONS.has(r.selector));
+    // ── ENG-600: the nav is no longer a byte-faithful port ────────────────────
+    // ENG-600 added a "Sign in" entry, which the mockup's nav never had. That
+    // means new rules (`.nav-actions`, `.nav-signin`), a narrow-viewport block
+    // the mockup never needed, and one CHANGED rule: at <=880px the mockup
+    // pushed `.nav-cta` right, but the CTA now sits inside `.nav-actions`, so
+    // the group is pushed instead.
+    //
+    // Media blocks are flattened into their inner rules here, so that single
+    // change deletes an inner `.nav-cta` entry and shifts every index after it,
+    // which would report ~460 phantom mismatches. Rather than paper over that
+    // with index arithmetic, the nav is lifted out of the ordered diff entirely
+    // and pinned by its own test below. Everything else stays strictly guarded.
+    const isNavRule = (selector: string) => /(^|[ ,>])\.nav(-|\b)/.test(selector);
+
+    // An `@media` entry is a position marker with no declarations of its own —
+    // the block's rules are flattened out alongside it and compared individually.
+    // Dropping empty markers from BOTH sides costs no coverage (a removed block
+    // still loses its inner rules) and stops ENG-600's nav-only 520px block from
+    // registering as a phantom addition.
+    const isEmptyMediaMarker = (r: { selector: string; decls: string }) =>
+      r.selector.startsWith("@media") && r.decls.trim() === "";
+
+    const wantRules = expected.filter(
+      (r) => !EXCEPTIONS.has(r.selector) && !isNavRule(r.selector) && !isEmptyMediaMarker(r),
+    );
     const gotRules = cssRules(MARKETING_CSS)
       .map((r) => ({ selector: unscope(r.selector), decls: r.decls }))
-      .filter((r) => !isException(r.selector));
+      .filter((r) => !isException(r.selector) && !isNavRule(r.selector) && !isEmptyMediaMarker(r));
 
     it("carries every rule of the mockup, in order, with identical declarations", () => {
       const drifted: string[] = [];
@@ -439,6 +493,63 @@ if (MOCKUP) {
       }
       expect(drifted).toEqual([]);
       expect(gotRules).toHaveLength(wantRules.length);
+    });
+
+    // Replaces the coverage the ordered diff gives up above. The nav IS still
+    // pinned to the mockup — just rule by rule instead of by position, so the
+    // one sanctioned change does not cascade into hundreds of false mismatches.
+    describe("the nav is the mockup's, plus exactly ENG-600's documented deltas", () => {
+      // Signatures, NOT a selector->decls map: media blocks are flattened into
+      // their inner rules here, so `.nav-cta` legitimately appears twice (its
+      // base rule and its 880px override) and a map would silently keep one.
+      const navSigs = (rs: { selector: string; decls: string }[]) =>
+        rs.filter((r) => isNavRule(r.selector)).map((r) => `${r.selector}{${r.decls}}`);
+
+      const want = navSigs(expected);
+      const got = navSigs(cssRules(MARKETING_CSS).map((r) => ({ selector: unscope(r.selector), decls: r.decls })));
+
+      it("drops exactly one mockup rule, and only the one ENG-600 documents", () => {
+        // At <=880px the mockup pushed `.nav-cta` right. The CTA now sits inside
+        // `.nav-actions`, so the group is pushed instead and this rule goes.
+        expect(want.filter((s) => !got.includes(s))).toEqual([".nav-cta{margin-left:auto}"]);
+      });
+
+      it("keeps every other mockup nav rule byte for byte", () => {
+        // Implied by the assertion above, stated separately so a failure reads as
+        // "the port drifted" rather than "the delta list is stale".
+        const survived = want.filter((s) => s !== ".nav-cta{margin-left:auto}");
+        expect(survived.every((s) => got.includes(s))).toBe(true);
+      });
+
+      it("adds rules only for the two new components, plus the wordmark guard", () => {
+        // The invariant that matters: ENG-600 may introduce `.nav-actions` and
+        // `.nav-signin`, and may not quietly restyle any mockup nav selector.
+        //
+        // Two exceptions, both forced by fitting a second action on a phone:
+        //
+        //   `.nav-in > .nav-logo` — two pills beside a flex item with no basis
+        //   shrink the wordmark to a sliver instead of overflowing, so it needs
+        //   `flex:0 0 auto`. Written as a child combinator rather than a bare
+        //   `.nav-logo` so it cannot be mistaken for a restyle of the mockup's rule.
+        //
+        //   `.nav-in` — its gap and padding are overridden below 520px. This is an
+        //   ADDITION (a narrow-viewport override), not an edit: the mockup's own
+        //   `.nav-in` rule must still survive byte for byte, which the test above
+        //   enforces.
+        const ALLOWED = [".nav-actions", ".nav-signin", ".nav-in"];
+        const addedSelectors = got
+          .filter((s) => !want.includes(s))
+          .map((s) => s.slice(0, s.indexOf("{")));
+        expect(addedSelectors.length).toBeGreaterThan(0);
+        expect(addedSelectors.every((s) => ALLOWED.some((a) => s.startsWith(a)))).toBe(true);
+      });
+
+      it("still pushes the actions group right once the links are hidden", () => {
+        // Losing this silently left-aligns the nav on every phone, which no
+        // snapshot of the desktop layout would catch.
+        expect(got).toContain(".nav-actions{margin-left:auto}");
+        expect(got).toContain(".nav-links{display:none}");
+      });
     });
 
     it("keeps the mockup's tokens verbatim, just moved off :root", () => {

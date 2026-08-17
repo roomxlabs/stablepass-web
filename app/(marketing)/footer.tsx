@@ -58,25 +58,11 @@ export default function MarketingFooter() {
                 plain <img>, sized by CSS exactly as the mockup does. */}
             <img src="/marketing/3499d96c.png" alt="stablepass." />
             <p>A thoroughbred racing experience and entertainment subscription.</p>
-            <div className="foot-social">
-              <a href="#" data-social="Instagram" aria-label="stablepass. on Instagram">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
-                  <rect x="3" y="3" width="18" height="18" rx="5" />
-                  <circle cx="12" cy="12" r="4" />
-                  <circle cx="17.2" cy="6.8" r="1.1" fill="currentColor" stroke="none" />
-                </svg>
-              </a>
-              <a href="#" data-social="Facebook" aria-label="stablepass. on Facebook">
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M14.1 21v-7.4h2.5l.4-2.9h-2.9V8.9c0-.8.2-1.4 1.4-1.4h1.6V4.9c-.3 0-1.2-.1-2.3-.1-2.3 0-3.9 1.4-3.9 4v2.2H8.4v2.9h2.5V21Z" />
-                </svg>
-              </a>
-              <a href="#" data-social="X" aria-label="stablepass. on X">
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M17.2 4h2.8l-6.1 7 7.2 9h-5.6l-4.4-5.7L5.9 20H3.1l6.5-7.5L2.7 4h5.8l4 5.3Zm-1 14.3h1.5L8 5.6H6.4Z" />
-                </svg>
-              </a>
-            </div>
+            {/* ENG-600: the Instagram / Facebook / X icons were removed. All three were
+                `href="#"` in the mockup — no account URLs exist anywhere in the project.
+                Three icons that go nowhere are worse than none on a live site. The SVG
+                paths and the `.foot-social` styles are kept in git history; re-add the
+                block once the handles exist, which is a one-commit change. */}
           </div>
           <div className="foot-col">
             <h4>Explore</h4>
@@ -125,12 +111,10 @@ export default function MarketingFooter() {
         <div className="foot-legal">
           <div className="row">
             <span>© stablepass. All rights reserved.</span>
-            {/* Mockup review stamp, ported verbatim per decision 1 (the design is frozen).
-                Bumped to V2.7 with the source, which re-cut the post-race stat tile off the
-                starting price. Flagged on the PR: a production footer arguably should not
-                name the concept and the agency at all — but dropping it is a copy decision,
-                not mine. */}
-            <span>Concept B · “Race Day” · V2.7 · RX Labs</span>
+            {/* ENG-600: the "Concept B · Race Day · V2.7 · RX Labs" stamp was removed.
+                It was a mockup review marker naming the internal concept and the agency
+                on a customer-facing page. W3 flagged it; this is the decision. Do not
+                reintroduce it when re-porting from the mockup. */}
           </div>
         </div>
       </div>

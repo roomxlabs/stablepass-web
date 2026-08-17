@@ -103,7 +103,8 @@
   .marketing .nav-links a:hover{color:var(--brand)}
   .marketing .nav-cta{font-size:13.5px;font-weight:600;background:var(--brand);color:#fff;border-radius:999px;padding:10px 22px;transition:background .2s ease}
   .marketing .nav-cta:hover{background:var(--deep)}
-  @media (max-width:880px){.marketing .nav-links{display:none}.marketing .nav-cta{margin-left:auto}}
+  /* ENG-600: sign in + join are one group, set apart from the section anchors. */
+  @media (max-width:880px){.marketing .nav-links{display:none}.marketing .nav-actions{margin-left:auto}}
 
   /* ── hero ── */
   .marketing .hero{position:relative;overflow:hidden;padding:84px 0 96px}
@@ -730,3 +731,49 @@
   .marketing .is-sent .sent{display:block}
   @media (max-width:640px){.marketing .sheet-card{padding:32px 24px 30px}}
 
+
+  /* ────────────────────────────────────────────────────────────────────────
+     ENG-600 — NOT part of the v2.7 port.
+     Kept at the end, after every ported rule, so the fidelity test in
+     test/marketing-shell.test.tsx still compares the port against the mockup
+     as an ordered list without these shifting the indices.
+     Every selector here is unique to this block (`.nav-actions`, `.nav-signin`)
+     or scoped beneath one, so none collides with a mockup selector.
+
+     Why it exists: the mockup's nav had ONE action, so it never needed a rule
+     for a second one, nor any narrow-viewport handling. Adding "Sign in" makes
+     two, which overflows at 390px. Same idiom the hero chip uses at 520px:
+     nothing mid-wraps, tighten the spacing. Both labels are approved copy and
+     are NOT shortened.
+     ──────────────────────────────────────────────────────────────────────── */
+  .marketing .nav-actions{display:flex;align-items:center;gap:12px}
+  /* An outlined pill against the solid CTA: the same pairing the mockup already
+     uses for `.btn-ghost` beside `.btn-green` in the hero, borrowing its exact
+     border colour, but at the nav CTA's smaller geometry. Ghost-vs-solid keeps
+     "Join" the primary action while making sign in unmissable for a returning
+     subscriber — a muted text link read as a sixth section anchor. */
+  .marketing .nav-signin{display:inline-flex;align-items:center;font-size:13.5px;font-weight:600;color:var(--ink);border:1.5px solid #C9CFC2;border-radius:999px;padding:9px 18px;white-space:nowrap;transition:border-color .2s ease,color .2s ease}
+  .marketing .nav-signin:hover{border-color:var(--brand);color:var(--brand)}
+  .marketing .nav-actions .nav-cta{white-space:nowrap}
+  /* The wordmark is a flex item with no explicit basis, so two pills beside it
+     shrink it to a sliver rather than overflowing. It must never give. */
+  .marketing .nav-in > .nav-logo{flex:0 0 auto}
+  /* Two pills plus a 140px wordmark do not fit a phone. The wordmark scales
+     down (it is the one element with slack — it is set in CSS, not baked), the
+     spacing tightens, and no copy is shortened. */
+  @media (max-width:520px){
+    .marketing .nav-in{gap:12px;padding-left:16px;padding-right:16px}
+    .marketing .nav-in > .nav-logo img{height:23px}
+    .marketing .nav-actions{gap:8px}
+    .marketing .nav-signin{padding:9px 12px}
+    .marketing .nav-actions .nav-cta{padding:9px 14px}
+  }
+  /* Below ~360px even that is not enough. Sign in gives up its outline rather
+     than its label: still present, still tappable, just no longer competing for
+     width. Shortening "Join stablepass." would mean editing approved copy. */
+  @media (max-width:360px){
+    .marketing .nav-in{gap:8px}
+    .marketing .nav-in > .nav-logo img{height:21px}
+    .marketing .nav-signin{border-color:transparent;padding:9px 2px}
+    .marketing .nav-actions .nav-cta{padding:9px 12px}
+  }

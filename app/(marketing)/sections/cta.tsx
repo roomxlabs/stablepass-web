@@ -24,10 +24,10 @@ export default function CtaBand() {
             Join stablepass. and follow the stories, stables, horses, and race day moments that make racing exciting.
           </p>
           <p className="cta-trial-line">Join stablepass. Enjoy your free 30 day trial.</p>
-          <a className="btn btn-cream cta-trial" href="#top">
+          <a className="btn btn-cream cta-trial" href="/start">
             Start your free 30 day trial
           </a>
-          <a className="btn btn-cream cta-join" href="#top">
+          <a className="btn btn-cream cta-join" href="/start">
             Join stablepass.
           </a>
         </div>
