@@ -160,6 +160,36 @@ test.describe("trainer marquee — hover-capable desktop", () => {
     expect(await offsetOf(page), "the track translated the wrong way").toBeLessThanOrEqual(0.5);
   });
 
+  /**
+   * A resize AFTER mount, which is the only way the rebuild path runs at all.
+   *
+   * The "same trainer twice" tests below set the viewport BEFORE `goto`, so no
+   * `resize` event ever fires and decision 4 goes completely unexercised — which
+   * is how a bug that froze the marquee dead on every resize passed a green
+   * suite. This narrows the window without changing the clone decision, so the
+   * strip stays live across the rebuild: the case where `duplicated` does not
+   * change and React would otherwise skip re-running the drift effect.
+   */
+  test("keeps drifting after a resize that rebuilds but stays live", async ({ page }) => {
+    await page.goto("/");
+    await page.locator("#stable-trainers .tr-card").first().waitFor();
+    await expect(page.locator('.tr-card[data-dup="1"]').first()).toBeAttached();
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.waitForTimeout(500); // past the 150ms debounce and the rebuild
+
+    // Still looping, so this is the live -> live path.
+    await expect(page.locator('.tr-card[data-dup="1"]').first()).toBeAttached();
+    await expect(page.locator(".tr-scroll")).not.toHaveClass(/is-static/);
+
+    const afterRebuild = await offsetOf(page);
+    await page.waitForTimeout(700);
+    expect(await offsetOf(page), "the drift never restarted after the resize").not.toBeCloseTo(
+      afterRebuild,
+      1,
+    );
+  });
+
   /** The guard, checked at the three widths the ticket names. */
   for (const width of [1440, 1024, 768]) {
     test(`never shows the same trainer twice at ${width}px`, async ({ page }) => {

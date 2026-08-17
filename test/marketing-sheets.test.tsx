@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import MarketingFooter from "@/app/(marketing)/footer";
 import { CONTACT_EMAIL, contactMailtoHref } from "@/app/(marketing)/modals/contact-mailto";
 import TrainerCarousel from "@/app/(marketing)/trainer-carousel";
+import TrainersStrip from "@/app/(marketing)/sections/trainers-strip";
 import { TRAINERS } from "@/app/(marketing)/sections/trainers.data";
 
 /**
@@ -87,6 +88,51 @@ describe("trainer marquee — the duplicate set", () => {
     }
   });
 
+  /**
+   * The resize case that kills the marquee outright.
+   *
+   * A resize that rebuilds but KEEPS the strip looping (1440 → 1300, say) sets
+   * `duplicated` to the value it already had. If the drift effect is keyed only
+   * on `duplicated`, React bails out of the re-render, the effect never re-runs,
+   * and the frame the resize handler cancelled is never replaced — the strip
+   * freezes until reload. The live→static→live path hides it, because there the
+   * flag really does flip, which is why this asserts the live→live path.
+   */
+  it("keeps drifting after a resize that rebuilds but stays live", async () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(<TrainerCarousel trainers={TRAINERS} />);
+      const track = container.querySelector<HTMLElement>(".tr-track")!;
+      expect(container.querySelectorAll("[data-dup]").length).toBe(TRAINERS.length);
+
+      const framesIn = (ms: number) => {
+        // jsdom drives rAF off timers, so advancing the clock runs the loop.
+        act(() => {
+          vi.advanceTimersByTime(ms);
+        });
+        return track.style.transform;
+      };
+
+      framesIn(300);
+      const beforeResize = track.style.transform;
+      expect(beforeResize, "it was not drifting to begin with").not.toBe("");
+
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+        vi.advanceTimersByTime(200); // past the 150ms debounce
+      });
+
+      // Still looping — same decision, so `duplicated` did not change.
+      expect(container.querySelectorAll("[data-dup]").length).toBe(TRAINERS.length);
+
+      const afterRebuild = track.style.transform;
+      const afterDrifting = framesIn(400);
+      expect(afterDrifting, "the drift never restarted after the resize rebuild").not.toBe(afterRebuild);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("stays static, with no clones, below the minimum card count", () => {
     // Four trainers: the width test would pass, the count test must not.
     const { container } = render(<TrainerCarousel trainers={TRAINERS.slice(0, 4)} />);
@@ -119,6 +165,36 @@ describe("trainer marquee — the duplicate set", () => {
     expect(container.querySelectorAll('[data-dup="1"]').length).toBe(TRAINERS.length);
     expect(container.querySelectorAll("[data-tr]")).toHaveLength(2);
     raf.mockRestore();
+  });
+});
+
+describe("trainer strip — the empty list", () => {
+  /**
+   * The ticket's States & edge cases: "0 trainers — section hidden entirely."
+   *
+   * Unreachable from the static list, but the list becomes admin-driven in the
+   * CMS epic, so it is asserted rather than assumed.
+   *
+   * NOTE for that epic: the footer links `#stable-trainers` unconditionally, so
+   * hiding the section leaves that link with no target. Flagged on the PR — the
+   * fix belongs with whoever makes the list dynamic, since it is their change
+   * that first makes an empty list possible.
+   */
+  it("renders no section at all rather than a heading over an empty strip", () => {
+    const { container } = render(<TrainersStrip trainers={[]} />);
+
+    expect(container.querySelector("#stable-trainers")).toBeNull();
+    expect(container.querySelector(".tr-scroll")).toBeNull();
+    expect(container.textContent).toBe("");
+  });
+
+  it("still renders the section, with the real count, for a non-empty list", () => {
+    const { container } = render(<TrainersStrip trainers={TRAINERS.slice(0, 3)} />);
+    const section = container.querySelector("#stable-trainers");
+
+    expect(section).not.toBeNull();
+    expect(section).toHaveAttribute("data-trainer-count", "3");
+    expect(container.querySelectorAll(".tr-card")).toHaveLength(3);
   });
 });
 
@@ -231,6 +307,43 @@ describe("dialog shell — the focus contract", () => {
     expect(container.querySelector("#tr-modal")).toHaveAttribute("open");
     expect(container.querySelector("#sheet-faq")).not.toHaveAttribute("open");
     expect(container.querySelectorAll("[open]")).toHaveLength(1);
+  });
+
+  /**
+   * `aria-modal="true"` claims the rest of the page is inert, so Tab must not
+   * be able to leave — in EITHER direction.
+   *
+   * The escape is completely ordinary: most of a dialog is not focusable (the
+   * trainer modal's photograph is about half its area), clicking it blurs focus
+   * to `<body>`, and from outside the dialog a forward Tab would walk into the
+   * nav behind the scrim. The backward branch always handled "focus is
+   * outside"; the forward one has to as well.
+   */
+  it("traps Tab in both directions, even when focus has fallen to the body", () => {
+    const { container } = render(
+      <>
+        <button type="button" data-sheet="faq">
+          View all
+        </button>
+        <MarketingFooter />
+      </>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "View all" }));
+    const sheet = container.querySelector<HTMLElement>("#sheet-faq")!;
+
+    // Simulate clicking the dialog's non-focusable body copy.
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.body.contains(document.activeElement)).toBe(true);
+    expect(sheet.contains(document.activeElement)).toBe(false);
+
+    const forward = fireEvent.keyDown(document, { key: "Tab" });
+    expect(forward, "forward Tab escaped the dialog").toBe(false);
+    expect(sheet.contains(document.activeElement), "focus left the dialog").toBe(true);
+
+    (document.activeElement as HTMLElement | null)?.blur();
+    const backward = fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(backward, "backward Tab escaped the dialog").toBe(false);
+    expect(sheet.contains(document.activeElement)).toBe(true);
   });
 
   /**

@@ -90,6 +90,17 @@ export default function FaqSheet() {
     const onClick = (event: MouseEvent) => {
       if (event.defaultPrevented || !(event.target instanceof Element)) return;
 
+      /**
+       * The source's last delegate branch, ported: the footer's social icons
+       * are `<a href="#">` placeholders until real accounts exist, and without
+       * this a click jumps to the top of the page and pushes a bare `#` into
+       * the URL.
+       */
+      if (event.target.closest("[data-social]")) {
+        event.preventDefault();
+        return;
+      }
+
       const trigger = event.target.closest<HTMLElement>("[data-sheet]");
       if (!trigger) return;
 

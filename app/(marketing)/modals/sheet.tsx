@@ -82,10 +82,20 @@ function trapFocus(event: KeyboardEvent, root: HTMLElement | null): void {
   const last = focusable[focusable.length - 1];
   const active = document.activeElement;
 
-  if (event.shiftKey && (active === first || !root.contains(active))) {
+  /**
+   * `!root.contains(active)` has to be on BOTH branches, not just the backward
+   * one. Most of a dialog is non-focusable content — the trainer modal's
+   * photograph is about half its area — and clicking it blurs focus to
+   * `<body>`, which is outside the dialog. From there a plain Tab would walk
+   * into the nav behind the scrim while `aria-modal="true"` claims the rest of
+   * the page is inert.
+   */
+  const outside = !root.contains(active);
+
+  if (event.shiftKey && (active === first || outside)) {
     event.preventDefault();
     last.focus();
-  } else if (!event.shiftKey && active === last) {
+  } else if (!event.shiftKey && (active === last || outside)) {
     event.preventDefault();
     first.focus();
   }

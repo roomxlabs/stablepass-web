@@ -181,6 +181,22 @@ export function useMarquee({ speed, min }: UseMarqueeOptions): UseMarquee {
   const [isStatic, setIsStatic] = useState(true);
   const [duplicated, setDuplicated] = useState(false);
 
+  /**
+   * Bumped by every `build()`, and part of the drift effect's dependencies.
+   *
+   * Without it a resize that REBUILDS BUT KEEPS LOOPING silently kills the
+   * marquee for good: the resize handler cancels the running frame, then
+   * `build()` sets `duplicated` to the value it already had, so React bails out
+   * of the re-render, the drift effect never re-runs, and nothing ever schedules
+   * another frame. The strip freezes until reload. The live→static→live path
+   * hid it, because there `duplicated` really does flip.
+   *
+   * The source restarts the loop inline (`if(live&&!slow){raf=requestAnimationFrame(step)}`);
+   * this counter is how that reads in React — any rebuild is a new generation,
+   * so the effect tears down and starts a fresh frame.
+   */
+  const [generation, setGeneration] = useState(0);
+
   const modeRef = useRef<MarqueeMode>("drift");
   const offsetRef = useRef(0);
   const setWidthRef = useRef(0);
@@ -188,6 +204,7 @@ export function useMarquee({ speed, min }: UseMarqueeOptions): UseMarquee {
   const pausedRef = useRef(false);
   const liveRef = useRef(false);
   const rafRef = useRef<number | null>(null);
+  const nudgeTimerRef = useRef<number | undefined>(undefined);
 
   const apply = useCallback(() => {
     const track = trackRef.current;
@@ -216,6 +233,10 @@ export function useMarquee({ speed, min }: UseMarqueeOptions): UseMarquee {
     liveRef.current = live;
     setDuplicated(live);
     setIsStatic(!live);
+    // Always a new generation, even when `duplicated` is unchanged — that is
+    // the case that would otherwise leave the drift cancelled and never
+    // restarted. See the `generation` declaration above.
+    setGeneration((n) => n + 1);
     return live;
   }, [min]);
 
@@ -310,7 +331,9 @@ export function useMarquee({ speed, min }: UseMarqueeOptions): UseMarquee {
     rafRef.current = requestAnimationFrame(step);
 
     return cancel;
-  }, [duplicated, speed, apply, cancel]);
+    // `generation` is load-bearing, not incidental: it is what restarts the
+    // loop after a rebuild that left `duplicated` unchanged.
+  }, [duplicated, generation, speed, apply, cancel]);
 
   const nudge = useCallback(
     (direction: -1 | 1) => {
@@ -334,12 +357,16 @@ export function useMarquee({ speed, min }: UseMarqueeOptions): UseMarquee {
       track.style.transition = NUDGE_TRANSITION;
       apply();
       // Hand the offset back to the drift once the eased nudge has landed.
-      window.setTimeout(() => {
+      // Tracked so a rapid second nudge, or an unmount, cannot leave it armed.
+      window.clearTimeout(nudgeTimerRef.current);
+      nudgeTimerRef.current = window.setTimeout(() => {
         if (trackRef.current) trackRef.current.style.transition = "";
       }, NUDGE_TRANSITION_MS);
     },
     [apply],
   );
+
+  useEffect(() => () => window.clearTimeout(nudgeTimerRef.current), []);
 
   return { scrollRef, trackRef, isStatic, duplicated, nudge };
 }
