@@ -105,13 +105,67 @@ test.describe("marketing home", () => {
     await imagesSettled(page);
 
     const section = page.locator("#stable-trainers");
-    await expect(section).toHaveAttribute("data-trainer-count", "19");
-    await expect(section.locator(".tr-card")).toHaveCount(19);
-    await expect(section.locator(".tr-card").first().locator(".tr-nm")).toHaveText("Andrew Bobbin");
 
-    // Every photograph actually resolved — a 404 would silently fall back to the
-    // initials disc and still "render 19 cards".
-    const broken = await section.locator(".tr-card img").evaluateAll((imgs) =>
+    /**
+     * W3's marquee (ENG-589) clones the WHOLE set to make the loop seamless, so
+     * a bare `.tr-card` counts real cards plus clones and stopped being a count
+     * of the supplied trainers the moment the static row became a marquee. The
+     * clones carry `data-dup`, so excluding them is what keeps this assertion
+     * meaning "all nineteen stables render".
+     *
+     * Counting the raw total instead would pin the current clone factor, and
+     * that factor is not a constant: the strip only clones while one set
+     * overhangs the window (`setWidth > stripWidth + leadWidth`), and it clones
+     * not at all on touch or with scripting off. `:not([data-dup])` is nineteen
+     * under every one of those conditions.
+     */
+    const cards = section.locator(".tr-card:not([data-dup])");
+    const clones = section.locator(".tr-card[data-dup]");
+
+    await expect(section).toHaveAttribute("data-trainer-count", "19");
+    await expect(cards).toHaveCount(19);
+    await expect(cards.first().locator(".tr-nm")).toHaveText("Andrew Bobbin");
+
+    /**
+     * And that exclusion is real rather than vacuous — if cloning broke, or a
+     * clone stopped carrying `data-dup`, the filter above would quietly match
+     * everything and still "pass". So assert the contract it leans on.
+     *
+     * The strip is definitely looping here, by geometry rather than by a lucky
+     * viewport: `.tr-scroll` is capped at `max-width:min(1560px,100%)` while one
+     * set of nineteen 222px cards plus 22px gaps measures 4636px, so
+     * `setWidth > stripWidth + leadWidth` holds at every width. It is hover
+     * capability rather than width that this rests on: on a touch project
+     * `selectMode` takes the native-scroller path and never clones at all, and
+     * the config declares no such project.
+     *
+     * The clones mount from a client effect that has to measure first, so this
+     * retrying assertion is also what synchronises the raw counts below.
+     */
+    await expect(clones.first()).toBeAttached();
+    const [realCount, cloneCount] = await Promise.all([cards.count(), clones.count()]);
+    // Re-pinned AFTER the clones have mounted. The retrying count above is
+    // satisfied by the pre-clone frame, so without this the trainer count and
+    // the clone contract could be describing two different DOM frames.
+    expect(realCount, "the real set stopped being the nineteen supplied trainers").toBe(19);
+    expect(cloneCount, "the marquee clones the whole set, not part of it").toBe(realCount);
+
+    // `textContent`, not `innerText`: `.tr-nm` is display:none under
+    // `(hover: none)`, where an innerText comparison would quietly compare empty
+    // strings to empty strings instead of failing.
+    const names = await cards.locator(".tr-nm").allTextContents();
+    expect(names, "the trainer captions stopped rendering").toHaveLength(19);
+    expect(await clones.locator(".tr-nm").allTextContents()).toEqual(names);
+
+    // Each card actually HAS a photograph, and each photograph resolved. The
+    // count is load-bearing rather than belt-and-braces: `evaluateAll` over an
+    // empty match returns [], so the broken-image check below passes happily on
+    // a page where every <img> has been deleted.
+    await expect(cards.locator("img"), "a trainer card rendered no photograph at all").toHaveCount(19);
+
+    // A 404 would silently fall back to the initials disc and still "render 19
+    // cards", so resolution is checked as well as presence.
+    const broken = await cards.locator("img").evaluateAll((imgs) =>
       imgs.filter((i) => !(i as HTMLImageElement).naturalWidth).map((i) => (i as HTMLImageElement).src),
     );
     expect(broken).toEqual([]);
@@ -174,7 +228,13 @@ test.describe("marketing home", () => {
       );
       expect(hidden).toEqual([]);
 
-      await expect(page.locator(".tr-card")).toHaveCount(19);
+      // Counted through the same `data-dup` contract as the scripted test, so
+      // both mean "the nineteen supplied trainers". With no scripting the
+      // marquee never runs, so the clone set is expected to be absent entirely —
+      // which is the other half of why a hard total would be the wrong assertion.
+      await expect(page.locator(".tr-card:not([data-dup])")).toHaveCount(19);
+      await expect(page.locator(".tr-card[data-dup]")).toHaveCount(0);
+
       const offscreen = await page.locator(".tr-card").evaluateAll((cards) => {
         const strip = document.querySelector(".tr-scroll")!.getBoundingClientRect();
         return cards.filter((c) => {
