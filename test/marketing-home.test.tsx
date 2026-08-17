@@ -41,6 +41,23 @@ function sectionFiles() {
 }
 
 /**
+ * Every file that renders a `.rv` reveal element.
+ *
+ * ENG-589 / W3 moved the trainer strip's `.rv` element out of `sections/` and
+ * into `trainer-carousel.tsx`, which owns `.tr-scroll` now — the component that
+ * measures the cards has to be the one that renders them. It is still a reveal
+ * element and still has to opt out of the hydration check, so scanning only
+ * `sections/` would quietly stop counting it.
+ */
+function revealFiles() {
+  const carousel = path.join(REPO, "app", "(marketing)", "trainer-carousel.tsx");
+  return [
+    ...sectionFiles(),
+    { name: "trainer-carousel.tsx", body: readFileSync(carousel, "utf8") },
+  ];
+}
+
+/**
  * The mockup lives in a sibling design tree outside this repo, and its depth above
  * the repo root differs between a normal checkout and the loop's worktree. Absent
  * (CI, a fresh clone) → the mockup-derived tests skip rather than fail, exactly as
@@ -207,14 +224,26 @@ describe("marketing home — trainers", () => {
     expect(container.querySelector("#stable-trainers")?.getAttribute("data-trainer-count")).toBe("19");
   });
 
-  it("is markup only — no marquee arrows and no modal, which are W3's", () => {
+  /**
+   * Was "is markup only — no marquee arrows and no modal, which are W3's". W3
+   * (ENG-589) has landed, so the arrows and the modal are now expected here.
+   *
+   * `.is-static` is still asserted, and it is the important half: it is what the
+   * SERVER renders, and jsdom has no layout, so the marquee measures zero-width
+   * cards, declines to clone and leaves the static row exactly as a visitor with
+   * scripting off would receive it. All nineteen cards visible is the client's
+   * review condition.
+   */
+  it("adds W3's arrows and modal without disturbing the no-JS static row", () => {
     const { container } = render(<HomeSections />);
     const strip = container.querySelector("#stable-trainers")!;
 
-    expect(strip.querySelector(".tr-ctrl")).toBeNull();
-    expect(container.querySelector("#tr-modal")).toBeNull();
-    // ...and the row is the mockup's own static state, so all 19 are visible with JS off.
+    expect(strip.querySelectorAll(".tr-ctrl [data-tr]")).toHaveLength(2);
+    expect(container.querySelector("#tr-modal")).not.toBeNull();
+    expect(container.querySelector("#tr-modal")).not.toHaveAttribute("open");
+
     expect(container.querySelector(".tr-scroll")?.className).toContain("is-static");
+    expect(container.querySelectorAll("[data-dup]")).toHaveLength(0);
   });
 });
 
@@ -248,11 +277,14 @@ describe("marketing home — works with scripting off", () => {
     // works is the "hydrates cleanly" test in e2e/marketing-home.spec.ts; this one
     // is the cheap guard that catches a new section forgetting the prop.
     let checked = 0;
-    for (const file of sectionFiles()) {
+    for (const file of revealFiles()) {
       // No `s` flag needed (and it would raise the tsconfig target): `[^<>]`
       // already spans newlines, which is what makes this reflow-proof.
       for (const [tag] of file.body.matchAll(/<[a-zA-Z][a-zA-Z0-9]*(?:\s[^<>]*?)?\/?>/g)) {
-        if (!/className="[^"]*\brv\b[^"]*"/.test(tag)) continue;
+        // Either a plain string className or an expression one — the carousel
+        // toggles `.is-static` from state, so its className is a template
+        // literal and the string-only form would silently skip it.
+        if (!/className=(?:"[^"]*\brv\b|\{[^<>]*\brv\b)/.test(tag)) continue;
         checked += 1;
         expect(tag, `${file.name}: .rv element without suppressHydrationWarning`).toContain(
           "suppressHydrationWarning",

@@ -1,15 +1,53 @@
+import { legalPath } from "@/lib/legal";
+
+import { contactMailtoHref } from "./modals/contact-mailto";
+import FaqSheet from "./modals/faq-sheet";
+
 /**
- * Marketing footer — ported from the signed-off mockup (Concept B v2.6).
+ * Marketing footer — ported from the signed-off mockup (Concept B v2.6/v2.7),
+ * wired up by ENG-589 / W3.
  *
- * The Support and Legal entries are <button data-sheet="…">, not links, exactly
- * as the mockup has them: in the design they open an overlay rather than
- * navigate. They are inert here by design — W3 (ENG-589) wires the sheet
- * behaviour, W4 (ENG-590) gives the legal ones real /legal/<slug> URLs. They
- * render as buttons now so neither slice has to restructure this markup.
+ * W2 shipped the Support and Legal entries as inert `<button data-sheet="…">`,
+ * as the mockup has them, because in the design they open an overlay. Both
+ * columns are now real anchors instead, which is W3's single declared edit here:
  *
- * No email address is printed anywhere, deliberately: the mockup routes contact
- * through a form so the address cannot be scraped.
+ *   - **Legal** → W4's `/legal/*` routes (decision 7). The sheets are not ported;
+ *     W4 owns that content as real pages. `legalPath()` is W4's own helper, so
+ *     the four hrefs cannot drift from the four routes it prerenders.
+ *   - **Support** → a `mailto:` carrying the same `data-subject` the mockup's
+ *     buttons had (decision 6). No form, and above all no confirmation of
+ *     delivery: v2.6 acknowledged a send that never happened. (Its wording is
+ *     not quoted here — a guardrail test greps the built output for it.)
+ *
+ * Anchors rather than delegated buttons on purpose: the client reviews this page
+ * with scripting blocked, and the acceptance criterion is that the legal links
+ * navigate and the contact mailto still works with no JS. A `<button>` needs the
+ * delegate; an `<a href>` needs nothing.
+ *
+ * `<FaqSheet/>` mounts here because the footer is on every marketing page. It
+ * renders `#sheet-faq` and binds the `[data-sheet]` delegate that still serves
+ * the triggers in `sections/faq.tsx` and `sections/for-trainers.tsx`, neither of
+ * which this ticket may touch.
+ *
+ * The mockup prints no email address anywhere so it cannot be scraped. That
+ * still holds: the address is in the href, never in the text.
  */
+
+/** The mockup's four Legal entries, in its order, against W4's four slugs. */
+const LEGAL_LINKS: ReadonlyArray<{ label: string; slug: string }> = [
+  { label: "Privacy Policy", slug: "privacy" },
+  { label: "Terms & Conditions", slug: "terms" },
+  { label: "Cancellation & Refund Policy", slug: "cancellation" },
+  { label: "Acceptable Use Policy", slug: "acceptable-use" },
+];
+
+/** The mockup's three Support entries and the `data-subject` each carried. */
+const CONTACT_LINKS: ReadonlyArray<{ label: string; subject: string }> = [
+  { label: "Contact us", subject: "General enquiry" },
+  { label: "Subscriber support", subject: "Subscriber support" },
+  { label: "Trainer partnerships", subject: "Trainer partnerships" },
+];
+
 export default function MarketingFooter() {
   return (
     <footer>
@@ -66,46 +104,21 @@ export default function MarketingFooter() {
               <li>
                 <a href="#faq">FAQ</a>
               </li>
-              <li>
-                <button type="button" data-sheet="contact" data-subject="General enquiry">
-                  Contact us
-                </button>
-              </li>
-              <li>
-                <button type="button" data-sheet="contact" data-subject="Subscriber support">
-                  Subscriber support
-                </button>
-              </li>
-              <li>
-                <button type="button" data-sheet="contact" data-subject="Trainer partnerships">
-                  Trainer partnerships
-                </button>
-              </li>
+              {CONTACT_LINKS.map(({ label, subject }) => (
+                <li key={label}>
+                  <a href={contactMailtoHref(subject)}>{label}</a>
+                </li>
+              ))}
             </ul>
           </div>
           <div className="foot-col">
             <h4>Legal</h4>
             <ul>
-              <li>
-                <button type="button" data-sheet="privacy">
-                  Privacy Policy
-                </button>
-              </li>
-              <li>
-                <button type="button" data-sheet="terms">
-                  Terms &amp; Conditions
-                </button>
-              </li>
-              <li>
-                <button type="button" data-sheet="terms">
-                  Cancellation &amp; Refund Policy
-                </button>
-              </li>
-              <li>
-                <button type="button" data-sheet="terms">
-                  Acceptable Use Policy
-                </button>
-              </li>
+              {LEGAL_LINKS.map(({ label, slug }) => (
+                <li key={slug}>
+                  <a href={legalPath(slug)}>{label}</a>
+                </li>
+              ))}
             </ul>
           </div>
         </div>
@@ -121,6 +134,7 @@ export default function MarketingFooter() {
           </div>
         </div>
       </div>
+      <FaqSheet />
     </footer>
   );
 }
