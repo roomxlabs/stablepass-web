@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
 import { AccessWall } from "@/components/access-wall";
-import { PostCard } from "@/components/post-card";
+import { PostCard, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { signPhotoMap, POST_MEDIA_BUCKET, signedPosterFor } from "@/lib/storage/photos";
@@ -24,6 +24,7 @@ type PostRow = {
   body: string | null;
   media_url: string | null;
   poster_url: string | null;
+  aspect_ratio: number | null;
   watermarked: boolean;
   like_count: number;
   published_at: string;
@@ -142,7 +143,18 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
           trainerName: trainer?.name ?? "Stablepass",
           postedAgo: relativeTime(r.published_at),
           body: r.body,
-          media: { type: r.type, posterUrl: signedPosterFor(r, postMedia), duration: null },
+          // `aspectRatio` is RAW here. `resolveAspect` (post-card) owns the clamp,
+          // so exactly one place decides what an unusable value becomes. The
+          // `typeof` guard is load-bearing, not belt-and-braces: `'NaN'::numeric`
+          // passes the be's `CHECK (aspect_ratio > 0)` and `to_json` serialises it
+          // as the QUOTED string "NaN", which would otherwise widen a string into
+          // a field typed `number | null`.
+          media: {
+            type: r.type,
+            posterUrl: signedPosterFor(r, postMedia),
+            duration: null,
+            aspectRatio: typeof r.aspect_ratio === "number" ? r.aspect_ratio : null,
+          },
           watermarked: r.watermarked,
           count: r.like_count,
           reacted: myReaction.get(r.id) ?? null,
@@ -275,8 +287,8 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
                         </div>
                       </div>
                     </div>
-                    <div className="post-media-web">
-                      <video controls autoPlay src={playbackUrl} style={{ width: "100%", aspectRatio: "16/9", background: "#000" }} />
+                    <div {...mediaBoxProps(p.media.aspectRatio)}>
+                      <video controls autoPlay src={playbackUrl} />
                     </div>
                     {p.body && <div className="post-body-web">{p.body}</div>}
                     <ReactionBar
@@ -294,7 +306,6 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
                   <PostCard
                     post={p}
                     viewerId={viewerId}
-                    mediaAspect="wide"
                     onReact={(e) => react(p.id, e)}
                     onBookmark={() => unsave(p.id)}
                     onPlay={() => play(p.id)}

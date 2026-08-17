@@ -521,3 +521,152 @@ test("A2 trainer profile Website link renders, opens in a new tab, and logs a cl
     }
   }
 });
+
+// ---------------------------------------------------------------------------
+// ENG-612 — real aspect ratio + neutral media ground.
+//
+// The horse profile is the surface this runs against deliberately:
+// `/api/horses/:id/feed` is a DIRECT PostgREST read, so it works end to end on
+// the local stack, whereas Explore goes through the be `feed` edge fn whose
+// local scaffold stub always returns `{ data: [] }` (see the W6 note above).
+// The card, the mapper and the CSS under test are the same on every surface.
+//
+// Evidence captured: landscape (16:9), portrait (a 9:16 reel, clamped to the
+// 4:5 floor) and square (1:1), plus the neutral ground behind unpainted media.
+// ---------------------------------------------------------------------------
+test("ENG-612 post media takes the asset's real aspect ratio on a neutral ground", async ({ page }) => {
+  const email = `eng612-harness-${Date.now()}@stablepass.test`;
+  const password = "harness-password-123!";
+  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+  const { data: trainer, error: trainerError } = await admin
+    .from("trainer")
+    .insert({ name: "Chris Waller", slug: `chris-waller-eng612-${Date.now()}` })
+    .select("id")
+    .single();
+  if (trainerError) throw trainerError;
+
+  const { data: horse, error: horseError } = await admin
+    .from("horse")
+    .insert({
+      trainer_id: trainer.id,
+      display_name: "Aspect Fixture",
+      racing_name: "Aspect Fixture",
+      status: "active",
+      training_status: "racing",
+    })
+    .select("id")
+    .single();
+  if (horseError) throw horseError;
+
+  // Newest first, so DOM order is deterministic: landscape, portrait, square.
+  const t = Date.now();
+  const at = (offsetMs: number) => new Date(t - offsetMs).toISOString();
+
+  const { error: postError } = await admin.from("post").insert([
+    {
+      horse_id: horse.id,
+      type: "photo",
+      status: "published",
+      body: "Landscape 1920x1080 — must render 16:9, uncropped.",
+      media_url: "https://placehold.co/1920x1080/C9A56F/1A1A1A",
+      aspect_ratio: 1.7778,
+      source_trainer_id: trainer.id,
+      watermarked: false,
+      published_at: at(0),
+    },
+    {
+      horse_id: horse.id,
+      type: "photo",
+      status: "published",
+      body: "Portrait 1080x1920 reel — clamps to the 4:5 floor and crops.",
+      media_url: "https://placehold.co/1080x1920/C9A56F/1A1A1A",
+      aspect_ratio: 0.5625,
+      source_trainer_id: trainer.id,
+      watermarked: false,
+      published_at: at(1000),
+    },
+    {
+      horse_id: horse.id,
+      type: "photo",
+      status: "published",
+      body: "Square 1080x1080 — must render 1:1.",
+      media_url: "https://placehold.co/1080x1080/C9A56F/1A1A1A",
+      aspect_ratio: 1,
+      source_trainer_id: trainer.id,
+      watermarked: false,
+      published_at: at(2000),
+    },
+  ]);
+  if (postError) throw postError;
+
+  const { data: userData, error: userError } = await admin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+  });
+  if (userError) throw userError;
+
+  try {
+    await page.goto("/signin");
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password").fill(password);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.waitForURL("**/explore");
+
+    await page.goto(`/horses/${horse.id}`);
+    const boxes = page.locator(".post-media-web");
+    await expect(boxes).toHaveCount(3);
+
+    // Let the poster images settle so the evidence shots show the CROP, not a
+    // half-loaded frame. The geometry assertions below do not depend on this.
+    await page
+      .waitForFunction(
+        () =>
+          Array.from(document.querySelectorAll(".post-media-web img")).every(
+            (img) => (img as HTMLImageElement).complete,
+          ),
+        undefined,
+        { timeout: 15_000 },
+      )
+      .catch(() => {
+        // Offline / placeholder host unreachable: the ground shows through
+        // instead, which is still valid evidence for the neutral-ground half.
+      });
+
+    const shots: Array<{ label: string; expected: number }> = [
+      { label: "landscape", expected: 1.7778 },
+      { label: "portrait", expected: 0.8 }, // 0.5625 clamped up to ASPECT_MIN
+      { label: "square", expected: 1 },
+    ];
+
+    for (const [i, { label, expected }] of shots.entries()) {
+      const box = boxes.nth(i);
+      await expect(box).toBeVisible();
+
+      // Measure the REAL rendered box, not the declared style: this is what
+      // proves a landscape asset is not squashed into a reel and a reel is not
+      // stretched into a landscape.
+      const rect = await box.boundingBox();
+      expect(rect, `${label} box has no layout`).not.toBeNull();
+      expect(rect!.height).toBeGreaterThan(0);
+      expect(rect!.width / rect!.height).toBeCloseTo(expected, 1);
+
+      // The unpainted ground is neutral ink (#1A1A1A), never brand green
+      // (#1F4A40 = rgb(31, 74, 64)) — the "green screen" the client reported.
+      const ground = await box.evaluate((el) => getComputedStyle(el).backgroundColor);
+      expect(ground).toBe("rgb(26, 26, 26)");
+      expect(ground).not.toBe("rgb(31, 74, 64)");
+
+      await box.screenshot({ path: `.rx/review/eng612-${label}.png` });
+    }
+
+    await page.screenshot({ path: ".rx/review/eng612-horse-profile-all.png", fullPage: true });
+  } finally {
+    // Best-effort cleanup, matching the W6/W7 convention (content rows are
+    // left behind; only the throwaway user is removed).
+    if (userData?.user?.id) {
+      await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});
+    }
+  }
+});

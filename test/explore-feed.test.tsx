@@ -172,4 +172,67 @@ describe("ExploreFeed", () => {
     expect(screen.queryByRole("button", { name: "Following" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Explore" })).toBeInTheDocument();
   });
+
+  describe("aspect ratio (ENG-612)", () => {
+    const ratioOf = (el: HTMLElement): number => {
+      const [w, h = "1"] = el.style.aspectRatio.split("/").map((part) => part.trim());
+      return Number(w) / Number(h);
+    };
+
+    function fetchWithAspect(aspectRatio: number | null) {
+      return vi.fn((input: string | URL) => {
+        const url = String(input);
+        if (url.startsWith("/api/feed/seen")) {
+          return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
+        }
+        if (url.startsWith("/api/feed")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              data: [{ ...POSTS[0], aspect_ratio: aspectRatio }],
+              meta: { nextCursor: null, hasMore: false },
+            }),
+          });
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+      });
+    }
+
+    it("a 16:9 aspect_ratio (1.7778) renders the wide box unclamped", async () => {
+      global.fetch = fetchWithAspect(1.7778) as unknown as typeof fetch;
+
+      const { container } = render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+      await screen.findByText("Mahogany");
+
+      const box = container.querySelector<HTMLElement>(".post-media-web");
+      expect(box).toBeTruthy();
+      expect(ratioOf(box!)).toBeCloseTo(1.7778, 4);
+      expect(box!.className).toBe("post-media-web");
+    });
+
+    it("a 9:16 reel aspect_ratio (0.5625) clamps to the tall bucket (ASPECT_MIN 0.8)", async () => {
+      global.fetch = fetchWithAspect(0.5625) as unknown as typeof fetch;
+
+      const { container } = render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+      await screen.findByText("Mahogany");
+
+      const box = container.querySelector<HTMLElement>(".post-media-web");
+      expect(box).toBeTruthy();
+      expect(ratioOf(box!)).toBeCloseTo(0.8, 4);
+      expect(box!.className).toBe("post-media-web tall");
+    });
+
+    it("a null aspect_ratio falls back to ASPECT_DEFAULT (1.6)", async () => {
+      global.fetch = fetchWithAspect(null) as unknown as typeof fetch;
+
+      const { container } = render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+      await screen.findByText("Mahogany");
+
+      const box = container.querySelector<HTMLElement>(".post-media-web");
+      expect(box).toBeTruthy();
+      expect(ratioOf(box!)).toBeCloseTo(1.6, 4);
+      expect(box!.className).toBe("post-media-web");
+    });
+  });
 });

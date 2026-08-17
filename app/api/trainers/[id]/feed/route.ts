@@ -18,7 +18,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
   const { data: posts } = await sb
     .from("post")
-    .select("id, type, title, body, media_url, poster_url, mux_playback_id, watermarked, like_count, published_at, horse_id, horse:horse_id(display_name, racing_name)")
+    // `aspect_ratio` is EXPLICIT here and must stay — see the note in
+    // app/api/horses/[id]/feed/route.ts. Pinned by test/trainers-route.test.ts.
+    .select("id, type, title, body, media_url, poster_url, mux_playback_id, aspect_ratio, watermarked, like_count, published_at, horse_id, horse:horse_id(display_name, racing_name)")
     .eq("source_trainer_id", id)
     .eq("status", "published")
     .order("published_at", { ascending: false })
