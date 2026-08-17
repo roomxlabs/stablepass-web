@@ -106,8 +106,13 @@ export function SignInForm() {
         <a href="/forgot-password">Forgot your password?</a>
       </div>
 
+      {/* Sits directly under "Forgot your password?", so the reader here is often
+          someone who already HAS an account and cannot get in. Lead with the fact
+          that this creates a NEW account — the old "Not subscribed yet? Start 30
+          days free" read as a way back in and produced duplicate accounts. */}
       <div className="auth-foot">
-        Not subscribed yet? <a href="/start">Start 30 days free</a>
+        Don&apos;t have an account?{" "}
+        <a href="/start">Create an account — 30 days free</a>
       </div>
     </form>
   );

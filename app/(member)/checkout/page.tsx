@@ -1,11 +1,16 @@
 // Checkout screen (04-checkout.html) — embedded Stripe Elements, no hosted
-// redirect (.rx/guardrails.md #4). Server component: gates on subscription
-// status (already active → nothing to buy, redirect to /account) and reads
-// trial_ends_at for the "trial ends in N days" sub-copy. The actual Stripe
-// Customer/Subscription/PaymentIntent creation + Elements mount happens
-// client-side in CheckoutForm (POSTs /api/subscription/checkout on mount) —
-// this page never talks to Stripe directly.
-import { redirect } from "next/navigation";
+// redirect (.rx/guardrails.md #4). Server component: reads trial_ends_at for the
+// "trial ends in N days" sub-copy.
+//
+// An `active` member is deliberately NOT redirected away any more. The pass does
+// not auto-renew, so paying again BEFORE expiry (early renewal) is a first-class
+// flow, not an error — the route returns a renewal PaymentIntent and the screen
+// switches to the extend copy. The old `status === "active" → /account` redirect
+// (and the route's matching 409 already_active) were what made that impossible.
+//
+// The actual Stripe Customer/Subscription/PaymentIntent creation + Elements
+// mount happens client-side in CheckoutForm (POSTs /api/subscription/checkout on
+// mount) — this page never talks to Stripe directly.
 import { supabaseServer } from "@/lib/supabase/server";
 import { CheckoutForm } from "./checkout-form";
 
@@ -27,8 +32,6 @@ export default async function CheckoutPage() {
     .select("status,trial_ends_at")
     .eq("user_id", userId)
     .maybeSingle();
-
-  if (sub?.status === "active") redirect("/account");
 
   return <CheckoutForm trialDaysLeft={trialDaysLeft(sub?.trial_ends_at ?? null)} />;
 }

@@ -1,5 +1,6 @@
 import { supabaseServer } from "@/lib/supabase/server";
 import { ok, UNAUTH, GATED, fail } from "@/lib/api/envelope";
+import { hasAccess, ACCESS_COLUMNS } from "@/lib/api/access";
 import { edgeFetch } from "@/lib/api/edge";
 
 // GET /api/feed/following?cursor=&limit= — ranked feed restricted to followed trainers/horses.
@@ -7,8 +8,8 @@ export async function GET(req: Request) {
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return UNAUTH();
-  const { data: sub } = await sb.from("subscription").select("status").eq("user_id", user.id).single();
-  if (!sub || !["trial", "active"].includes(sub.status)) return GATED();
+  const { data: sub } = await sb.from("subscription").select(ACCESS_COLUMNS).eq("user_id", user.id).single();
+  if (!hasAccess(sub)) return GATED();
   const url = new URL(req.url);
   const cursor = url.searchParams.get("cursor");
   const limit = Math.min(Number(url.searchParams.get("limit") ?? 20), 50);

@@ -18,7 +18,12 @@ vi.mock("@/lib/supabase/client", () => ({
 
 import { AccountForms, type AccountPrefs, type AccountSubscriber } from "@/app/(member)/account/account-forms";
 
-const SUBSCRIBER: AccountSubscriber = { name: "Justin Alpar", email: "you@stablepass.co", phone: "+61 431 581 526" };
+const SUBSCRIBER: AccountSubscriber = {
+  firstName: "Justin",
+  lastName: "Alpar",
+  email: "you@stablepass.co",
+  phone: "+61 431 581 526",
+};
 const PREFS: AccountPrefs = { newPost: true, raceDay: true, raceResult: false, milestone: false };
 
 function fetchImpl() {
@@ -54,6 +59,20 @@ describe("AccountForms", () => {
     expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
   });
 
+  it("renders First name / Last name inputs populated from props, and no Name input", () => {
+    global.fetch = fetchImpl() as unknown as typeof fetch;
+    render(<AccountForms initialSubscriber={SUBSCRIBER} initialPrefs={PREFS} />);
+
+    const firstNameInput = screen.getByLabelText("First name");
+    const lastNameInput = screen.getByLabelText("Last name");
+    expect(firstNameInput).toHaveValue("Justin");
+    expect(lastNameInput).toHaveValue("Alpar");
+    expect(firstNameInput).toHaveAttribute("autoComplete", "given-name");
+    expect(lastNameInput).toHaveAttribute("autoComplete", "family-name");
+
+    expect(screen.queryByLabelText("Name")).toBeNull();
+  });
+
   it("toggling a notification pref PATCHes /api/me with just that pref", async () => {
     const fetchMock = fetchImpl();
     global.fetch = fetchMock as unknown as typeof fetch;
@@ -76,16 +95,19 @@ describe("AccountForms", () => {
     expect(raceDayToggle).toHaveAttribute("aria-checked", "false");
   });
 
-  it("Save PATCHes /api/me with the edited name/phone", async () => {
+  it("Save PATCHes /api/me with the edited first/last name and phone", async () => {
     const fetchMock = fetchImpl();
     global.fetch = fetchMock as unknown as typeof fetch;
     const user = userEvent.setup();
 
     render(<AccountForms initialSubscriber={SUBSCRIBER} initialPrefs={PREFS} />);
 
-    const nameInput = screen.getByLabelText("Name");
-    await user.clear(nameInput);
-    await user.type(nameInput, "Justin A.");
+    const firstNameInput = screen.getByLabelText("First name");
+    await user.clear(firstNameInput);
+    await user.type(firstNameInput, "Just");
+    const lastNameInput = screen.getByLabelText("Last name");
+    await user.clear(lastNameInput);
+    await user.type(lastNameInput, "A.");
     const phoneInput = screen.getByLabelText("Phone");
     await user.clear(phoneInput);
     await user.type(phoneInput, "+61 400 000 000");
@@ -96,7 +118,7 @@ describe("AccountForms", () => {
       "/api/me",
       expect.objectContaining({
         method: "PATCH",
-        body: JSON.stringify({ name: "Justin A.", phone: "+61 400 000 000" }),
+        body: JSON.stringify({ firstName: "Just", lastName: "A.", phone: "+61 400 000 000" }),
       }),
     );
     expect(await screen.findByText("Saved.")).toBeInTheDocument();

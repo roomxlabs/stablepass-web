@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { getUserMock, singleMock, insertMock, fromMock, edgeFetchMock } = vi.hoisted(() => {
+const { getUserMock, singleMock, insertMock, fromMock, edgeFetchMock, subSelectMock } = vi.hoisted(() => {
   const getUserMock = vi.fn();
   const singleMock = vi.fn();
   const insertMock = vi.fn();
@@ -19,8 +19,9 @@ const { getUserMock, singleMock, insertMock, fromMock, edgeFetchMock } = vi.hois
   });
 
   const edgeFetchMock = vi.fn();
+  const subSelectMock = subChain.select;
 
-  return { getUserMock, singleMock, insertMock, fromMock, edgeFetchMock };
+  return { getUserMock, singleMock, insertMock, fromMock, edgeFetchMock, subSelectMock };
 });
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -36,6 +37,7 @@ vi.mock("@/lib/api/edge", () => ({
 
 import { GET } from "@/app/api/feed/route";
 import { POST } from "@/app/api/feed/seen/route";
+import { GET as followingGET } from "@/app/api/feed/following/route";
 
 function req(url: string) {
   return new Request(url);
@@ -52,6 +54,7 @@ describe("GET /api/feed", () => {
     insertMock.mockReset();
     edgeFetchMock.mockReset();
     fromMock.mockClear();
+    subSelectMock.mockClear();
   });
 
   it("returns 401 with the error envelope when there is no session", async () => {
@@ -67,7 +70,7 @@ describe("GET /api/feed", () => {
 
   it("returns 402 when the subscription has lapsed, without calling the edge fn", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    singleMock.mockResolvedValue({ data: { status: "lapsed" } });
+    singleMock.mockResolvedValue({ data: { status: "lapsed", trial_ends_at: null, current_period_end: null } });
 
     const res = await GET(req("http://localhost/api/feed"));
     const body = await res.json();
@@ -79,7 +82,7 @@ describe("GET /api/feed", () => {
 
   it("returns 200 with the edge fn's data + meta when subscribed", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    singleMock.mockResolvedValue({ data: { status: "trial" } });
+    singleMock.mockResolvedValue({ data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } });
     edgeFetchMock.mockResolvedValue(
       fakeRes(200, { data: [{ id: "p1" }], meta: { nextCursor: "c", hasMore: true } }),
     );
@@ -94,7 +97,7 @@ describe("GET /api/feed", () => {
 
   it("returns 402 when the edge fn reports subscription_required", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    singleMock.mockResolvedValue({ data: { status: "trial" } });
+    singleMock.mockResolvedValue({ data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } });
     edgeFetchMock.mockResolvedValue(fakeRes(402, {}));
 
     const res = await GET(req("http://localhost/api/feed"));
@@ -106,7 +109,7 @@ describe("GET /api/feed", () => {
 
   it("returns 400 invalid_cursor when the edge fn rejects the cursor", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    singleMock.mockResolvedValue({ data: { status: "trial" } });
+    singleMock.mockResolvedValue({ data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } });
     edgeFetchMock.mockResolvedValue(fakeRes(400, {}));
 
     const res = await GET(req("http://localhost/api/feed?cursor=bad"));
@@ -114,6 +117,138 @@ describe("GET /api/feed", () => {
 
     expect(res.status).toBe(400);
     expect(body.error.code).toBe("invalid_cursor");
+  });
+
+  it("returns 402 when the trial expired even though status is still trial", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    singleMock.mockResolvedValue({ data: { status: "trial", trial_ends_at: "2020-01-01T00:00:00Z", current_period_end: null } });
+
+    const res = await GET(req("http://localhost/api/feed"));
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body.error.code).toBe("subscription_required");
+    expect(edgeFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 200 for an active member whose current_period_end is null", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    singleMock.mockResolvedValue({ data: { status: "active", trial_ends_at: null, current_period_end: null } });
+    edgeFetchMock.mockResolvedValue(
+      fakeRes(200, { data: [{ id: "p1" }], meta: { nextCursor: null, hasMore: false } }),
+    );
+
+    const res = await GET(req("http://localhost/api/feed"));
+
+    expect(res.status).toBe(200);
+  });
+
+  it("returns 402 for an active member whose current_period_end has passed", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    singleMock.mockResolvedValue({ data: { status: "active", trial_ends_at: null, current_period_end: "2020-01-01T00:00:00Z" } });
+
+    const res = await GET(req("http://localhost/api/feed"));
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body.error.code).toBe("subscription_required");
+    expect(edgeFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("selects the expiry columns, not just status", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    singleMock.mockResolvedValue({ data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } });
+    edgeFetchMock.mockResolvedValue(
+      fakeRes(200, { data: [{ id: "p1" }], meta: { nextCursor: null, hasMore: false } }),
+    );
+
+    await GET(req("http://localhost/api/feed"));
+
+    expect(subSelectMock).toHaveBeenCalledWith("status,trial_ends_at,current_period_end");
+  });
+});
+
+describe("GET /api/feed/following", () => {
+  beforeEach(() => {
+    getUserMock.mockReset();
+    singleMock.mockReset();
+    insertMock.mockReset();
+    edgeFetchMock.mockReset();
+    fromMock.mockClear();
+    subSelectMock.mockClear();
+  });
+
+  it("returns 401 with the error envelope when there is no session", async () => {
+    getUserMock.mockResolvedValue({ data: { user: null } });
+
+    const res = await followingGET(req("http://localhost/api/feed/following"));
+    const body = await res.json();
+
+    expect(res.status).toBe(401);
+    expect(body.error.code).toBe("unauthorized");
+    expect(edgeFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 402 when the subscription has lapsed, without calling the edge fn", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    singleMock.mockResolvedValue({ data: { status: "lapsed", trial_ends_at: null, current_period_end: null } });
+
+    const res = await followingGET(req("http://localhost/api/feed/following"));
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body.error.code).toBe("subscription_required");
+    expect(edgeFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 402 when the trial expired even though status is still trial", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    singleMock.mockResolvedValue({ data: { status: "trial", trial_ends_at: "2020-01-01T00:00:00Z", current_period_end: null } });
+
+    const res = await followingGET(req("http://localhost/api/feed/following"));
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body.error.code).toBe("subscription_required");
+    expect(edgeFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 402 for an active member whose current_period_end has passed", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    singleMock.mockResolvedValue({ data: { status: "active", trial_ends_at: null, current_period_end: "2020-01-01T00:00:00Z" } });
+
+    const res = await followingGET(req("http://localhost/api/feed/following"));
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body.error.code).toBe("subscription_required");
+    expect(edgeFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 200 for an active member whose current_period_end is null", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    singleMock.mockResolvedValue({ data: { status: "active", trial_ends_at: null, current_period_end: null } });
+    edgeFetchMock.mockResolvedValue(
+      fakeRes(200, { data: [{ id: "p1" }], meta: { nextCursor: null, hasMore: false } }),
+    );
+
+    const res = await followingGET(req("http://localhost/api/feed/following"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data).toEqual([{ id: "p1" }]);
+  });
+
+  it("selects the expiry columns, not just status", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    singleMock.mockResolvedValue({ data: { status: "active", trial_ends_at: null, current_period_end: null } });
+    edgeFetchMock.mockResolvedValue(
+      fakeRes(200, { data: [{ id: "p1" }], meta: { nextCursor: null, hasMore: false } }),
+    );
+
+    await followingGET(req("http://localhost/api/feed/following"));
+
+    expect(subSelectMock).toHaveBeenCalledWith("status,trial_ends_at,current_period_end");
   });
 });
 

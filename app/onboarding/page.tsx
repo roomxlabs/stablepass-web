@@ -4,6 +4,8 @@
 // sidebar). Own auth guard + content gate; horses are a gated, RLS-scoped read.
 import { redirect } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
+import { readSubscriptionState } from "@/lib/api/subscription-state";
+import { AccessWall } from "@/components/access-wall";
 import { HorsePicker, type PickHorse } from "./horse-picker";
 import { Wordmark } from "@/components/wordmark";
 
@@ -16,17 +18,28 @@ export default async function OnboardingPage() {
   const { data: { user } } = await sb.auth.getUser();
   if (!user) redirect("/signin");
 
-  const [{ data: profile }, { data: subscription }] = await Promise.all([
+  const [{ data: profile }, subscription] = await Promise.all([
     sb.from("app_user").select("name,email").eq("id", user.id).maybeSingle(),
-    sb.from("subscription").select("status").eq("user_id", user.id).maybeSingle(),
+    readSubscriptionState(user.id),
   ]);
 
   const firstName = (profile?.name?.trim() || profile?.email?.split("@")[0] || "there").split(" ")[0];
-  const hasAccess = subscription?.status === "trial" || subscription?.status === "active";
+  // ENG-585: this used to be `status === "trial" || status === "active"`, on a
+  // select that did not even fetch the dates. An `active` member whose pass
+  // expired therefore counted as having access, ran the horse query, got
+  // nothing back (RLS correctly denies them) and was shown "No horses yet." —
+  // a stranger's empty-stable message instead of an explanation.
+  //
+  // Note the direction of this change: `hasAccess()` is STRICTLY STRICTER than
+  // the status test it replaces (identical for lapsed/canceled/entitled rows,
+  // and it additionally catches the expired ones). It can only ever show the
+  // wall to more people, never content to more people — no access behaviour
+  // moves, which is the guardrail on this ticket.
+  const { entitled, everSubscribed } = subscription;
 
   // Content-gated read: RLS already returns nothing without access, but detect it
-  // explicitly so we can prompt to reactivate rather than show an empty grid.
-  const { data: horseRows } = hasAccess
+  // explicitly so we can show the wall rather than an empty grid.
+  const { data: horseRows } = entitled
     ? await sb
         .from("horse")
         .select("id, display_name, trainer:trainer_id(name)")
@@ -48,12 +61,8 @@ export default async function OnboardingPage() {
 
       <div className="onboarding-web">
         <div className="onboarding-container">
-          {!hasAccess ? (
-            <div className="onboarding-empty">
-              <h1 className="onboarding-h">Your trial has ended.</h1>
-              <p className="onboarding-sub">Reactivate your subscription to keep following the horses you love.</p>
-              <a className="btn btn-primary btn-large" href="/checkout">Reactivate</a>
-            </div>
+          {!entitled ? (
+            <AccessWall everSubscribed={everSubscribed} variant="hero" />
           ) : horses.length === 0 ? (
             <div className="onboarding-empty">
               <h1 className="onboarding-h">No horses yet.</h1>
