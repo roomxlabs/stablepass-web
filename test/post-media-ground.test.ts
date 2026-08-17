@@ -30,6 +30,7 @@ describe("post media ground (ENG-612 rows 1 and 2)", () => {
   // chrome the app drew, because the box is edge to edge.
   it("leaves no --brand-green-dark behind post media", () => {
     const rule = GLOBALS.match(BASE_RULE)?.[0];
+    expect(rule).toBeDefined();
     expect(rule).not.toContain("--brand-green-dark");
   });
 
@@ -40,6 +41,23 @@ describe("post media ground (ENG-612 rows 1 and 2)", () => {
     expect(rule).toContain("aspect-ratio: 16/9");
     expect(GLOBALS).toMatch(/\.post-media-web\.tall\s*\{\s*aspect-ratio:\s*4\/5;\s*\}/);
     expect(GLOBALS).toMatch(/\.post-media-web\.square\s*\{\s*aspect-ratio:\s*1\/1;\s*\}/);
+  });
+
+  // The base-rule checks above would not notice brand green creeping back in
+  // through a DESCENDANT rule, which is how this regresses in practice. Scans
+  // every `.post-media-web*` rule instead.
+  //
+  // Deliberately scoped to `background`: `.post-media-web .media-play` legitimately
+  // uses `--brand-green-dark` as its `color` (the play glyph on a white pill),
+  // which is foreground chrome, not the ground behind unpainted media.
+  it("leaves no brand-green BACKGROUND on any post-media rule, not just the base", () => {
+    const rules = GLOBALS.match(/\.post-media-web[^{]*\{[^}]*\}/g) ?? [];
+    expect(rules.length).toBeGreaterThan(0);
+
+    const offenders = rules.filter((rule) =>
+      /background(-color)?:[^;}]*var\(--brand-green/.test(rule),
+    );
+    expect(offenders).toEqual([]);
   });
 
   // Guardrail: marketing.css is a separate, frozen design system diffed

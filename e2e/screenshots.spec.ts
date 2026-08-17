@@ -597,6 +597,24 @@ test("ENG-612 post media takes the asset's real aspect ratio on a neutral ground
       watermarked: false,
       published_at: at(2000),
     },
+    // The DISCRIMINATING fixture. 1.7778, 0.8 and 1 are exactly the three
+    // bucket-class ratios in globals.css, so those three assertions would still
+    // pass off the class alone if the inline `aspect-ratio` disappeared
+    // entirely. 1.2 matches NO bucket: it buckets as `.square` (1/1) for the
+    // fallback, so the box can only measure 1.2 if the inline value is present
+    // AND wins over the class. This is the assertion that actually proves the
+    // ticket.
+    {
+      horse_id: horse.id,
+      type: "photo",
+      status: "published",
+      body: "1.2 — matches no bucket class; only the inline ratio can produce it.",
+      media_url: "https://placehold.co/1200x1000/C9A56F/1A1A1A",
+      aspect_ratio: 1.2,
+      source_trainer_id: trainer.id,
+      watermarked: false,
+      published_at: at(3000),
+    },
   ]);
   if (postError) throw postError;
 
@@ -616,7 +634,7 @@ test("ENG-612 post media takes the asset's real aspect ratio on a neutral ground
 
     await page.goto(`/horses/${horse.id}`);
     const boxes = page.locator(".post-media-web");
-    await expect(boxes).toHaveCount(3);
+    await expect(boxes).toHaveCount(4);
 
     // Let the poster images settle so the evidence shots show the CROP, not a
     // half-loaded frame. The geometry assertions below do not depend on this.
@@ -634,13 +652,15 @@ test("ENG-612 post media takes the asset's real aspect ratio on a neutral ground
         // instead, which is still valid evidence for the neutral-ground half.
       });
 
-    const shots: Array<{ label: string; expected: number }> = [
-      { label: "landscape", expected: 1.7778 },
-      { label: "portrait", expected: 0.8 }, // 0.5625 clamped up to ASPECT_MIN
-      { label: "square", expected: 1 },
+    const shots: Array<{ label: string; expected: number; bucket: string }> = [
+      { label: "landscape", expected: 1.7778, bucket: "post-media-web" },
+      { label: "portrait", expected: 0.8, bucket: "post-media-web tall" }, // 0.5625 clamped up to ASPECT_MIN
+      { label: "square", expected: 1, bucket: "post-media-web square" },
+      // Bucket says 1/1, inline says 1.2 — measuring 1.2 proves the inline wins.
+      { label: "inline-beats-bucket", expected: 1.2, bucket: "post-media-web square" },
     ];
 
-    for (const [i, { label, expected }] of shots.entries()) {
+    for (const [i, { label, expected, bucket }] of shots.entries()) {
       const box = boxes.nth(i);
       await expect(box).toBeVisible();
 
@@ -652,6 +672,10 @@ test("ENG-612 post media takes the asset's real aspect ratio on a neutral ground
       expect(rect!.height).toBeGreaterThan(0);
       expect(rect!.width / rect!.height).toBeCloseTo(expected, 1);
 
+      // The bucket class is only the fallback; the inline value is what wins.
+      // Pinning both is what makes the `inline-beats-bucket` row meaningful.
+      await expect(box).toHaveClass(bucket);
+
       // The unpainted ground is neutral ink (#1A1A1A), never brand green
       // (#1F4A40 = rgb(31, 74, 64)) — the "green screen" the client reported.
       const ground = await box.evaluate((el) => getComputedStyle(el).backgroundColor);
@@ -662,6 +686,27 @@ test("ENG-612 post media takes the asset's real aspect ratio on a neutral ground
     }
 
     await page.screenshot({ path: ".rx/review/eng-612-horse-profile-all.png", fullPage: true });
+
+    // BOTH profile feeds, per the acceptance criteria. This is not ceremony:
+    // /api/trainers/:id/feed is the OTHER route that names its post columns
+    // explicitly, and `sb` is untyped, so a dropped `aspect_ratio` there is
+    // invisible to `tsc` and would silently flatten every ratio to 1.6. The
+    // 1.2 fixture is the one that proves the column survived the round trip,
+    // since no bucket class can produce that number.
+    await page.goto(`/trainers/${trainer.id}`);
+    const trainerBoxes = page.locator(".post-media-web");
+    await expect(trainerBoxes).toHaveCount(4);
+
+    const trainerRect = await trainerBoxes.nth(3).boundingBox();
+    expect(trainerRect, "trainer profile 1.2 box has no layout").not.toBeNull();
+    expect(trainerRect!.width / trainerRect!.height).toBeCloseTo(1.2, 1);
+
+    const trainerGround = await trainerBoxes
+      .nth(3)
+      .evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(trainerGround).toBe("rgb(26, 26, 26)");
+
+    await page.screenshot({ path: ".rx/review/eng-612-trainer-profile-all.png", fullPage: true });
   } finally {
     // Best-effort cleanup, matching the W6/W7 convention (content rows are
     // left behind; only the throwaway user is removed).

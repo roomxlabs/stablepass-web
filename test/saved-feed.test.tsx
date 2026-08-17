@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SavedFeed } from "@/app/(member)/saved/saved-feed";
@@ -193,4 +193,69 @@ describe("SavedFeed", () => {
       expect(box!.className).toBe("post-media-web");
     });
   });
+
+  // ENG-612 — the PLAYING <video> box, not just the poster box.
+  //
+  // This is the branch that actually matters. Photos never carry an
+  // `aspect_ratio` (a Storage asset has no Mux ratio), so a VIDEO is the only
+  // media type that ever has a real one — yet the inline player on all five
+  // surfaces was covered by nothing. `tsc` catches a wrong field name here, but
+  // not a dropped `style`, a reverted spread, or a `mediaBoxProps(null)`.
+  describe("the playing <video> box (ENG-612)", () => {
+    const PLAYBACK_URL = "https://stream.mux.test/signed.m3u8?token=stub";
+
+    const ratioOf = (el: HTMLElement): number => {
+      const [w, h = "1"] = el.style.aspectRatio.split("/").map((part) => part.trim());
+      return Number(w) / Number(h);
+    };
+
+    beforeEach(() => {
+      // A 9:16 reel: the ratio must clamp to the 0.8 floor, and must still be
+      // 0.8 AFTER the poster is swapped for the player.
+      bookmarkData = [
+        { ...BOOKMARKS[0], post: { ...BOOKMARKS[0].post, type: "video", aspect_ratio: 0.5625 } },
+      ];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => ({
+          status: 200,
+          json: async () => ({ data: { playbackUrl: PLAYBACK_URL } }),
+        })),
+      );
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("keeps the clamped ratio after play, and the player carries no hardcoded 16/9 or #000", async () => {
+      const { container } = render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+      await screen.findByText("Nature Strip");
+
+      // Assert the poster box first, so a failure after play is unambiguous.
+      expect(ratioOf(container.querySelector<HTMLElement>(".post-media-web")!)).toBeCloseTo(0.8, 4);
+
+      await userEvent.click(screen.getByRole("button", { name: "Play video" }));
+
+      const video = await waitFor(() => {
+        const found = container.querySelector<HTMLVideoElement>(".post-media-web video");
+        expect(found).toBeTruthy();
+        return found!;
+      });
+
+      // Guardrail: the src is the minted signed URL, never a raw Mux asset.
+      expect(video.getAttribute("src")).toBe(PLAYBACK_URL);
+
+      // The box wrapping the player keeps the SAME clamped geometry as the poster.
+      const box = video.closest<HTMLElement>(".post-media-web")!;
+      expect(ratioOf(box)).toBeCloseTo(0.8, 4);
+      expect(box.className).toBe("post-media-web tall");
+
+      // Acceptance: the hardcoded player styles are gone. Geometry and ground
+      // both come from the box now, so the element has neither of its own.
+      expect(video.style.aspectRatio).toBe("");
+      expect(video.style.background).toBe("");
+    });
+  });
+
 });
