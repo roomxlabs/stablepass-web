@@ -521,14 +521,27 @@ if (MOCKUP) {
         expect(survived.every((s) => got.includes(s))).toBe(true);
       });
 
-      it("adds rules only for the two new components", () => {
+      it("adds rules only for the two new components, plus the wordmark guard", () => {
         // The invariant that matters: ENG-600 may introduce `.nav-actions` and
         // `.nav-signin`, and may not quietly restyle any mockup nav selector.
+        //
+        // Two exceptions, both forced by fitting a second action on a phone:
+        //
+        //   `.nav-in > .nav-logo` — two pills beside a flex item with no basis
+        //   shrink the wordmark to a sliver instead of overflowing, so it needs
+        //   `flex:0 0 auto`. Written as a child combinator rather than a bare
+        //   `.nav-logo` so it cannot be mistaken for a restyle of the mockup's rule.
+        //
+        //   `.nav-in` — its gap and padding are overridden below 520px. This is an
+        //   ADDITION (a narrow-viewport override), not an edit: the mockup's own
+        //   `.nav-in` rule must still survive byte for byte, which the test above
+        //   enforces.
+        const ALLOWED = [".nav-actions", ".nav-signin", ".nav-in"];
         const addedSelectors = got
           .filter((s) => !want.includes(s))
           .map((s) => s.slice(0, s.indexOf("{")));
         expect(addedSelectors.length).toBeGreaterThan(0);
-        expect(addedSelectors.every((s) => s.startsWith(".nav-actions") || s.startsWith(".nav-signin"))).toBe(true);
+        expect(addedSelectors.every((s) => ALLOWED.some((a) => s.startsWith(a)))).toBe(true);
       });
 
       it("still pushes the actions group right once the links are hidden", () => {
