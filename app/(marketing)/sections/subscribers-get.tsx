@@ -11,14 +11,21 @@
  *  - `.mem-apps` — the eight subscription screens, shown as the actual app
  *    screens rather than a checklist.
  *
- * The `[data-ma]` arrows ship here but are INERT until W3 (ENG-589). They are
- * part of W3's declared DOM contract: its marquee driver binds them with an
- * event delegate and never edits this file. Rendering them now keeps the section
- * visually faithful and keeps W3's diff to the swap it declared.
+ * The `.ma-scroll` row and its `[data-ma]` arrows now live in
+ * `app-screens-carousel.tsx`. W2 shipped them here inert on the contract that
+ * W3 (ENG-589) would bind them; W3 wired only the trainer strip, so they reached
+ * production dead. The cards, the duplicate set and the arrows all have to be
+ * rendered by the component that measures them, exactly as with the trainers,
+ * so this file keeps the shell and hands the screens over.
  *
  * On a phone the mockup's media query turns `.ma-scroll` into a native
  * `overflow-x:auto` swipe lane, so the row is reachable without any JS at all.
+ * A desktop pointer with scripting off is NOT covered: the mockup has no
+ * `.ma-scroll.is-static` rule, so the row stays clipped there. Left as-is
+ * on purpose — see the note in `test/marketing-app-screens.test.tsx`.
  */
+
+import AppScreensCarousel, { type AppScreen } from "../app-screens-carousel";
 
 const TILES = [
   {
@@ -47,7 +54,7 @@ const TILES = [
   },
 ];
 
-const APP_SCREENS = [
+const APP_SCREENS: AppScreen[] = [
   {
     src: "/marketing/2abf5618.jpg",
     alt: "stablepass app: a written update posted by the trainer",
@@ -132,48 +139,7 @@ export default function SubscribersGet() {
             Every update lands in the same clean feed on the app, whether it is a video from morning trackwork, the
             trainer preview before a run, or the jockey debrief after a race.
           </p>
-          <div className="ma-scroll">
-            <div className="ma-row">
-              {APP_SCREENS.map((screen) => (
-                <figure className="ma" key={screen.caption}>
-                  <div className="phone">
-                    <div className="ph-view">
-                      <span className="ph-island" />
-                      <img className="shot" src={screen.src} alt={screen.alt} />
-                      <span className="ph-home" />
-                    </div>
-                  </div>
-                  <figcaption>{screen.caption}</figcaption>
-                </figure>
-              ))}
-            </div>
-          </div>
-          <div className="ma-ctrl">
-            <button type="button" data-ma="-1" aria-label="Previous screen">
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M15 5 8 12l7 7" />
-              </svg>
-            </button>
-            <button type="button" data-ma="1" aria-label="Next screen">
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="m9 5 7 7-7 7" />
-              </svg>
-            </button>
-          </div>
+          <AppScreensCarousel screens={APP_SCREENS} />
         </div>
       </div>
     </section>
