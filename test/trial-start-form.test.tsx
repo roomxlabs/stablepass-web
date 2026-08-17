@@ -286,4 +286,145 @@ describe("TrialStartForm", () => {
       .map((i) => (i as HTMLInputElement).value);
     expect(otherValues).not.toContain("password123");
   });
+
+  // Dropped on client instruction 17 Aug 2026. Pinned because the mockup still
+  // shows it, so a future fidelity pass would otherwise put it back.
+  it("does not render the '30 days, on us' trial banner", () => {
+    const { container } = render(<TrialStartForm />);
+
+    expect(container.querySelector(".trial-banner-web")).toBeNull();
+    expect(container.textContent).not.toContain("30 days, on us");
+    expect(container.textContent).not.toContain("never renews on its own");
+
+    // Positive control: the trial is still communicated, just by the heading.
+    expect(container.textContent).toContain("Start your 30 days free.");
+  });
+
+  // The placeholders used to read 'Justin' / 'Alpar' — the client's own name.
+  it("uses neutral sample placeholders, not a real person's name", () => {
+    render(<TrialStartForm />);
+
+    const placeholders: Record<string, string> = {
+      "First name": "John",
+      "Last name": "Smith",
+      Phone: "+61 412 345 678",
+    };
+
+    for (const [label, value] of Object.entries(placeholders)) {
+      expect(screen.getByLabelText(label)).toHaveAttribute("placeholder", value);
+    }
+  });
+});
+
+describe("TrialStartForm — Australian phone formatting", () => {
+  function phone() {
+    return screen.getByLabelText("Phone") as HTMLInputElement;
+  }
+
+  function typePhone(value: string) {
+    fireEvent.change(phone(), { target: { value } });
+    return phone().value;
+  }
+
+  it.each([
+    ["a local mobile", "0412345678", "+61 412 345 678"],
+    ["a mobile with no trunk zero", "412345678", "+61 412 345 678"],
+    ["an already-international mobile", "+61412345678", "+61 412 345 678"],
+    ["a bare country code", "61412345678", "+61 412 345 678"],
+    ["an IDD-prefixed mobile", "0061412345678", "+61 412 345 678"],
+    ["punctuation and spacing", " (0412) 345-678 ", "+61 412 345 678"],
+    ["a landline in brackets", "(02) 9876 5432", "+61 2 9876 5432"],
+  ])("formats %s", (_label, typed, expected) => {
+    render(<TrialStartForm />);
+    expect(typePhone(typed)).toBe(expected);
+  });
+
+  it("groups a mobile 3-3-3 and a landline 1-4-4 as the digits arrive", () => {
+    render(<TrialStartForm />);
+
+    expect(typePhone("04")).toBe("+61 4");
+    expect(typePhone("0412")).toBe("+61 412");
+    expect(typePhone("04123")).toBe("+61 412 3");
+    expect(typePhone("0298")).toBe("+61 2 98");
+  });
+
+  // Typing the trunk '0' would otherwise erase the keystroke and look broken.
+  it("shows the bare country code once a prefix digit is typed", () => {
+    render(<TrialStartForm />);
+    expect(typePhone("0")).toBe("+61 ");
+  });
+
+  it("caps at nine significant digits instead of truncating a paste", () => {
+    render(<TrialStartForm />);
+    expect(typePhone("0412345678999")).toBe("+61 412 345 678");
+  });
+
+  it("clears the field when the value is emptied", () => {
+    render(<TrialStartForm />);
+
+    typePhone("0412345678");
+    expect(typePhone("")).toBe("");
+  });
+
+  it("is idempotent — reformatting its own output changes nothing", () => {
+    render(<TrialStartForm />);
+
+    const once = typePhone("0412345678");
+    expect(typePhone(once)).toBe(once);
+  });
+
+  it("posts the formatted value, not what was typed", async () => {
+    const fetchMock = mockFetch(201, { data: {} });
+    render(<TrialStartForm />);
+
+    fill({ Phone: "0412345678" });
+    submit();
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(body.phone).toBe("+61 412 345 678");
+  });
+
+  it.each([
+    ["an incomplete number", "0412"],
+    ["a 1300 service number", "1300123456"],
+    ["an invalid leading digit", "0512345678"],
+  ])("rejects %s with no network call", async (_label, typed) => {
+    const fetchMock = mockFetch(201);
+    render(<TrialStartForm />);
+
+    fill({ Phone: typed });
+    submit();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Enter a valid Australian phone number, e.g. +61 412 345 678.",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts a landline, not only mobiles", async () => {
+    const fetchMock = mockFetch(201, { data: {} });
+    render(<TrialStartForm />);
+
+    fill({ Phone: "(02) 9876 5432" });
+    submit();
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(body.phone).toBe("+61 2 9876 5432");
+  });
+
+  // An empty phone is a missing field, not a malformed one — the copy differs.
+  it("reports an empty phone as a required field", async () => {
+    const fetchMock = mockFetch(201);
+    render(<TrialStartForm />);
+
+    fill({ Phone: "" });
+    submit();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("All fields are required.");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
