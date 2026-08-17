@@ -57,12 +57,13 @@ export default function TrainersStrip({ trainers = TRAINERS }: TrainersStripProp
         </div>
       </div>
       <TrainerCarousel trainers={trainers} />
-      <div className="wrap">
-        <p className="tr-fine">
-          Photographs and locations are the real supplied trainer details. Bios and horse counts are placeholders
-          pending the stables, and are editable from the admin portal.
-        </p>
-      </div>
+      {/* ENG-600: the `.tr-fine` line was removed. It read "Photographs and locations
+          are the real supplied trainer details. Bios and horse counts are placeholders
+          pending the stables, and are editable from the admin portal." That is copy
+          written FOR Justin during review, sitting on the public page, and it disclosed
+          the admin portal to subscribers. The bios and horse counts it describes are
+          still deliberate placeholders and must stay that way until the stables supply
+          real copy — see ENG-600 section B. */}
     </section>
   );
 }

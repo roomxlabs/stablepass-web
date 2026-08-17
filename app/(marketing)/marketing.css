@@ -103,7 +103,8 @@
   .marketing .nav-links a:hover{color:var(--brand)}
   .marketing .nav-cta{font-size:13.5px;font-weight:600;background:var(--brand);color:#fff;border-radius:999px;padding:10px 22px;transition:background .2s ease}
   .marketing .nav-cta:hover{background:var(--deep)}
-  @media (max-width:880px){.marketing .nav-links{display:none}.marketing .nav-cta{margin-left:auto}}
+  /* ENG-600: sign in + join are one group, set apart from the section anchors. */
+  @media (max-width:880px){.marketing .nav-links{display:none}.marketing .nav-actions{margin-left:auto}}
 
   /* ── hero ── */
   .marketing .hero{position:relative;overflow:hidden;padding:84px 0 96px}
@@ -730,3 +731,26 @@
   .marketing .is-sent .sent{display:block}
   @media (max-width:640px){.marketing .sheet-card{padding:32px 24px 30px}}
 
+
+  /* ────────────────────────────────────────────────────────────────────────
+     ENG-600 — NOT part of the v2.7 port.
+     Kept at the end, after every ported rule, so the fidelity test in
+     test/marketing-shell.test.tsx still compares the port against the mockup
+     as an ordered list without these shifting the indices.
+     Every selector here is unique to this block (`.nav-actions`, `.nav-signin`)
+     or scoped beneath one, so none collides with a mockup selector.
+
+     Why it exists: the mockup's nav had ONE action, so it never needed a rule
+     for a second one, nor any narrow-viewport handling. Adding "Sign in" makes
+     two, which overflows at 390px. Same idiom the hero chip uses at 520px:
+     nothing mid-wraps, tighten the spacing. Both labels are approved copy and
+     are NOT shortened.
+     ──────────────────────────────────────────────────────────────────────── */
+  .marketing .nav-actions{display:flex;align-items:center;gap:18px}
+  .marketing .nav-signin{font-size:13.5px;font-weight:500;color:var(--mut);white-space:nowrap;transition:color .2s ease}
+  .marketing .nav-signin:hover{color:var(--brand)}
+  .marketing .nav-actions .nav-cta{white-space:nowrap}
+  @media (max-width:520px){
+    .marketing .nav-actions{gap:11px}
+    .marketing .nav-actions .nav-cta{padding:10px 15px}
+  }

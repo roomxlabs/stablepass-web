@@ -59,10 +59,10 @@ export default function Pricing() {
               </li>
             ))}
           </ul>
-          <a className="btn cta-trial" href="#top">
+          <a className="btn cta-trial" href="/start">
             Start your free 30 day trial
           </a>
-          <a className="btn cta-join" href="#top">
+          <a className="btn cta-join" href="/start">
             Start Your Subscription
           </a>
           <p className="price-fine">

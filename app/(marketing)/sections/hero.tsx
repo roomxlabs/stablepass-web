@@ -51,10 +51,10 @@ export default function Hero() {
               Follow the journey. Feel part of the action.
             </p>
             <div className="hero-actions">
-              <a className="btn btn-green cta-trial" href="#subscription">
+              <a className="btn btn-green cta-trial" href="/start">
                 Start your free 30 day trial
               </a>
-              <a className="btn btn-green cta-join" href="#subscription">
+              <a className="btn btn-green cta-join" href="/start">
                 Join stablepass.
               </a>
               <a className="btn btn-ghost" href="#how">

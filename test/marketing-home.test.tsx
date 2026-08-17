@@ -431,11 +431,27 @@ describe.skipIf(!MOCKUP)("marketing home — the frozen fixture still matches th
       readFileSync(path.join(REPO, "test", "fixtures", "marketing-copy.json"), "utf8"),
     ) as { blocks: { signature: string; runs: string[]; images: (string | null)[] }[] };
 
+    // ENG-600: copy the mockup carries but the site deliberately does NOT ship.
+    // Listed verbatim so the deviation is auditable and so anything else that
+    // goes missing from the fixture still fails this test.
+    const DELIBERATELY_DROPPED = [
+      // Reviewer-facing note written for the client during design review. It sat
+      // on the public page and disclosed the admin portal to subscribers.
+      "Photographs and locations are the real supplied trainer details. Bios and horse counts are placeholders pending the stables, and are editable from the admin portal.",
+    ];
+
     const live = blocksOf(mockupDocument(), "body").map((el) => ({
       signature: signatureOf(el),
-      runs: textRuns(el),
+      runs: textRuns(el).filter((run) => !DELIBERATELY_DROPPED.includes(run)),
       images: imagesOf(el),
     }));
+
+    // If the mockup ever stops carrying one of these, the filter above has
+    // quietly become a no-op and this list should shrink with it.
+    const mockupRuns = blocksOf(mockupDocument(), "body").flatMap((el) => textRuns(el));
+    for (const dropped of DELIBERATELY_DROPPED) {
+      expect(mockupRuns).toContain(dropped);
+    }
 
     expect(live).toEqual(fixture.blocks);
   });
