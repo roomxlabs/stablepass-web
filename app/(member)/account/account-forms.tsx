@@ -13,7 +13,12 @@ import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
 
 export interface AccountSubscriber {
-  name: string;
+  // First/last are the source of truth (ENG-566). `name` is deliberately NOT
+  // here: it is no longer an editable field, and the DB trigger recomposes it
+  // from these two on every write, so the old single-`name` input would be a
+  // second, conflicting writer of the same value.
+  firstName: string;
+  lastName: string;
   email: string;
   phone: string;
 }
@@ -49,7 +54,8 @@ export function AccountForms({
 }) {
   const router = useRouter();
 
-  const [name, setName] = useState(initialSubscriber.name);
+  const [firstName, setFirstName] = useState(initialSubscriber.firstName);
+  const [lastName, setLastName] = useState(initialSubscriber.lastName);
   const [phone, setPhone] = useState(initialSubscriber.phone);
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
@@ -63,7 +69,7 @@ export function AccountForms({
     setSavingProfile(true);
     setProfileError(null);
     setProfileSaved(false);
-    const res = await patchMe({ name, phone });
+    const res = await patchMe({ firstName, lastName, phone });
     if (res.ok) {
       setProfileSaved(true);
     } else {
@@ -101,16 +107,38 @@ export function AccountForms({
           </div>
         </div>
         <form onSubmit={onSaveProfile} style={{ padding: "22px 26px 26px" }}>
-          <div className="input-group">
-            <label className="input-label" htmlFor="account-name">Name</label>
-            <input
-              id="account-name"
-              className="input"
-              type="text"
-              autoComplete="name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
+          {/*
+            The mockup's single Name row becomes the first/last pair, using the
+            design system's existing `.input-row` + `.input-group` pattern (the
+            same pairing 03-trial-start.html uses) rather than a new one.
+            `flexWrap` + a flex-basis on each group is what stacks them on a
+            narrow viewport — `.input-row` itself has no stacking breakpoint,
+            and adding one would mean editing globals.css, which is outside
+            this ticket's surface and shared with the slice in flight.
+          */}
+          <div className="input-row" style={{ flexWrap: "wrap" }}>
+            <div className="input-group" style={{ flex: "1 1 180px" }}>
+              <label className="input-label" htmlFor="account-first-name">First name</label>
+              <input
+                id="account-first-name"
+                className="input"
+                type="text"
+                autoComplete="given-name"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+              />
+            </div>
+            <div className="input-group" style={{ flex: "1 1 180px" }}>
+              <label className="input-label" htmlFor="account-last-name">Last name</label>
+              <input
+                id="account-last-name"
+                className="input"
+                type="text"
+                autoComplete="family-name"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+              />
+            </div>
           </div>
           <div className="input-group">
             <label className="input-label" htmlFor="account-phone">Phone</label>

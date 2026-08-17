@@ -7,6 +7,8 @@
 // rendered with the reused W4 <HorseCard> in the onboarding grid's skin.
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
+import { AccessWall } from "@/components/access-wall";
 import { HorseCard } from "@/components/horse-card";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import type { HorseSummary } from "@/components/types";
@@ -18,7 +20,9 @@ function one<T>(v: T | T[] | null): T | null {
   return Array.isArray(v) ? (v[0] ?? null) : v;
 }
 
-export function HorsesGrid({ viewerId }: { viewerId: string }) {
+// `everSubscribed` — see the note in ../explore/explore-feed.tsx (server-resolved
+// boolean; the Stripe id never reaches the browser).
+export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; everSubscribed: boolean }) {
   const router = useRouter();
   const [horses, setHorses] = useState<HorseSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -33,8 +37,18 @@ export function HorsesGrid({ viewerId }: { viewerId: string }) {
       setGated(false);
       const sb = supabaseBrowser();
 
-      const { data: sub } = await sb.from("subscription").select("status").eq("user_id", viewerId).maybeSingle();
-      if (!sub || !["trial", "active"].includes(sub.status)) {
+      const { data: sub } = await sb.from("subscription").select(ACCESS_COLUMNS).eq("user_id", viewerId).maybeSingle();
+      // ENG-585: this was `!["trial","active"].includes(status)` on a
+      // status-only select, so an `active` member whose `current_period_end`
+      // had passed counted as entitled here, ran the read, got nothing back
+      // (RLS denies them correctly) and saw an EMPTY screen instead of the
+      // wall. `hasAccess()` is the shared rule (lib/api/access.ts) — pure and
+      // client-safe, already imported this way by the expiry banner.
+      //
+      // Strictly stricter than the test it replaces: identical for entitled,
+      // lapsed and canceled rows, and it additionally catches expired ones. It
+      // can only wall MORE members, never reveal content to one.
+      if (!hasAccess(sub as AccessRow | null)) {
         if (!cancelled) { setGated(true); setLoading(false); }
         return;
       }
@@ -62,13 +76,7 @@ export function HorsesGrid({ viewerId }: { viewerId: string }) {
     <div className="page-pad">
       <h1 className="section-title-web">Horses</h1>
 
-      {gated && (
-        <div className="aside-card">
-          <h3>Your trial has ended.</h3>
-          <p style={{ color: "var(--muted)", marginBottom: 16 }}>Reactivate your subscription to browse horses.</p>
-          <a className="btn btn-primary" href="/checkout">Reactivate</a>
-        </div>
-      )}
+      {gated && <AccessWall everSubscribed={everSubscribed} />}
 
       {!gated && error && <p style={{ color: "var(--muted)", padding: "24px 0" }}>Couldn&rsquo;t load horses.</p>}
 

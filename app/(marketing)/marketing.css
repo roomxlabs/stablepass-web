@@ -1,0 +1,779 @@
+/* ====================================================================
+   stablepass. marketing — scoped stylesheet (ENG-587 / W1)
+
+   A VERBATIM port of the <style> block of the signed-off marketing mockup,
+   Concept B / "Race Day" / v2.6:
+
+       10-marketing-site/deploy/src/mockup.html
+
+   The design is frozen and client-approved, so nothing here is "tidied":
+   the declarations, their order, the comments and the original indentation
+   are the mockup's. Exactly three changes were applied, and
+   test/marketing-shell.test.tsx re-derives this file from the mockup to prove
+   no fourth one crept in:
+
+     1. every selector is scoped under `.marketing` (the wrapper rendered by
+        app/(marketing)/layout.tsx), so `:root` becomes `.marketing` and the
+        tokens never touch app/globals.css. The member app's palette is
+        deliberately near-but-not-equal (--paper #FAF9F4 vs --cream #FAF7F2,
+        --ink #1E2B26 vs #1A1A1A, --gold #C1913F vs #C9A56F) and .btn /
+        .btn-ghost exist in BOTH sheets with different padding and borders —
+        the scope is what stops them colliding on this page;
+     2. the mockup's `body` rule is split: the declarations that only work on
+        the real <body> (ground, overflow-x, and the UA 8px margin globals.css
+        resets) are re-applied via `body:has(.marketing)`, and the rest moves
+        to `.marketing`. See the note on that rule — putting overflow-x on the
+        wrapper silently breaks the sticky nav;
+     3. the two inlined background images became public/ paths:
+        .band  -> /marketing/59b40037.jpg
+        .cta-bg -> /marketing/8d95c6f2.jpg
+
+   `html{scroll-behavior}` and the @keyframes stops are intentionally NOT
+   scoped. This file is imported only by the marketing layout, so it ships
+   on marketing routes alone.
+
+   The `.js` / `.rv` contract is load-bearing: the reveal is written
+   `.marketing.js .rv{opacity:0}`, and `js` is added to the WRAPPER before
+   first paint by layout.tsx — the mockup flagged <html>, but this route group
+   must not mutate the element the root layout renders (React reports a
+   hydration mismatch when it does). With scripting off the class never lands, so every
+   section is simply visible rather than stuck at opacity:0 — the client
+   reviews this page on a phone with JS blocked.
+
+   Sections below (hero, ribbon, tiles, carousels, trainer modal, sheets…)
+   are carried in full so W2/W3 add markup only, and never edit this file.
+   ==================================================================== */
+
+  .marketing{
+    --paper:#FAF9F4; --card:#FFFFFF; --ink:#1E2B26; --mut:#5C6D64;
+    --brand:#285D50; --deep:#1D453B; --sage:#E9EFE7; --sage2:#F1F4EC;
+    --gold:#C1913F; --line:#E3E5DB;
+    --serif:"Charter","Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    --sans:"Avenir Next",Avenir,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+    --mono:"SF Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    color-scheme:light;
+  }
+  html{scroll-behavior:smooth}
+  /* The mockup put these on <body>: the --paper ground, overflow-x, and the UA's default
+     8px margin, which it never reset. The root layout owns <body> here and globals.css
+     both zeroes its margin and paints it --cream, so those declarations are re-applied
+     through :has() — which keeps them on the element the mockup used, applies only where
+     a marketing wrapper exists, and at (0,1,1) beats globals.css's bare `body` whichever
+     order the two sheets load in. The colour is a literal because the tokens deliberately
+     live on .marketing rather than :root, so var(--paper) does not resolve out here.
+
+     overflow-x MUST stay on <body>. Moved onto the wrapper it makes that div a scroll
+     container (setting one axis to `hidden` computes the other to `auto`), and the sticky
+     nav then sticks to a scrollport that never scrolls — it scrolls off the top of the
+     page instead. On <body> the overflow propagates to the viewport and sticky behaves
+     as designed. Measured, not assumed: see the sticky assertion in e2e/marketing.spec.ts. */
+  body:has(.marketing){margin:8px;background:#FAF9F4;overflow-x:hidden}
+  .marketing,.marketing *,.marketing *::before,.marketing *::after{box-sizing:border-box}
+  /* the remainder of the mockup's `body` rule, on the wrapper */
+  .marketing{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:16.5px;line-height:1.65;-webkit-font-smoothing:antialiased}
+  .marketing img{max-width:100%;display:block;height:auto}
+  .marketing a{color:inherit;text-decoration:none}
+  .marketing .wrap{max-width:1180px;margin:0 auto;padding:0 28px}
+  .marketing h1,.marketing h2,.marketing h3{font-family:var(--serif);font-weight:600;line-height:1.12;text-wrap:balance;margin:0;letter-spacing:-.01em}
+  .marketing p{margin:0}
+  .marketing .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.2em;color:var(--brand);text-transform:uppercase;font-weight:600}
+  .marketing .btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;font-family:var(--sans);font-size:15px;font-weight:600;padding:15px 30px;border-radius:999px;border:1.5px solid transparent;cursor:pointer;transition:transform .22s ease,background .22s ease,color .22s ease,border-color .22s ease,box-shadow .22s ease}
+  .marketing .btn:hover{transform:translateY(-2px)}
+  .marketing .btn:focus-visible,.marketing a:focus-visible,.marketing summary:focus-visible{outline:2.5px solid var(--gold);outline-offset:3px}
+  .marketing .btn-green{background:var(--brand);color:#fff;box-shadow:0 10px 24px rgba(40,93,80,.24)}
+  .marketing .btn-green:hover{background:var(--deep)}
+  .marketing .btn-ghost{border-color:#C9CFC2;color:var(--ink)}
+  .marketing .btn-ghost:hover{border-color:var(--brand);color:var(--brand)}
+  .marketing .btn-cream{background:var(--paper);color:var(--brand)}
+  .marketing .btn-cream:hover{background:#fff}
+
+  .marketing.js .rv{opacity:0;transform:translateY(18px);transition:opacity .75s ease,transform .75s ease}
+  .marketing.js .rv.in{opacity:1;transform:none}
+  @media (prefers-reduced-motion: reduce){
+    html{scroll-behavior:auto}
+    .marketing.js .rv{opacity:1;transform:none;transition:none}
+    .marketing *{animation:none!important;transition:none!important}
+  }
+
+  /* ── nav ── */
+  .marketing .nav{position:sticky;top:0;z-index:50;background:rgba(250,249,244,.85);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+  .marketing .nav-in{max-width:1180px;margin:0 auto;padding:15px 28px;display:flex;align-items:center;gap:34px}
+  .marketing .nav-logo img{height:30px;width:auto}
+  .marketing .nav-links{display:flex;gap:28px;margin-left:auto;font-size:14px;font-weight:500;color:var(--mut)}
+  .marketing .nav-links a:hover{color:var(--brand)}
+  .marketing .nav-cta{font-size:13.5px;font-weight:600;background:var(--brand);color:#fff;border-radius:999px;padding:10px 22px;transition:background .2s ease}
+  .marketing .nav-cta:hover{background:var(--deep)}
+  /* ENG-600: sign in + join are one group, set apart from the section anchors. */
+  @media (max-width:880px){.marketing .nav-links{display:none}.marketing .nav-actions{margin-left:auto}}
+
+  /* ── hero ── */
+  .marketing .hero{position:relative;overflow:hidden;padding:84px 0 96px}
+  .marketing .hero-oval{position:absolute;top:-120px;right:-260px;width:900px;height:640px;border:1.5px dashed rgba(40,93,80,.22);border-radius:50%;transform:rotate(-16deg);pointer-events:none}
+  .marketing .hero-oval::after{content:"";position:absolute;inset:44px;border:1.5px solid rgba(40,93,80,.1);border-radius:50%}
+  .marketing .hero-in{display:grid;grid-template-columns:1.05fr .95fr;gap:64px;align-items:center;position:relative}
+  .marketing .hero-copy{display:flex;flex-direction:column;gap:24px;align-items:flex-start}
+  .marketing .hero-chip{display:inline-flex;align-items:center;gap:9px;background:var(--sage);color:var(--brand);font-family:var(--mono);font-size:11px;letter-spacing:.16em;font-weight:600;padding:9px 16px;border-radius:999px}
+  .marketing .hero-chip i{width:7px;height:7px;border-radius:50%;background:var(--gold)}
+  .marketing .chip-l1{display:inline-flex;align-items:center;gap:9px;white-space:nowrap}
+  .marketing .hero-chip b{white-space:nowrap}
+  /* phones: the one long pill becomes two stacked pills, nothing mid-wraps */
+  @media (max-width:520px){
+    .marketing .hero-chip{background:none;padding:0;flex-direction:column;align-items:flex-start;gap:7px}
+    .marketing .hero-chip .chip-sep{display:none}
+    .marketing .chip-l1,.marketing .hero-chip b{background:var(--sage);border-radius:999px;padding:9px 16px}
+  }
+  .marketing .hero h1{font-size:clamp(2.6rem,5.6vw,4.3rem)}
+  .marketing .hero-sub{color:var(--mut);font-size:17.5px;max-width:50ch}
+  .marketing .hero-price{font-family:var(--serif);font-size:1.25rem;color:var(--brand)}
+  .marketing .hero-actions{display:flex;flex-wrap:wrap;gap:14px}
+
+  .marketing .hero-vis{position:relative;min-height:560px}
+  .marketing .hero-photo{position:absolute;right:0;top:14px;width:min(410px,88%);border-radius:26px;overflow:hidden;transform:rotate(2.2deg);box-shadow:0 34px 70px rgba(30,43,38,.22)}
+  .marketing .hero-photo img{width:100%;aspect-ratio:4/4.7;object-fit:cover}
+  .marketing .hero-vis .phone{position:absolute;left:0;bottom:0;z-index:3}
+  @media (max-width:960px){
+    .marketing .hero{padding:56px 0 84px}
+    .marketing .hero-in{grid-template-columns:1fr;gap:56px}
+    .marketing .hero-vis{min-height:620px;max-width:520px;width:100%;margin:0 auto}
+    /* the photo bleeds to the right edge and the phone gives up a little width,
+       so the jockey stays readable beside it */
+    .marketing .hero-photo{right:-28px;top:0;width:min(340px,88%)}
+    .marketing .hero-vis .phone{position:absolute;left:0;bottom:0;--pw:min(236px,64vw)}
+  }
+
+  /* ── ribbon ── */
+  .marketing .ribbon{background:var(--brand);color:#EAF2EC;padding:15px 0;overflow:hidden}
+  .marketing .ribbon-track{display:flex;gap:0;width:max-content;animation:slide 38s linear infinite}
+  .marketing .ribbon span{font-family:var(--mono);font-size:11.5px;letter-spacing:.2em;white-space:nowrap;padding:0 22px;display:inline-flex;align-items:center;gap:22px}
+  .marketing .ribbon span::after{content:"✦";color:var(--gold);font-size:10px}
+  @keyframes slide{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+  @media (prefers-reduced-motion: reduce){.marketing .ribbon-track{animation:none;flex-wrap:wrap;width:auto}}
+
+  /* ── sections ── */
+  .marketing .sec{padding:104px 0}
+  .marketing .sec-head{max-width:660px;display:flex;flex-direction:column;gap:16px;margin-bottom:54px}
+  .marketing .sec-head.center{margin-left:auto;margin-right:auto;text-align:center;align-items:center}
+  .marketing .sec-head h2{font-size:clamp(1.9rem,3.6vw,2.9rem)}
+  .marketing .sec-head .lead{color:var(--mut)}
+
+  /* what is */
+  .marketing .duo{display:grid;grid-template-columns:1fr 1fr;gap:70px;align-items:center}
+  .marketing .duo-media img{width:100%;aspect-ratio:4/3.2;object-fit:cover;border-radius:24px;box-shadow:0 26px 54px rgba(30,43,38,.16)}
+  .marketing .duo-copy{display:flex;flex-direction:column;gap:18px}
+  .marketing .duo-copy h2{font-size:clamp(1.9rem,3.4vw,2.8rem)}
+  .marketing .duo-copy p{color:var(--mut);max-width:52ch}
+  .marketing .duo-copy .accent{font-family:var(--serif);font-style:italic;font-size:1.25rem;color:var(--brand)}
+  .marketing .duo-aud{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+  .marketing .duo-aud span{font-size:12.5px;font-weight:600;color:var(--brand);background:var(--sage);border-radius:999px;padding:7px 14px}
+  @media (max-width:900px){.marketing .duo{grid-template-columns:1fr;gap:40px}}
+
+  /* how it works */
+  .marketing .band{position:relative;background:var(--sage2) url("/marketing/59b40037.jpg");background-size:cover;background-position:center 32%;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+  .marketing .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}
+  .marketing .step{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:36px 32px 40px;display:flex;flex-direction:column;gap:16px;transition:transform .25s ease,box-shadow .25s ease}
+  .marketing .step:hover{transform:translateY(-4px);box-shadow:0 20px 40px rgba(30,43,38,.1)}
+  .marketing .cloth{width:52px;height:52px;border-radius:12px;background:var(--brand);color:#fff;display:grid;place-items:center;font-family:var(--serif);font-size:26px;box-shadow:inset 0 0 0 2.5px rgba(255,255,255,.35),0 8px 18px rgba(40,93,80,.28)}
+  .marketing .step:nth-child(2) .cloth{background:var(--gold);box-shadow:inset 0 0 0 2.5px rgba(255,255,255,.4),0 8px 18px rgba(154,112,40,.3)}
+  .marketing .step:nth-child(3) .cloth{background:var(--deep);box-shadow:inset 0 0 0 2.5px rgba(255,255,255,.32),0 8px 18px rgba(29,69,59,.3)}
+  .marketing .step h3{font-size:1.4rem}
+  .marketing .step p{color:var(--mut);font-size:15px}
+  @media (max-width:1080px){.marketing .steps{grid-template-columns:repeat(2,1fr)}}
+  @media (max-width:620px){.marketing .steps{grid-template-columns:1fr}}
+
+  /* ── app panel ── */
+  .marketing .app-panel{background:linear-gradient(160deg,var(--brand),var(--deep) 78%);border-radius:32px;padding:76px 56px;color:#F2F5EE;position:relative;overflow:hidden;display:grid;grid-template-columns:.92fr 1.08fr;gap:52px;align-items:center}
+  .marketing .app-panel .oval{position:absolute;left:-200px;bottom:-320px;width:820px;height:560px;border:1.5px dashed rgba(255,255,255,.16);border-radius:50%;transform:rotate(14deg)}
+  .marketing .app-head{max-width:none;margin:0;text-align:left;display:flex;flex-direction:column;gap:16px;align-items:flex-start;position:relative}
+  .marketing .app-head h2{font-size:clamp(1.9rem,3.6vw,2.9rem);color:#fff}
+  .marketing .app-head p{color:rgba(242,245,238,.78)}
+  .marketing .app-feats{display:flex;flex-wrap:wrap;justify-content:flex-start;gap:10px;margin-top:8px}
+  .marketing .app-feats span{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:8px 16px}
+  .marketing .app-feats svg{width:14px;height:14px;color:#EDD9A8}
+  .marketing .stage{position:relative;display:flex;justify-content:center;align-items:center;margin-top:0;min-width:0}
+  @media (max-width:900px){
+    .marketing .app-panel{display:flex;flex-direction:column;padding:56px 24px 64px;border-radius:26px;gap:44px}
+    .marketing .app-head{text-align:center;align-items:center}
+    .marketing .app-feats{justify-content:center}
+    .marketing .laptop{width:min(560px,100%)}
+    .marketing .lap-screen{margin:0 20px}
+  }
+
+  /* devices */
+  .marketing .laptop{position:relative;width:min(640px,100%)}
+  .marketing .lap-screen{background:linear-gradient(180deg,#313834,#101915 22%);border-radius:16px 16px 0 0;padding:13px 13px 15px;position:relative;margin:0 36px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.09),inset 0 1px 0 rgba(255,255,255,.14),0 30px 60px -18px rgba(6,18,14,.55)}
+  .marketing .lap-cam{position:absolute;top:6px;left:50%;transform:translateX(-50%);width:4px;height:4px;border-radius:50%;background:#0A120E;box-shadow:inset 0 0 1px rgba(130,170,160,.8),0 0 0 1.5px rgba(255,255,255,.05)}
+  .marketing .lap-view{border-radius:5px;overflow:hidden;background:#FAF9F4;aspect-ratio:16/10;box-shadow:0 0 0 1px rgba(0,0,0,.5)}
+  .marketing .lap-base{height:17px;background:linear-gradient(180deg,#EDEFE7 0%,#D3D7CB 45%,#AEB4A7 80%,#878E82 100%);border-radius:3px 3px 14px 14px;position:relative;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 2px 3px rgba(10,25,20,.25)}
+  .marketing .lap-base::before{content:"";position:absolute;top:calc(100% + 6px);left:6%;right:6%;height:24px;background:radial-gradient(50% 100% at 50% 0,rgba(6,18,14,.45),rgba(6,18,14,0) 72%);border-radius:50%;pointer-events:none}
+  .marketing .lap-base::after{content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);width:120px;height:7px;background:linear-gradient(180deg,#969D91,#C2C7BA);border-radius:0 0 10px 10px;box-shadow:inset 0 1px 2px rgba(0,0,0,.25)}
+  .marketing .phone{position:relative;--pw:min(258px,72vw);width:var(--pw);background:linear-gradient(150deg,#46554E,#131F1A 38%,#1C2A24 72%,#39463F);border-radius:calc(var(--pw)*0.17829);padding:calc(var(--pw)*0.03488);box-shadow:0 44px 64px -20px rgba(10,25,20,.5),0 18px 30px rgba(10,25,20,.3),0 2px 6px rgba(10,25,20,.35),inset 0 1px 1px rgba(255,255,255,.28),inset 0 -1px 1px rgba(255,255,255,.1),inset 0 0 0 1px rgba(255,255,255,.06)}
+  .marketing .phone::before{content:"";position:absolute;left:calc(var(--pw)*-0.00775);top:calc(var(--pw)*0.37984);width:calc(var(--pw)*0.0155);height:calc(var(--pw)*0.09302);border-radius:2px 0 0 2px;background:#2A362F;box-shadow:0 calc(var(--pw)*0.13953) 0 #2A362F,0 calc(var(--pw)*0.27132) 0 #2A362F}
+  .marketing .phone::after{content:"";position:absolute;right:calc(var(--pw)*-0.00775);top:calc(var(--pw)*0.52713);width:calc(var(--pw)*0.0155);height:calc(var(--pw)*0.17829);border-radius:0 2px 2px 0;background:#2A362F}
+  .marketing .ph-view{position:relative;border-radius:calc(var(--pw)*0.14341);overflow:hidden;background:#FAF9F4;aspect-ratio:9/19.5;display:flex;flex-direction:column}
+  .marketing .ph-view::after{content:"";position:absolute;inset:0;border-radius:calc(var(--pw)*0.14341);box-shadow:inset 0 0 2px rgba(0,0,0,.6),inset 0 0 0 1px rgba(0,0,0,.32);pointer-events:none;z-index:7}
+  .marketing .ph-island{position:absolute;top:calc(var(--pw)*0.03488);left:50%;transform:translateX(-50%);width:calc(var(--pw)*0.29457);height:calc(var(--pw)*0.08527);border-radius:999px;background:#0A120E;box-shadow:inset 0 0 1.5px rgba(255,255,255,.22),0 0 4px rgba(0,0,0,.3);z-index:6}
+  .marketing .ph-island::after{content:"";position:absolute;right:calc(var(--pw)*0.02713);top:50%;transform:translateY(-50%);width:calc(var(--pw)*0.03488);height:calc(var(--pw)*0.03488);border-radius:50%;background:radial-gradient(circle at 35% 35%,#2E3B47,#0A120E 70%)}
+  .marketing .ph-home{position:absolute;bottom:calc(var(--pw)*0.02713);left:50%;transform:translateX(-50%);width:calc(var(--pw)*0.4031);height:calc(var(--pw)*0.0155);border-radius:calc(var(--pw)*0.0155);background:rgba(19,32,27,.26);z-index:6}
+
+  .marketing .shot{width:100%;height:100%;object-fit:cover;object-position:top center;display:block}
+
+  /* the S. always reads as a translucent watermark in the bottom right corner */
+  .marketing .price-card{overflow:hidden}
+  .marketing .pc-mark{position:absolute;right:-6px;bottom:8px;width:196px;height:auto;
+    opacity:.2;pointer-events:none;user-select:none}
+
+  /* app row: the eight content types, each seen as the real screen (layout in the V2.2/2.3 block) */
+  .marketing .mem-apps{margin-top:76px}
+  .marketing .mem-apps .ma-lead{max-width:70ch;color:var(--mut);font-size:15.5px;margin:0 auto 40px;text-align:center}
+  .marketing .ma figure,.marketing .ma{margin:0}
+  .marketing .ma figcaption{border-top:1px solid var(--line);margin-top:20px;padding-top:11px;
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--mut);font-weight:600;text-align:center}
+
+  /* stage phone: same frame component as the hero, overlapping the laptop's
+     left edge by a fixed amount so the portal sidebar still reads behind it */
+  .marketing .stage .laptop{width:min(540px,100%)}
+  .marketing .ph-stage{position:relative;z-index:3;flex:0 0 auto;--pw:clamp(168px,15vw,200px);
+    margin-right:-42px;transform:translateY(20px)}
+  @media (max-width:900px){
+    .marketing .stage{flex-direction:column;gap:52px}
+    .marketing .stage .laptop{width:min(560px,100%)}
+    .marketing .ph-stage{--pw:min(238px,62vw);margin-right:0;transform:none}
+  }
+  /* app ui */
+  .marketing .ui{font-family:var(--sans);color:#22302B;background:#FAF9F4;flex:1;display:flex;flex-direction:column;min-height:0}
+  .marketing .ui *{line-height:1.45}
+  .marketing .ui-status{display:flex;justify-content:space-between;align-items:center;padding:14px 20px 6px;font-size:10px;font-weight:600}
+  .marketing .ui-head{display:flex;align-items:center;justify-content:space-between;padding:10px 16px 8px}
+  .marketing .ui-head img{height:15px;width:auto}
+  .marketing .ui-bell{width:26px;height:26px;border-radius:50%;background:#fff;display:grid;place-items:center;box-shadow:0 1px 3px rgba(20,40,34,.12);position:relative}
+  .marketing .ui-bell::after{content:"";position:absolute;top:5px;right:6px;width:5px;height:5px;border-radius:50%;background:#C4553B}
+  .marketing .ui-follow{display:flex;gap:10px;padding:8px 16px 10px;overflow:hidden}
+  .marketing .ui-fol{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:7.5px;font-weight:600;color:#57685F;flex:0 0 auto}
+  .marketing .ui-fol .av{width:44px;height:44px;border-radius:50%;padding:2px;background:linear-gradient(135deg,var(--brand),var(--gold))}
+  .marketing .ui-fol .av img,.marketing .ui-fol .av span{width:100%;height:100%;border-radius:50%;object-fit:cover;border:2px solid #FAF9F4}
+  .marketing .ui-fol .av span{display:grid;place-items:center;background:#E7EEE7;color:var(--brand);font-size:14px;font-weight:500}
+  .marketing .ui-feed{flex:1;overflow:hidden;padding:2px 12px 0;display:flex;flex-direction:column;gap:10px}
+  .marketing .ui-card{background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 2px 10px rgba(20,40,34,.08)}
+  .marketing .ui-card .im{position:relative}
+  .marketing .ui-card .im img{width:100%;aspect-ratio:16/10.5;object-fit:cover}
+  .marketing .ui-tag{position:absolute;top:8px;left:8px;font-family:var(--mono);font-size:6.8px;letter-spacing:.14em;background:rgba(29,69,59,.85);color:#F2F5EE;padding:4px 8px;border-radius:99px}
+  .marketing .ui-tag.gold{background:var(--gold);color:#241A07}
+  .marketing .ui-body{padding:9px 11px 11px;display:flex;flex-direction:column;gap:5px}
+  .marketing .ui-who{display:flex;align-items:center;gap:6px;font-size:8.5px;font-weight:700}
+  .marketing .ui-who .dot{width:16px;height:16px;border-radius:50%;background:var(--brand);color:#fff;display:grid;place-items:center;font-family:var(--serif);font-size:9px}
+  .marketing .ui-who time{margin-left:auto;font-weight:500;color:#8A968E;font-size:7.5px}
+  .marketing .ui-txt{font-size:8.6px;color:#4A5A52}
+  .marketing .ui-act{display:flex;gap:12px;font-size:7.8px;font-weight:600;color:#57685F;padding-top:2px}
+  .marketing .ui-act svg{width:10px;height:10px;vertical-align:-1.5px;margin-right:3px}
+  .marketing .ui-race{display:flex;align-items:center;gap:9px;background:#fff;border-radius:14px;padding:9px;box-shadow:0 2px 10px rgba(20,40,34,.08)}
+  .marketing .ui-race img{width:52px;height:52px;border-radius:10px;object-fit:cover}
+  .marketing .ui-race .t{font-size:8.6px;font-weight:700}
+  .marketing .ui-race .s{font-family:var(--mono);font-size:7.2px;color:#8A968E;margin-top:2px}
+  .marketing .ui-race .cd{margin-left:auto;font-family:var(--mono);font-size:8.6px;color:var(--brand);font-weight:700;background:#E7EEE7;border-radius:8px;padding:6px 8px;white-space:nowrap}
+  .marketing .ui-tabs{display:flex;justify-content:space-around;align-items:center;background:#fff;border-top:1px solid #E7E6DE;padding:8px 6px 16px}
+  .marketing .ui-tab{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:7px;font-weight:600;color:#98A29A}
+  .marketing .ui-tab.on{color:var(--brand)}
+  .marketing .ui-tab svg{width:15px;height:15px}
+
+  /* laptop ui */
+  .marketing .lui{display:flex;flex-direction:column;height:100%;background:#FAF9F4;font-family:var(--sans);color:#22302B}
+  .marketing .lui-top{display:flex;align-items:center;gap:16px;background:#fff;border-bottom:1px solid #E7E6DE;padding:9px 16px}
+  .marketing .lui-top img.s{height:20px;width:20px;border-radius:5px}
+  .marketing .lui-top img.w{height:13px;width:auto}
+  .marketing .lui-nav{display:flex;gap:14px;margin-left:16px;font-size:9px;font-weight:600;color:#7A867E}
+  .marketing .lui-nav b{color:var(--brand);font-weight:700;border-bottom:2px solid var(--brand);padding-bottom:2px}
+  .marketing .lui-me{margin-left:auto;display:flex;align-items:center;gap:8px}
+  .marketing .lui-me .avc{width:20px;height:20px;border-radius:50%;background:var(--deep);color:#F2F5EE;display:grid;place-items:center;font-size:8px;font-weight:700}
+  .marketing .lui-body{flex:1;display:grid;grid-template-columns:1.55fr 1fr;gap:12px;padding:12px 16px;min-height:0}
+  .marketing .lui-col{display:flex;flex-direction:column;gap:10px;min-height:0}
+  .marketing .lui-card{background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(20,40,34,.07);overflow:hidden}
+  .marketing .lui-card .im{position:relative}
+  .marketing .lui-card img.ph{width:100%;aspect-ratio:16/8.4;object-fit:cover}
+  .marketing .lui-card .ui-tag{font-size:6.4px}
+  .marketing .lui-card .bd{padding:8px 11px 10px;display:flex;flex-direction:column;gap:4px}
+  .marketing .lui-card .who{display:flex;align-items:center;gap:6px;font-size:8.4px;font-weight:700}
+  .marketing .lui-card .who .dot{width:15px;height:15px;border-radius:50%;background:var(--brand);color:#fff;display:grid;place-items:center;font-family:var(--serif);font-size:8.5px}
+  .marketing .lui-card .who time{margin-left:auto;font-weight:500;color:#8A968E;font-size:7.2px}
+  .marketing .lui-card .tx{font-size:8.2px;color:#4A5A52}
+  .marketing .lui-side{background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(20,40,34,.07);padding:12px;display:flex;flex-direction:column;gap:9px}
+  .marketing .lui-horse{display:flex;align-items:center;gap:8px}
+  .marketing .lui-horse img{width:34px;height:34px;border-radius:50%;object-fit:cover}
+  .marketing .lui-horse .n{font-family:var(--serif);font-size:11px}
+  .marketing .lui-horse .m{font-size:7.4px;color:#8A968E}
+  .marketing .lui-line{height:1px;background:#ECEBE3}
+  .marketing .lui-tl{display:flex;flex-direction:column;gap:7px}
+  .marketing .lui-tl .row{display:flex;align-items:center;gap:8px;font-size:8px;font-weight:600;color:#4A5A52}
+  .marketing .lui-tl .row .b{width:9px;height:9px;border-radius:50%;background:var(--brand);flex:0 0 auto}
+  .marketing .lui-tl .row.next .b{background:var(--gold);box-shadow:0 0 0 3px rgba(193,145,63,.25)}
+  .marketing .lui-tl .row.dim{color:#A9B2AA}
+  .marketing .lui-tl .row.dim .b{background:#D8DCD3}
+  .marketing .lui-tl .row time{margin-left:auto;font-family:var(--mono);font-size:6.8px;color:#8A968E;font-weight:500}
+  .marketing .lui-next{background:#F0F3EC;border-radius:9px;padding:8px 10px;display:flex;align-items:center;gap:8px}
+  .marketing .lui-next .t{font-size:8px;font-weight:700}
+  .marketing .lui-next .s{font-family:var(--mono);font-size:6.8px;color:#8A968E;margin-top:1px}
+  .marketing .lui-next .cd{margin-left:auto;font-family:var(--mono);font-size:9px;font-weight:700;color:var(--brand)}
+  .marketing .lui-gal{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}
+  .marketing .lui-gal img{width:100%;aspect-ratio:1;border-radius:7px;object-fit:cover}
+
+  /* ── members get ── */
+  .marketing .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;align-items:stretch;margin-bottom:72px}
+  .marketing .tiles .tile{margin:0;transform:none}
+  .marketing .tile{position:relative;border-radius:20px;overflow:hidden;aspect-ratio:3/3.7;box-shadow:0 18px 38px rgba(30,43,38,.14);transition:transform .25s ease}
+  .marketing .tile:hover{transform:translateY(-5px)}
+  .marketing .tile img{width:100%;height:100%;object-fit:cover}
+  .marketing .tile figcaption{position:absolute;left:12px;right:12px;bottom:12px;background:rgba(250,249,244,.92);backdrop-filter:blur(6px);border-radius:12px;padding:0 14px;min-height:41px;font-size:12px;font-weight:700;color:var(--ink);display:flex;align-items:center;gap:8px;white-space:nowrap;overflow:hidden}
+  .marketing .tile figcaption i{width:8px;height:8px;border-radius:50%;background:var(--brand);flex:0 0 auto}
+  .marketing .tile:nth-child(2) figcaption i{background:var(--gold)}
+  .marketing .tile:nth-child(3) figcaption i{background:var(--deep)}
+  .marketing .tile:nth-child(4) figcaption i{background:#8FA893}
+  @media (max-width:900px){.marketing .tiles{grid-template-columns:repeat(2,1fr)}}
+
+  /* ── pricing ── */
+  .marketing .price-sec{position:relative;overflow:hidden}
+  .marketing .price-oval{position:absolute;left:50%;top:56%;transform:translate(-50%,-50%) rotate(-9deg);width:760px;height:470px;border:1.5px dashed rgba(40,93,80,.16);border-radius:50%;pointer-events:none}
+  .marketing .price-card{position:relative;width:min(470px,100%);margin:0 auto;background:var(--brand);color:#F2F5EE;border-radius:28px;padding:44px 44px 38px;box-shadow:0 40px 80px rgba(29,69,59,.32);text-align:left}
+  .marketing .price-card .pc-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px}
+  .marketing .price-card .pc-top span{font-family:var(--mono);font-size:10.5px;letter-spacing:.22em;color:#BFD4C6;white-space:nowrap}
+  @media (max-width:480px){.marketing .price-card .pc-top{flex-direction:column;align-items:flex-start;gap:7px;margin-bottom:18px}}
+  .marketing .price-num{font-family:var(--serif);font-size:4.2rem;line-height:1;color:#fff;display:flex;align-items:baseline;gap:6px}
+  .marketing .price-num small{font-family:var(--sans);font-size:15px;font-weight:600;color:#BFD4C6}
+  .marketing .price-list{list-style:none;margin:26px 0 30px;padding:0;display:flex;flex-direction:column;gap:12px;font-size:14.5px;font-weight:500}
+  .marketing .price-list li{display:flex;gap:11px;align-items:center}
+  .marketing .price-list svg{width:17px;height:17px;color:#EDD9A8;flex:0 0 auto}
+  .marketing .price-card .btn{width:100%;background:var(--paper);color:var(--brand)}
+  .marketing .price-card .btn:hover{background:#fff}
+  .marketing .price-fine{margin-top:16px;font-size:11.5px;color:#BFD4C6;text-align:center}
+
+  /* ── why ── */
+  .marketing .why{background:var(--deep);color:#F2F5EE;overflow:hidden}
+  .marketing .why .duo-media img{border-radius:24px;box-shadow:0 30px 60px rgba(0,0,0,.35);aspect-ratio:4/3}
+  .marketing .why h2{color:#fff}
+  .marketing .why p{color:rgba(242,245,238,.75)}
+  .marketing .why .sign{font-family:var(--serif);font-style:italic;font-size:1.35rem;color:#EDD9A8}
+
+  /* ── trainers ── */
+  .marketing .train-band{background:var(--sage2);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+  .marketing .train-list{display:flex;flex-direction:column;gap:12px;margin-top:8px}
+  .marketing .train-list span{display:flex;gap:11px;align-items:flex-start;font-size:15px;color:#3D4E46;font-weight:500}
+  .marketing .train-list svg{width:18px;height:18px;color:var(--brand);flex:0 0 auto;margin-top:3px}
+  .marketing .train .btn{align-self:flex-start;margin-top:10px}
+  .marketing .train .duo-media{position:relative}
+  .marketing .train .duo-media img{aspect-ratio:4/4.2}
+
+  /* ── note ── the Important note sits in its own band just above the footer ── */
+  .marketing .note-band .foot-note{margin:0}
+
+  /* ── faq ── */
+  .marketing .faq{max-width:740px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+  .marketing .faq details{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:0 26px;transition:box-shadow .25s ease}
+  .marketing .faq details[open]{box-shadow:0 14px 34px rgba(30,43,38,.1)}
+  .marketing .faq summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:18px;padding:22px 0;font-family:var(--serif);font-size:1.18rem;font-weight:600}
+  .marketing .faq summary::-webkit-details-marker{display:none}
+  .marketing .faq summary::after{content:"+";margin-left:auto;width:30px;height:30px;border-radius:50%;background:var(--sage);color:var(--brand);display:grid;place-items:center;font-family:var(--mono);font-size:15px;transition:transform .3s ease;flex:0 0 auto}
+  .marketing .faq details[open] summary::after{transform:rotate(45deg)}
+  .marketing .faq .a{padding:0 0 24px;color:var(--mut);max-width:60ch}
+  .marketing .faq-cta{text-align:center;margin-top:38px}
+
+  /* ── cta ── */
+  .marketing .cta{position:relative;isolation:isolate;border-radius:32px;overflow:hidden;padding:120px 40px;text-align:center;color:#fff}
+  .marketing .cta-bg{position:absolute;inset:0;z-index:-2;background:url("/marketing/8d95c6f2.jpg") center 42%/cover no-repeat}
+  .marketing .cta-veil{position:absolute;inset:0;z-index:-1;background:linear-gradient(165deg,rgba(40,93,80,.92),rgba(29,69,59,.58) 55%,rgba(29,69,59,.8))}
+  .marketing .cta-in{max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:24px;align-items:center}
+  .marketing .cta-in h2{font-size:clamp(2.2rem,4.8vw,3.6rem);color:#fff}
+  .marketing .cta-in p{color:rgba(255,255,255,.85);font-size:17px}
+
+  /* ── footer ── */
+  .marketing footer{padding:74px 0 44px;border-top:1px solid var(--line);margin-top:56px;background:#F4F3EC}
+  .marketing .foot-top{display:grid;grid-template-columns:1.4fr repeat(3,1fr);gap:44px;margin-bottom:56px}
+  .marketing .foot-brand img{height:34px;width:auto;margin-bottom:18px}
+  .marketing .foot-brand p{font-size:13px;color:var(--mut);max-width:34ch}
+  .marketing .foot-col h4{font-family:var(--mono);font-size:10.5px;letter-spacing:.2em;color:#93A096;font-weight:600;margin:0 0 16px;text-transform:uppercase}
+  .marketing .foot-col ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;font-size:14px;color:var(--mut)}
+  .marketing .foot-col a:hover{color:var(--brand)}
+  .marketing .foot-legal{border-top:1px solid var(--line);padding-top:28px;display:flex;flex-direction:column;gap:14px}
+  .marketing .foot-legal p{font-size:12px;color:#93A096;max-width:96ch}
+  .marketing .foot-legal .row{display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:12px;color:#93A096}
+  @media (max-width:900px){.marketing .foot-top{grid-template-columns:1fr 1fr}}
+
+  /* ── v2 additions ── */
+  .marketing .hero-mark{position:absolute;right:-50px;bottom:-120px;z-index:0;font-family:var(--serif);font-weight:600;font-size:min(36rem,58vw);line-height:.8;color:var(--brand);opacity:.16;pointer-events:none;user-select:none}
+  /* phones: the S hugs the corner instead of vanishing off it. Must sit after the base
+     rule above or the later declaration wins and the mark leaves the viewport. */
+  @media (max-width:960px){.marketing .hero-mark{right:-14px;bottom:-8px;font-size:min(12rem,52vw)}}
+  .marketing .band::before{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(250,249,244,.93),rgba(241,244,236,.86))}
+  .marketing .band>.wrap{position:relative}
+  .marketing .step{padding:30px 26px 34px}
+  .marketing .step h3{font-size:1.25rem}
+  .marketing .step:nth-child(4) .cloth{background:#8FA893;box-shadow:inset 0 0 0 2.5px rgba(255,255,255,.35),0 8px 18px rgba(143,168,147,.35)}
+  /* ═══ V2.2 · client feedback pass, meeting 28 Jul 2026
+     ═══ V2.3 · Justin's written notes, 3 Aug 2026
+     ═══ V2.4 · mobile pass: swipeable carousels, no content behind hover, reveal degrades
+     ═══ V2.5 · preview polish: version chip removed, phone-width chip stacking, no scaffolding copy
+     ═══ V2.6 · Matt Cumani added to the trainer carousel, 19 trainers
+     ═══ V2.7 · guardrail #8: post-race stat tile re-cut from the starting price to weight carried ═══ */
+
+  /* hero: the trial line, plus the admin-switchable calls to action (see data-cta-mode on body) */
+  .marketing .hero-fine{font-size:13px;color:var(--mut);margin-top:-8px}
+  .marketing .hero-chip b{font-weight:700;color:var(--deep)}
+  .marketing[data-cta-mode="trial"] .cta-join,.marketing[data-cta-mode="join"] .cta-trial{display:none}
+
+  /* how it works: hovering a step inverts it, card to green and the number chip to white.
+     The per-step chip colours (green, gold, deep, sage) still do their work at rest. */
+  .marketing .step{transition:transform .25s ease,box-shadow .28s ease,background .28s ease,border-color .28s ease}
+  .marketing .step h3,.marketing .step p{transition:color .28s ease}
+  .marketing .cloth{transition:background .28s ease,color .28s ease,box-shadow .28s ease}
+  .marketing .band .step:hover,.marketing .band .step:focus-within{
+    background:var(--brand);border-color:var(--brand);
+    box-shadow:0 22px 44px rgba(29,69,59,.32)}
+  .marketing .band .step:hover h3,.marketing .band .step:focus-within h3{color:#fff}
+  .marketing .band .step:hover p,.marketing .band .step:focus-within p{color:rgba(242,245,238,.82)}
+  .marketing .band .step:hover .cloth,.marketing .band .step:focus-within .cloth{
+    background:var(--paper);color:var(--brand);
+    box-shadow:inset 0 0 0 2.5px rgba(40,93,80,.16),0 8px 18px rgba(6,18,14,.3)}
+
+  /* tiles: landscape 2x2, hover fills green and reveals the sentence */
+  .marketing .tiles{grid-template-columns:repeat(2,1fr);gap:22px;margin-bottom:64px;max-width:960px;margin-left:auto;margin-right:auto}
+  .marketing .tile{aspect-ratio:16/10;cursor:default}
+  .marketing .tile:hover{transform:translateY(-5px);box-shadow:0 26px 52px rgba(30,43,38,.2)}
+  .marketing .t-over{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:flex-end;
+    gap:9px;padding:30px 32px;color:#fff;opacity:0;transition:opacity .34s ease;
+    background:linear-gradient(175deg,rgba(40,93,80,.62),rgba(29,69,59,.95) 62%)}
+  .marketing .tile:hover .t-over,.marketing .tile:focus-within .t-over{opacity:1}
+  .marketing .tile:hover figcaption{opacity:0}
+  .marketing .tile figcaption{transition:opacity .28s ease}
+  .marketing .t-over b{font-family:var(--serif);font-size:1.5rem;font-weight:600;line-height:1.15}
+  .marketing .t-over p{font-size:14.5px;line-height:1.5;color:rgba(242,245,238,.9);max-width:46ch}
+  /* No hover on touch, so the sentence is always shown. Weight it to the bottom instead of
+     washing the whole tile, and give the tile more height to carry the extra text. */
+  @media (max-width:760px){
+    .marketing .tiles{grid-template-columns:1fr;max-width:none}
+    .marketing .tile{aspect-ratio:4/3}
+    .marketing .t-over{opacity:1;justify-content:flex-end;padding:22px 24px 20px;gap:7px;
+      background:linear-gradient(180deg,rgba(29,69,59,0) 34%,rgba(29,69,59,.62) 58%,rgba(29,69,59,.94) 100%)}
+    .marketing .t-over b{font-size:1.3rem}
+    .marketing .t-over p{font-size:13.5px}
+    .marketing .tile figcaption{display:none}
+  }
+
+  /* the eight app screens, replacing the old checklist: one continuous carousel */
+  .marketing .ma-scroll{overflow:hidden;padding:34px 0 20px;
+    -webkit-mask-image:linear-gradient(90deg,transparent,#000 5%,#000 95%,transparent);
+    mask-image:linear-gradient(90deg,transparent,#000 5%,#000 95%,transparent)}
+  .marketing .ma-row{display:flex;gap:44px;width:max-content;align-items:flex-start;will-change:transform}
+  /* hovering a screen brings it forward and up, per Mel wanting the hovered one bigger */
+  .marketing .ma{margin:0;flex:0 0 auto;transition:transform .32s cubic-bezier(.22,.9,.3,1)}
+  .marketing .ma:hover{transform:translateY(-10px) scale(1.07)}
+  .marketing .ma .phone{--pw:212px}
+  .marketing .ma-ctrl{display:flex;justify-content:center;gap:12px;margin-top:26px}
+  /* the arrows sat a long way clear of the next heading */
+  .marketing #members{padding-bottom:44px}
+  .marketing .price-sec{padding-top:70px}
+  .marketing .ma-ctrl button,.marketing .tr-ctrl button{width:46px;height:46px;border-radius:50%;border:1.5px solid #C9CFC2;
+    background:var(--card);color:var(--brand);display:grid;place-items:center;cursor:pointer;
+    transition:background .2s ease,border-color .2s ease,color .2s ease,transform .2s ease}
+  .marketing .ma-ctrl button:hover,.marketing .tr-ctrl button:hover{background:var(--brand);border-color:var(--brand);color:#fff;transform:translateY(-2px)}
+  .marketing .ma-ctrl svg,.marketing .tr-ctrl svg{width:19px;height:19px}
+  @media (max-width:900px){.marketing .ma .phone{--pw:min(196px,54vw)}.marketing .ma-row{gap:32px}}
+
+  /* ── trainers: wider strip, square cards, richer hover, arrows, click-through ── */
+  .marketing .tr-sec{overflow:hidden}
+  .marketing .tr-sec .sec-head{margin-bottom:34px}
+  /* wider than the old 860px strip so a full profile clears the fade on each side */
+  .marketing .tr-scroll{overflow:hidden;padding:30px 0 34px;max-width:min(1560px,100%);margin:0 auto;
+    -webkit-mask-image:linear-gradient(90deg,transparent,#000 8%,#000 92%,transparent);
+    mask-image:linear-gradient(90deg,transparent,#000 8%,#000 92%,transparent)}
+  .marketing .tr-scroll.is-static{-webkit-mask-image:none;mask-image:none}
+  .marketing .tr-scroll.is-static .tr-track{width:auto;flex-wrap:wrap;justify-content:center;transform:none!important}
+  .marketing .tr-track{display:flex;gap:22px;width:max-content;will-change:transform}
+  .marketing .tr-card{margin:0;position:relative;flex:0 0 222px;aspect-ratio:9/16;border-radius:20px;overflow:hidden;
+    background:var(--brand);box-shadow:0 16px 34px rgba(30,43,38,.14);cursor:pointer;
+    transition:transform .32s cubic-bezier(.22,.9,.3,1),box-shadow .32s ease}
+  .marketing .tr-card:hover,.marketing .tr-card:focus-visible{transform:scale(1.07);z-index:4;
+    box-shadow:0 30px 56px rgba(30,43,38,.28)}
+  .marketing .tr-init{position:absolute;inset:0;display:grid;place-items:center;font-family:var(--serif);font-size:62px;color:rgba(250,249,244,.5)}
+  .marketing .tr-card img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .marketing .tr-nm{position:absolute;left:12px;right:12px;bottom:12px;background:rgba(250,249,244,.92);backdrop-filter:blur(6px);border-radius:11px;padding:9px 13px;font-size:12.5px;font-weight:700;color:var(--ink);transition:opacity .25s ease}
+  .marketing .tr-over{position:absolute;inset:0;background:linear-gradient(178deg,rgba(40,93,80,.42) 8%,rgba(29,69,59,.95) 62%);
+    color:#fff;display:flex;flex-direction:column;justify-content:flex-end;gap:3px;padding:17px 17px 15px;
+    opacity:0;transition:opacity .3s ease}
+  .marketing .tr-over b{font-family:var(--serif);font-size:1.16rem;font-weight:600;line-height:1.15}
+  .marketing .tr-over .loc{font-size:11.5px;color:#CFE0D3;font-weight:600}
+  .marketing .tr-over .hz{font-size:11px;font-weight:700;color:#EDD9A8;font-family:var(--mono);
+    letter-spacing:.08em;text-transform:uppercase;margin-top:2px}
+  /* three lines of bio with the third already fading, to show there is more behind the click */
+  .marketing .tr-over .bio{font-size:11.5px;line-height:1.42;color:rgba(242,245,238,.9);margin-top:7px;
+    max-height:calc(1.42em*3);overflow:hidden;
+    -webkit-mask-image:linear-gradient(180deg,#000 46%,rgba(0,0,0,.15));
+    mask-image:linear-gradient(180deg,#000 46%,rgba(0,0,0,.15))}
+  .marketing .tr-over .more{font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;color:#9FBFA8;
+    text-transform:uppercase;font-weight:700;margin-top:8px}
+  .marketing .tr-card:hover .tr-over,.marketing .tr-card:focus-visible .tr-over{opacity:1}
+  .marketing .tr-card:hover .tr-nm,.marketing .tr-card:focus-visible .tr-nm{opacity:0}
+  /* 9:16 cards are tall, so shrink them on phones or barely one fits on screen */
+  @media (max-width:760px){
+    .marketing .tr-card{flex:0 0 178px}
+    .marketing .tr-track{gap:16px}
+    .marketing .tr-scroll{padding:20px 0 24px}
+  }
+  @media (max-width:420px){.marketing .tr-card{flex:0 0 156px}}
+  .marketing .tr-fine{text-align:center;font-size:12px;color:#93A096;margin-top:6px}
+  .marketing .tr-ctrl{display:flex;justify-content:center;gap:12px;margin-top:4px}
+
+  /* trainer takeover: the click state, near full screen */
+  .marketing .tr-modal{position:fixed;inset:0;z-index:80;display:none;place-items:center;padding:34px 22px;
+    background:rgba(15,28,23,.72);backdrop-filter:blur(7px)}
+  .marketing .tr-modal[open]{display:grid}
+  .marketing .trm-card{position:relative;width:min(1240px,100%);min-height:min(620px,80vh);max-height:90vh;overflow:auto;
+    background:var(--paper);border-radius:26px;display:grid;grid-template-columns:.9fr 1.1fr;
+    box-shadow:0 50px 110px rgba(6,18,14,.5)}
+  .marketing .trm-photo{position:relative;min-height:100%;background:var(--brand)}
+  .marketing .trm-photo img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .marketing .trm-body{padding:44px 46px 40px;display:flex;flex-direction:column;gap:15px}
+  .marketing .trm-body h3{font-size:2.1rem}
+  .marketing .trm-loc{font-size:14.5px;color:var(--mut);font-weight:600;margin-top:-8px}
+  .marketing .trm-badge{align-self:flex-start;background:var(--sage);color:var(--brand);border-radius:999px;
+    padding:8px 16px;font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;font-weight:700;text-transform:uppercase}
+  .marketing .trm-body p{color:var(--mut);font-size:15px}
+  .marketing .trm-note{font-size:12.5px;color:#93A096;border-top:1px solid var(--line);padding-top:14px;margin-top:4px}
+  .marketing .trm-x{position:absolute;top:16px;right:16px;width:40px;height:40px;border-radius:50%;border:0;
+    background:rgba(250,249,244,.94);color:var(--ink);font-size:19px;cursor:pointer;display:grid;place-items:center;
+    box-shadow:0 6px 18px rgba(6,18,14,.25)}
+  @media (max-width:820px){
+    .marketing .trm-card{grid-template-columns:1fr}
+    .marketing .trm-photo{height:230px;min-height:0}
+    .marketing .trm-body{padding:30px 26px 34px}
+  }
+
+  /* ── FAQ: bigger, per the meeting ── */
+  .marketing #faq .sec-head h2{font-size:clamp(2.4rem,4.6vw,3.5rem)}
+  .marketing .faq{max-width:820px}
+  .marketing .faq summary{font-size:1.3rem;padding:26px 0}
+  .marketing .faq details{padding:0 30px}
+
+  /* ── the join banner: hovering fills it green and swaps in the trial line ── */
+  .marketing .cta{transition:box-shadow .35s ease}
+  .marketing .cta-fill{position:absolute;inset:0;z-index:-1;opacity:0;transition:opacity .4s ease;
+    background:linear-gradient(165deg,var(--brand),var(--deep))}
+  .marketing .cta:hover .cta-fill{opacity:1}
+  .marketing .cta:hover .cta-veil{opacity:0;transition:opacity .4s ease}
+  .marketing .cta-trial-line{font-family:var(--serif);font-style:italic;font-size:1.3rem;color:#EDD9A8;
+    max-height:0;opacity:0;overflow:hidden;transition:max-height .4s ease,opacity .35s ease,margin .4s ease}
+  .marketing .cta:hover .cta-trial-line{max-height:4em;opacity:1}
+  .marketing .cta:hover .btn-cream{background:#fff}
+
+  /* ── footer: socials, contact, and the important note in its enlarged home ── */
+  .marketing .foot-social{display:flex;gap:12px;margin-top:22px}
+  .marketing .foot-social a{width:42px;height:42px;border-radius:50%;background:var(--brand);color:#fff;
+    display:grid;place-items:center;transition:background .2s ease,transform .2s ease}
+  .marketing .foot-social a:hover{background:var(--deep);transform:translateY(-3px)}
+  .marketing .foot-social svg{width:19px;height:19px}
+  .marketing .foot-col button{background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:left}
+  .marketing .foot-col button:hover{color:var(--brand)}
+  /* Justin wants this reading as its own white bar down the bottom, not loose footer text */
+  .marketing .foot-note{background:var(--card);border:1.5px solid var(--brand);border-radius:20px;
+    margin:8px 0 30px;padding:34px 38px;display:flex;gap:22px;align-items:flex-start}
+  .marketing .foot-note svg.shield{width:30px;height:30px;color:var(--brand);flex:0 0 auto;margin-top:3px}
+  .marketing .foot-note h3{font-size:1.3rem;margin-bottom:9px}
+  .marketing .foot-note p{font-size:14px;color:var(--mut);max-width:88ch}
+  @media (max-width:640px){.marketing .foot-note{flex-direction:column}.marketing .tp-close-oval{display:none}}
+
+  /* ── for trainers, expanded to carry the full copy deck.
+     Built from the page's own vocabulary: an editorial intro with a tilted photo, one dark
+     green panel as the anchor, then open typographic blocks rather than a stack of cards. ── */
+  /* the decorative ovals hang outside the wrap, so the band has to clip them or the page
+     picks up a horizontal scrollbar */
+  /* paper rather than sage, so the thin strip between this band and the footer stops
+     reading as its own section */
+  .marketing #trainers{overflow:hidden;position:relative;background:var(--paper);border-top:0;border-bottom:0}
+  .marketing .tp-head{display:grid;grid-template-columns:1.08fr .92fr;gap:64px;align-items:center;
+    position:relative;padding-bottom:16px}
+  .marketing .tp-lead{display:flex;flex-direction:column;gap:18px;align-items:flex-start;position:relative;z-index:2}
+  .marketing .tp-lead h2{font-size:clamp(2rem,3.8vw,3rem)}
+  .marketing .tp-lead p{color:var(--mut);max-width:50ch}
+  .marketing .tp-lead .btn{margin-top:10px}
+  .marketing .tp-photo{margin:0;position:relative;border-radius:24px;overflow:hidden;transform:rotate(1.8deg);
+    box-shadow:0 34px 68px rgba(30,43,38,.24)}
+  .marketing .tp-photo img{width:100%;aspect-ratio:4/3.8;object-fit:cover}
+  .marketing .tp-head::after{content:"";position:absolute;right:-180px;top:-70px;width:620px;height:440px;
+    border:1.5px dashed rgba(40,93,80,.2);border-radius:50%;transform:rotate(-14deg);pointer-events:none;z-index:0}
+
+  .marketing .tp-panel{position:relative;overflow:hidden;margin-top:76px;border-radius:32px;padding:64px 56px;
+    background:linear-gradient(160deg,var(--brand),var(--deep) 78%);color:#F2F5EE}
+  .marketing .tp-panel .oval{position:absolute;right:-220px;top:-180px;width:760px;height:520px;
+    border:1.5px dashed rgba(255,255,255,.16);border-radius:50%;transform:rotate(-12deg)}
+  .marketing .tp-panel-in{position:relative;display:grid;grid-template-columns:1.02fr .98fr;gap:56px;align-items:start}
+  .marketing .tp-panel-copy{display:flex;flex-direction:column;gap:16px;align-items:flex-start}
+  .marketing .tp-panel-copy h3{font-size:clamp(1.7rem,3vw,2.3rem);color:#fff}
+  .marketing .tp-panel-copy p{color:rgba(242,245,238,.78);max-width:46ch}
+  .marketing .tp-pull{font-family:var(--serif);font-style:italic;font-size:1.35rem;color:#EDD9A8!important;
+    border-left:2px solid rgba(237,217,168,.5);padding-left:18px;margin:4px 0}
+  .marketing .tp-panel-share{padding-top:6px}
+  .marketing .tp-share-k{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.2em;
+    text-transform:uppercase;color:#9FBFA8;font-weight:600;margin-bottom:20px}
+  .marketing .tp-chips{display:flex;flex-wrap:wrap;gap:9px}
+  .marketing .tp-chips span{font-size:13px;font-weight:600;color:#EAF2EC;background:rgba(255,255,255,.1);
+    border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:9px 17px}
+
+  .marketing .tp-flow-head,.marketing .tp-ben-head{margin-top:76px;text-align:center}
+  .marketing .tp-flow{list-style:none;margin:34px 0 0;padding:0;position:relative;
+    display:grid;grid-template-columns:repeat(5,1fr);gap:0}
+  .marketing .tp-flow::before{content:"";position:absolute;left:8%;right:8%;top:26px;height:1.5px;
+    background:repeating-linear-gradient(90deg,#C9D3C6 0 7px,transparent 7px 14px)}
+  .marketing .tp-flow li{position:relative;padding:0 16px;display:flex;flex-direction:column;gap:16px;align-items:center;text-align:center}
+  .marketing .tp-flow .cloth{position:relative;z-index:2;outline:9px solid var(--paper);
+    transition:transform .25s ease}
+  /* the numbers pulse while the pointer is over them */
+  .marketing .tp-flow li:hover .cloth{animation:tp-pulse 1.15s ease-in-out infinite}
+  @keyframes tp-pulse{
+    0%,100%{transform:scale(1);box-shadow:inset 0 0 0 2.5px rgba(255,255,255,.35),0 8px 18px rgba(40,93,80,.28),0 0 0 0 rgba(40,93,80,.42)}
+    50%    {transform:scale(1.09);box-shadow:inset 0 0 0 2.5px rgba(255,255,255,.45),0 10px 22px rgba(40,93,80,.34),0 0 0 14px rgba(40,93,80,0)}
+  }
+  @media (prefers-reduced-motion: reduce){.marketing .tp-flow li:hover .cloth{animation:none}}
+  .marketing .tp-flow li:nth-child(2) .cloth{background:var(--gold);box-shadow:inset 0 0 0 2.5px rgba(255,255,255,.4),0 8px 18px rgba(154,112,40,.3)}
+  .marketing .tp-flow li:nth-child(3) .cloth{background:var(--deep);box-shadow:inset 0 0 0 2.5px rgba(255,255,255,.32),0 8px 18px rgba(29,69,59,.3)}
+  .marketing .tp-flow li:nth-child(4) .cloth{background:#8FA893;box-shadow:inset 0 0 0 2.5px rgba(255,255,255,.35),0 8px 18px rgba(143,168,147,.35)}
+  .marketing .tp-flow p{font-size:14.5px;color:#3D4E46;font-weight:500;max-width:22ch}
+
+  .marketing .tp-ben{list-style:none;margin:30px 0 0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:0 56px}
+  .marketing .tp-ben li{display:flex;gap:16px;align-items:baseline;padding:20px 2px;border-top:1px solid #D8DED3;
+    font-family:var(--serif);font-size:1.22rem;color:var(--ink);line-height:1.3}
+  .marketing .tp-ben i{font-family:var(--mono);font-style:normal;font-size:10.5px;letter-spacing:.16em;
+    color:var(--brand);font-weight:700;flex:0 0 auto}
+
+  .marketing .tp-close{position:relative;margin-top:88px;text-align:center;display:flex;flex-direction:column;
+    align-items:center;gap:14px;padding:56px 20px 8px}
+  .marketing .tp-close-oval{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%) rotate(-8deg);
+    width:640px;height:330px;border:1.5px dashed rgba(40,93,80,.2);border-radius:50%;pointer-events:none}
+  /* hugs the bottom right corner and clips just slightly, same as the price card mark */
+  .marketing .tp-mark{position:absolute;right:-14px;bottom:10px;z-index:0;
+    font-family:var(--serif);font-weight:600;font-size:min(25rem,31vw);line-height:.74;
+    color:var(--brand);opacity:.17;pointer-events:none;user-select:none}
+  @media (max-width:900px){.marketing .tp-mark{display:none}}  /* no clear space beside the copy */
+  .marketing .tp-close h3{font-size:clamp(1.7rem,3vw,2.2rem);position:relative}
+  .marketing .tp-close p{color:var(--mut);max-width:62ch;position:relative}
+  .marketing .tp-close .btn{margin-top:14px;align-self:center;position:relative}  /* beats .train .btn flex-start */
+
+  @media (max-width:980px){
+    .marketing .tp-flow{grid-template-columns:repeat(2,1fr);gap:34px 12px}
+    .marketing .tp-flow::before{display:none}
+    .marketing .tp-flow li{align-items:flex-start;text-align:left;padding:0}
+    .marketing .tp-flow .cloth{outline:none}
+    .marketing .tp-ben{grid-template-columns:1fr;gap:0}
+  }
+  @media (max-width:900px){
+    .marketing .tp-head{grid-template-columns:1fr;gap:40px}
+    .marketing .tp-head::after{display:none}
+    .marketing .tp-photo{transform:none}
+    .marketing .tp-panel{padding:44px 26px;border-radius:26px}
+    .marketing .tp-panel-in{grid-template-columns:1fr;gap:38px}
+    .marketing .tp-close-oval{width:92%}
+  }
+  /* single column reads as a timeline: chip left, copy beside it, dashed rail through the chips */
+  @media (max-width:560px){
+    .marketing .tp-flow{grid-template-columns:1fr;gap:24px}
+    .marketing .tp-flow::before{display:block;left:25px;right:auto;top:26px;bottom:26px;width:1.5px;height:auto;
+      background:repeating-linear-gradient(180deg,#C9D3C6 0 7px,transparent 7px 14px)}
+    .marketing .tp-flow li{flex-direction:row;align-items:center;gap:18px}
+    .marketing .tp-flow .cloth{flex:0 0 auto;outline:9px solid var(--paper)}
+    .marketing .tp-flow p{max-width:none}
+  }
+
+  /* ── touch devices: no hover, so carousels scroll natively and anything that was
+     only reachable on hover is shown outright ── */
+  @media (hover:none){
+    .marketing .ma-scroll,.marketing .tr-scroll{overflow-x:auto;scroll-snap-type:x mandatory;
+      -webkit-overflow-scrolling:touch;scrollbar-width:none}
+    .marketing .ma-scroll::-webkit-scrollbar,.marketing .tr-scroll::-webkit-scrollbar{display:none}
+    .marketing .ma,.marketing .tr-card{scroll-snap-align:center}
+    .marketing .ma-row,.marketing .tr-track{padding:0 max(16px,calc((100vw - 320px)/2))}
+    .marketing .ma:hover,.marketing .tr-card:hover{transform:none}          /* sticky hover after a tap */
+    .marketing .tr-card:hover .tr-over{opacity:1}
+
+    /* the trial line lives on the banner's hover state, which never fires here */
+    .marketing .cta-trial-line{max-height:4em;opacity:1}
+
+    /* trainer details, condensed, always on */
+    .marketing .tr-nm{display:none}
+    .marketing .tr-over{opacity:1;justify-content:flex-end;padding:14px 13px 12px;
+      background:linear-gradient(180deg,rgba(29,69,59,0) 40%,rgba(29,69,59,.6) 62%,rgba(29,69,59,.95) 100%)}
+    .marketing .tr-over b{font-size:1rem}
+    .marketing .tr-over .loc{font-size:10.5px}
+    .marketing .tr-over .hz{font-size:9px}
+    .marketing .tr-over .bio{display:none}
+    .marketing .tr-over .more{font-size:8px;margin-top:6px}
+  }
+
+  /* ── contact + policy overlays ── */
+  .marketing .sheet{position:fixed;inset:0;z-index:80;display:none;place-items:center;padding:34px 22px;
+    background:rgba(15,28,23,.72);backdrop-filter:blur(7px)}
+  .marketing .sheet[open]{display:grid}
+  .marketing .sheet-card{position:relative;width:min(720px,100%);max-height:88vh;overflow:auto;background:var(--paper);
+    border-radius:26px;padding:44px 46px 40px;box-shadow:0 50px 110px rgba(6,18,14,.5)}
+  .marketing .sheet-wide{width:min(880px,100%)}
+  .marketing .sheet-wide .faq details{background:var(--card)}
+  .marketing .sheet-wide .faq summary{font-size:1.12rem;padding:19px 0}
+  .marketing .sheet-card h3{font-size:1.9rem;margin-bottom:8px}
+  .marketing .sheet-card .eyebrow{display:block;margin-bottom:14px}
+  .marketing .sheet-card h4{font-family:var(--serif);font-size:1.15rem;margin:22px 0 7px}
+  .marketing .sheet-card p{color:var(--mut);font-size:14.5px;margin-bottom:9px}
+  .marketing .field{display:flex;flex-direction:column;gap:7px;margin-top:16px}
+  .marketing .field label{font-size:13px;font-weight:700;color:#3D4E46}
+  .marketing .field input,.marketing .field textarea{font:inherit;font-size:15px;padding:13px 16px;border-radius:13px;
+    border:1.5px solid var(--line);background:var(--card);color:var(--ink);width:100%}
+  .marketing .field textarea{min-height:130px;resize:vertical}
+  .marketing .field input:focus,.marketing .field textarea:focus{outline:none;border-color:var(--brand)}
+  .marketing .sheet-card .btn-green{margin-top:22px;width:100%}
+  .marketing .sheet-fine{font-size:12px;color:#93A096;margin-top:14px;text-align:center}
+  .marketing .sent{display:none;text-align:center;padding:20px 0 6px}
+  .marketing .sent b{font-family:var(--serif);font-size:1.5rem;font-weight:600;display:block;margin-bottom:8px}
+  .marketing .is-sent form{display:none}
+  .marketing .is-sent .sent{display:block}
+  @media (max-width:640px){.marketing .sheet-card{padding:32px 24px 30px}}
+
+
+  /* ────────────────────────────────────────────────────────────────────────
+     ENG-600 — NOT part of the v2.7 port.
+     Kept at the end, after every ported rule, so the fidelity test in
+     test/marketing-shell.test.tsx still compares the port against the mockup
+     as an ordered list without these shifting the indices.
+     Every selector here is unique to this block (`.nav-actions`, `.nav-signin`)
+     or scoped beneath one, so none collides with a mockup selector.
+
+     Why it exists: the mockup's nav had ONE action, so it never needed a rule
+     for a second one, nor any narrow-viewport handling. Adding "Sign in" makes
+     two, which overflows at 390px. Same idiom the hero chip uses at 520px:
+     nothing mid-wraps, tighten the spacing. Both labels are approved copy and
+     are NOT shortened.
+     ──────────────────────────────────────────────────────────────────────── */
+  .marketing .nav-actions{display:flex;align-items:center;gap:12px}
+  /* An outlined pill against the solid CTA: the same pairing the mockup already
+     uses for `.btn-ghost` beside `.btn-green` in the hero, borrowing its exact
+     border colour, but at the nav CTA's smaller geometry. Ghost-vs-solid keeps
+     "Join" the primary action while making sign in unmissable for a returning
+     subscriber — a muted text link read as a sixth section anchor. */
+  .marketing .nav-signin{display:inline-flex;align-items:center;font-size:13.5px;font-weight:600;color:var(--ink);border:1.5px solid #C9CFC2;border-radius:999px;padding:9px 18px;white-space:nowrap;transition:border-color .2s ease,color .2s ease}
+  .marketing .nav-signin:hover{border-color:var(--brand);color:var(--brand)}
+  .marketing .nav-actions .nav-cta{white-space:nowrap}
+  /* The wordmark is a flex item with no explicit basis, so two pills beside it
+     shrink it to a sliver rather than overflowing. It must never give. */
+  .marketing .nav-in > .nav-logo{flex:0 0 auto}
+  /* Two pills plus a 140px wordmark do not fit a phone. The wordmark scales
+     down (it is the one element with slack — it is set in CSS, not baked), the
+     spacing tightens, and no copy is shortened. */
+  @media (max-width:520px){
+    .marketing .nav-in{gap:12px;padding-left:16px;padding-right:16px}
+    .marketing .nav-in > .nav-logo img{height:23px}
+    .marketing .nav-actions{gap:8px}
+    .marketing .nav-signin{padding:9px 12px}
+    .marketing .nav-actions .nav-cta{padding:9px 14px}
+  }
+  /* Below ~360px even that is not enough. Sign in gives up its outline rather
+     than its label: still present, still tappable, just no longer competing for
+     width. Shortening "Join stablepass." would mean editing approved copy. */
+  @media (max-width:360px){
+    .marketing .nav-in{gap:8px}
+    .marketing .nav-in > .nav-logo img{height:21px}
+    .marketing .nav-signin{border-color:transparent;padding:9px 2px}
+    .marketing .nav-actions .nav-cta{padding:9px 12px}
+  }

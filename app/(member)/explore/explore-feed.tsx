@@ -9,6 +9,7 @@
 // so every page is enriched client-side: a `horse` lookup for the byline, plus the
 // viewer's own `reaction`/`bookmark` rows (RLS returns only the viewer's own).
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { AccessWall } from "@/components/access-wall";
 import { PostCard } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { RaceDayBand } from "@/components/race-day-band";
@@ -98,7 +99,11 @@ function one<T>(v: T | T[] | null): T | null {
   return Array.isArray(v) ? (v[0] ?? null) : v;
 }
 
-export function ExploreFeed({ viewerId }: { viewerId: string }) {
+// `everSubscribed` is resolved SERVER-side (app/(member)/explore/page.tsx) and
+// arrives as a boolean — `stripe_customer_id` itself never reaches client JS
+// (.rx/guardrails.md #1). `gated` still comes from the BFF's 402, which is
+// already date-aware via `hasAccess()`; ENG-585 only changes what the wall SAYS.
+export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; everSubscribed: boolean }) {
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -342,15 +347,7 @@ export function ExploreFeed({ viewerId }: { viewerId: string }) {
 
       <div className="feed-grid">
         <div className="feed-col">
-          {gated && (
-            <div className="aside-card">
-              <h3>Your trial has ended.</h3>
-              <p style={{ color: "var(--muted)", marginBottom: 16 }}>
-                Reactivate your subscription to keep up with the horses you follow.
-              </p>
-              <a className="btn btn-primary" href="/checkout">Reactivate</a>
-            </div>
-          )}
+          {gated && <AccessWall everSubscribed={everSubscribed} />}
 
           {!gated && error && (
             <p style={{ color: "var(--muted)", padding: "24px 0" }}>Couldn&rsquo;t load the feed.</p>
