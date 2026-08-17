@@ -110,29 +110,38 @@ describe("marketing footer", () => {
     expect(screen.getByText("© stablepass. All rights reserved.")).toBeInTheDocument();
   });
 
-  it("keeps the sheet entries as buttons, inert until W3 wires them", () => {
+  /**
+   * Was "keeps the sheet entries as buttons, inert until W3 wires them" — W3
+   * (ENG-589) has now wired them, and the answer was that neither column should
+   * be a button at all. The client reviews this page with scripting blocked, so
+   * a delegated `<button>` navigates nowhere; both columns are plain anchors.
+   *
+   * The hrefs themselves are asserted in `test/marketing-sheets.test.tsx`.
+   */
+  it("renders both sheet columns as real links, so they work with scripting off", () => {
     const { container } = render(<MarketingFooter />);
     const columns = [...container.querySelectorAll<HTMLElement>(".foot-col")];
     const support = columns[1];
     const legal = columns[2];
 
-    // FAQ is a real in-page anchor; the other three open a sheet, so they are buttons.
     expect(within(support).getByRole("link", { name: "FAQ" })).toHaveAttribute("href", "#faq");
-    expect(within(support).getAllByRole("button").map((b) => b.textContent)).toEqual([
+    expect(within(support).getAllByRole("link").map((a) => a.textContent)).toEqual([
+      "FAQ",
       "Contact us",
       "Subscriber support",
       "Trainer partnerships",
     ]);
-    expect(within(legal).getAllByRole("button").map((b) => b.textContent)).toEqual([
+    expect(within(legal).getAllByRole("link").map((a) => a.textContent)).toEqual([
       "Privacy Policy",
       "Terms & Conditions",
       "Cancellation & Refund Policy",
       "Acceptable Use Policy",
     ]);
-    // No <a href> masquerading as a sheet trigger — W4 turns the legal ones into links.
-    for (const button of [...within(legal).getAllByRole("button")]) {
-      expect(button).toHaveAttribute("data-sheet");
-      expect(button).toHaveAttribute("type", "button");
+
+    // Nothing left that needs a script to do its job.
+    for (const column of [support, legal]) {
+      expect(within(column).queryAllByRole("button")).toHaveLength(0);
+      expect(column.querySelector("[data-sheet]")).toBeNull();
     }
   });
 
@@ -152,10 +161,15 @@ describe("marketing footer", () => {
     expect(got).toEqual(wanted);
   });
 
-  it("prints no email address anywhere (the mockup routes contact through a form)", () => {
+  /**
+   * The mockup prints no address so it cannot be scraped, and that still holds.
+   * W3 moved the address into the `mailto:` href — where a scraper reads it
+   * just as easily, but where the alternative was a form that faked a send.
+   * The rule this protects is the visible copy, so that is what is asserted.
+   */
+  it("prints no email address in the visible copy", () => {
     const { container } = render(<MarketingFooter />);
     expect(container.textContent).not.toMatch(/@[\w.-]+\.\w+/);
-    expect(container.querySelector('a[href^="mailto:"]')).toBeNull();
   });
 });
 
@@ -238,6 +252,13 @@ describe("guardrails", () => {
   const SANCTIONED_PROHIBITIONS = [
     "does not sell shares in racehorses, syndicates, financial products, betting products, prize money rights, or investment returns",
     "do not receive prize money, financial returns, betting returns, or sale proceeds",
+    // ENG-589 / W3: the full FAQ sheet carries the mockup's own betting
+    // disclaimer, which the curated on-page FAQ omits. Both halves are
+    // prohibitions — a question that exists only to be answered "No", and the
+    // answer — so both are sanctioned. Same rule as above: paraphrase either
+    // and its strip stops matching, and this test fails.
+    "Is stablepass. a betting service?",
+    "stablepass. is not a betting service and does not provide betting products",
   ];
 
   it("mentions betting only inside a sanctioned prohibition", () => {

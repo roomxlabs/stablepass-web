@@ -205,3 +205,52 @@ each reveal element mismatches at hydration. W1 put `suppressHydrationWarning` o
 `.marketing` wrapper for the same reason, but the prop does not cascade — every `.rv`
 element needs its own. Loudest under `prefers-reduced-motion`, where the script reveals
 everything up front instead of waiting on the observer.
+
+## React drops `open=""` on a plain element — it must be `open={true}`
+The marketing CSS shows dialogs with `.sheet[open]` / `.tr-modal[open]`, so the
+attribute has to land on a `<div>`. React knows `open` as a BOOLEAN attribute
+(true of `<details>`/`<dialog>`) and applies that rule whatever the tag, so
+`open=""` is falsy and React omits the attribute entirely — the dialog never
+matches `[open]` and never becomes visible. Spread `{ open: true }`.
+
+## A `setState` in an effect that sets the SAME value does not re-run dependent effects
+Bit ENG-589 hard: a debounced resize handler cancelled the rAF then called a
+rebuild that set `duplicated` to the value it already had. React bailed out of
+the re-render, the effect keyed on `duplicated` never re-ran, and the cancelled
+frame was never replaced — the marquee froze until reload. If an effect must
+restart after a rebuild, key it on a generation counter the rebuild always
+increments, not just on the values that *might* change.
+
+## Playwright: `setViewportSize` BEFORE `goto` fires no resize event
+So any `resize` handler is completely unexercised while the suite stays green.
+To test a rebuild-on-resize, `goto` first, then `setViewportSize`. Also note
+`locator.hover()`/`click()` wait for the element to be "stable" (an unchanged
+box across two animation frames) — they time out forever against a continuously
+animating element. Use `page.mouse.move()` to a coordinate instead, and remember
+mouse coordinates are VIEWPORT-relative, so `scrollIntoViewIfNeeded()` first if
+the target is far down the page.
+
+## jsdom has no `matchMedia` and no layout
+`test/setup.ts` polyfills `matchMedia` (default: everything false = hover-capable
+desktop). For layout, `offsetWidth`/`clientWidth` are always 0, so any
+width-dependent decision must be extracted as a pure function and unit-tested
+with the widths written down — a rendered test cannot exercise it.
+
+## Guardrail greps must collapse whitespace, or a line wrap defeats them
+The `no fictional integration` check greps built output for the old contact
+confirmation. A doc comment quoting it was wrapped across two lines by the
+formatter and sailed past a contiguous search into the built sourcemaps. Sweep
+`.map` files too (they carry comments and are servable), and normalise real
+newlines, JSON-escaped `\n` and ` * ` comment gutters before matching — the same
+trick `marketing-shell.test.tsx`'s betting check already uses.
+
+## `lib/legal.ts` reads the filesystem — never import it into a client component
+It does `readFileSync` at module scope, so importing it from a `"use client"`
+file drags `node:fs` into the browser bundle. Server components (e.g. the
+marketing footer) can use `legalPath()` freely.
+
+## The marketing sections carry inert `data-*` triggers on purpose
+`sections/faq.tsx` and `sections/for-trainers.tsx` ship `[data-sheet]` attributes
+with no handler so a later slice can bind ONE `document` delegate and never
+reopen those files. Don't "fix" them into local handlers — that is the mockup's
+own architecture and it is what keeps the file surfaces disjoint.
