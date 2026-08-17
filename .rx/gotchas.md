@@ -192,32 +192,6 @@ takes the whole FILE down (that is #32). `it.skipIf(...)` never runs the test bo
 when skipped, so doing the risky read INSIDE the test body is the safe shape. Same
 for `it.skipIf(cond).each(...)`.
 
-## Playwright's shared :3000 makes a green e2e run meaningless (see ENG-597)
-`playwright.config.ts` hardcodes `baseURL`/`webServer.url` to `localhost:3000`
-with `reuseExistingServer: true`, so with concurrent worktree workers Playwright
-silently attaches to whichever branch already holds the port — and it passes green
-just as easily as it fails. To produce trustworthy evidence, start your own server
-on a free port from your worktree and run with a THROWAWAY config that sets
-`use.baseURL` to it and declares no `webServer`; delete the config before
-committing. Confirm the server is yours: `lsof -a -p <pid> -d cwd -Fn` must print
-your worktree path.
-## Playwright's `reuseExistingServer: true` makes parallel worktrees test each other
-`playwright.config.ts` pins port 3000 with `reuseExistingServer: true`. When the loop
-runs several per-ticket worktrees at once, the first worker to start owns :3000 and
-**every other worker's suite silently runs against that worker's branch**. Hit for real
-on ENG-588: the suite reported 6 failures ("#how has no target", 0 trainer cards)
-because it was driving ENG-590's dev server, and an earlier run had already overwritten
-this ticket's screenshots with the other branch's page. It fails green just as easily as
-it fails red.
-
-Symptom → `curl -s localhost:3000/ | head` does not match your branch, and
-`lsof -ti :3000 | xargs -I{} lsof -a -p {} -d cwd -Fn` names someone else's worktree.
-
-Do-this → run with a throwaway config that pins a unique port, `cwd` to your worktree
-and `reuseExistingServer: false`; keep `testMatch` scoped to your specs so the member
-specs (which need Supabase) do not drag the run down. Do not kill the other worker's
-server. The permanent fix — a per-worktree port — is not yet ticketed.
-
 ## The mockup's hover affordances are `opacity:0` by design
 `.t-over`, `.tr-over`, `.cta-fill` and `.cta-trial-line` sit at opacity 0 until
 `:hover`/`:focus-visible`, and `marketing.css` ends with an `@media (hover:none)` block
