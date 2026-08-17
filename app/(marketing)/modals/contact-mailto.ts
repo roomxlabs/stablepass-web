@@ -38,10 +38,10 @@
  *     exist. An invented alias bounces, and a bounce is worse than a shared
  *     inbox.
  *
- * Flagged on the PR for Justin to confirm before go-live: if the other two
- * aliases do exist, this becomes a three-entry map and nothing else changes.
+ * CONFIRMED 17 Aug 2026: use Justin's own address. If per-subject aliases are
+ * created later, this becomes a three-entry map and nothing else changes.
  */
-export const CONTACT_EMAIL = "hello@stablepass.co";
+export const CONTACT_EMAIL = "justin@stablepass.co";
 
 /**
  * Build the `mailto:` for a trigger's `data-subject`.
