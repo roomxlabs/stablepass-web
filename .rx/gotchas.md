@@ -606,3 +606,41 @@ It is no longer ambiguous: `CLAUDE.md` now scopes the rule to interactive
 sessions and carves the loop out in writing — own ticket branch only, never
 `main`, never a shared branch, only its declared surface. Follow the file, not
 this note.
+
+## Design-source CSS guards must strip comments before scanning (ENG-613)
+
+**Symptom:** a green `post-media-ground` guard went red on a diff that added no
+brand green anywhere, reporting `.post-badge` as an offender.
+
+**Cause:** the guard scans `GLOBALS.match(/\.post-media-web[^{]*\{[^}]*\}/g)`.
+`[^{]*` happily crosses newlines, so a `.post-media-web` mentioned inside a
+COMMENT swallows everything up to the next `{` and attributes the FOLLOWING
+rule's declarations to the media box. Merely explaining a selector in prose
+could fail the guard — or, worse, mask a real one.
+
+**Do this:** strip comments (`css.replace(/\/\*[\s\S]*?\*\//g, "")`) before any
+regex that treats CSS text as structure. Applied to `post-media-ground.test.ts`
+and to the new `post-card-parity.test.ts`.
+
+## The local `feed` edge function is a STUB — /explore and /following cannot be e2e'd (ENG-613)
+
+**Symptom:** a Playwright test that seeds published posts and visits `/explore`
+sees the "Nothing here yet" empty state, so any assertion about a card there
+passes vacuously.
+
+**Cause:** both `/api/feed` and `/api/feed/following` go through
+`edgeFetch(sb, "feed?…")`, and the local Supabase edge runtime serves the
+admin-branch scaffold `feed` stub, which returns `{ data: [], meta }` regardless
+of content. The real fn ships in stablepass-be.
+
+**Do this:** evidence feed-screen components on the two PROFILE feeds
+(`/api/{horses,trainers}/:id/feed` are direct reads and do render locally) and
+on the no-auth gallery at `/preview/components`. Keep that gallery current when
+the shared card changes — it was still previewing the pre-round-5 card.
+
+## Screen-level follow state already exists — do not add a read (ENG-613)
+
+`explore-feed` and `following-screen` each ALREADY read the viewer's follows for
+their aside/rail. Derive the Follow pill from those rather than adding a query,
+and model the state as `Set<string> | null` where `null` is "not known yet" —
+conflating it with "follows nobody" flashes a pill on every card and retracts it.
