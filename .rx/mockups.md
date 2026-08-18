@@ -2,15 +2,24 @@
 
 FE screen tickets build against these prebuilt HTML/CSS mockups (member web).
 
-**Source (verified 15 Aug 2026, ENG-571):**
-`<workspace>/dev-handover/StablePass-mockups/mockups/web/` — i.e. a **sibling of this repo**,
-not a path inside it. From this repo's root that is `../dev-handover/StablePass-mockups/mockups/web/`.
-Serve with `python3 -m http.server` from `StablePass-mockups/mockups/`.
+**Source (verified 18 Aug 2026, ENG-612):**
+`<workspace>/06-stage1-design/mockups/web/` — i.e. **outside this repo**, a sibling of `code/`,
+not a path inside the repo. This checkout may be a worktree under `.claude/worktrees/<ticket>/`,
+where a plain `../..` does not reach the workspace, so derive it from the git common dir:
 
-> The manifest previously pointed at `../docs/dev-handover/mockups/web/`, which has never
-> existed (`ls` fails). `dev-handover/` is **not** a git repo, so nothing under it is
-> versioned — treat the files as the live source of truth and archive supersedes under
-> `screens/_archive/`.
+```sh
+ls "$(git rev-parse --git-common-dir)/../../../06-stage1-design/mockups/web/screens/"
+```
+
+Serve with `python3 -m http.server` from `06-stage1-design/mockups/`.
+
+> **Two previous entries here were wrong and cost real time.** The manifest first pointed at
+> `../docs/dev-handover/mockups/web/`, then ENG-571's 15 Aug "fix" pointed at
+> `../dev-handover/StablePass-mockups/mockups/web/`. **Neither has ever existed** (`ls` fails on
+> both, re-checked 18 Aug). Verify the path resolves before building against it.
+
+`06-stage1-design/` is **not** a git repo, so nothing under it is versioned — treat the files as
+the live source of truth, and archived supersedes live under `screens/_archive/`.
 
 Design system: `mockups/web/style.css` — translate colours/fonts/spacing/components into tokens.
 Do not add classes to it; if a screen needs something the system lacks, that is a design gap

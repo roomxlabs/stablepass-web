@@ -100,7 +100,9 @@ test("onboarding screen renders", async ({ page }) => {
 test("W4 shared component preview gallery renders", async ({ page }) => {
   await page.goto("/preview/components");
   await expect(page.getByRole("heading", { name: "W4 shared component preview" })).toBeVisible();
-  await expect(page.getByTestId("post-overlay")).toBeVisible();
+  // Two cards carry the watermark overlay since ENG-613 made the Follow-pill
+  // fixture watermarked, so this must name which one it means.
+  await expect(page.getByTestId("post-overlay").first()).toBeVisible();
   await page.screenshot({ path: ".rx/review/w4-components.png", fullPage: true });
 });
 
@@ -516,6 +518,421 @@ test("A2 trainer profile Website link renders, opens in a new tab, and logs a cl
   } finally {
     // Best-effort cleanup; click rows cascade with the trainer.
     await admin.from("trainer_website_click").delete().eq("trainer_id", linked.id);
+    if (userData?.user?.id) {
+      await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// ENG-612 — real aspect ratio + neutral media ground.
+//
+// The horse profile is the surface this runs against deliberately:
+// `/api/horses/:id/feed` is a DIRECT PostgREST read, so it works end to end on
+// the local stack, whereas Explore goes through the be `feed` edge fn whose
+// local scaffold stub always returns `{ data: [] }` (see the W6 note above).
+// The card, the mapper and the CSS under test are the same on every surface.
+//
+// Evidence captured: landscape (16:9), portrait (a 9:16 reel, clamped to the
+// 4:5 floor) and square (1:1), plus the neutral ground behind unpainted media.
+// ---------------------------------------------------------------------------
+test("ENG-612 post media takes the asset's real aspect ratio on a neutral ground", async ({ page }) => {
+  const email = `eng612-harness-${Date.now()}@stablepass.test`;
+  const password = "harness-password-123!";
+  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+  const { data: trainer, error: trainerError } = await admin
+    .from("trainer")
+    .insert({ name: "Chris Waller", slug: `chris-waller-eng612-${Date.now()}` })
+    .select("id")
+    .single();
+  if (trainerError) throw trainerError;
+
+  const { data: horse, error: horseError } = await admin
+    .from("horse")
+    .insert({
+      trainer_id: trainer.id,
+      display_name: "Aspect Fixture",
+      racing_name: "Aspect Fixture",
+      status: "active",
+      training_status: "racing",
+    })
+    .select("id")
+    .single();
+  if (horseError) throw horseError;
+
+  // Newest first, so DOM order is deterministic: landscape, portrait, square.
+  const t = Date.now();
+  const at = (offsetMs: number) => new Date(t - offsetMs).toISOString();
+
+  const { error: postError } = await admin.from("post").insert([
+    {
+      horse_id: horse.id,
+      type: "photo",
+      status: "published",
+      body: "Landscape 1920x1080 — must render 16:9, uncropped.",
+      media_url: "https://placehold.co/1920x1080/C9A56F/1A1A1A",
+      aspect_ratio: 1.7778,
+      source_trainer_id: trainer.id,
+      watermarked: false,
+      published_at: at(0),
+    },
+    {
+      horse_id: horse.id,
+      type: "photo",
+      status: "published",
+      body: "Portrait 1080x1920 reel — clamps to the 4:5 floor and crops.",
+      media_url: "https://placehold.co/1080x1920/C9A56F/1A1A1A",
+      aspect_ratio: 0.5625,
+      source_trainer_id: trainer.id,
+      watermarked: false,
+      published_at: at(1000),
+    },
+    {
+      horse_id: horse.id,
+      type: "photo",
+      status: "published",
+      body: "Square 1080x1080 — must render 1:1.",
+      media_url: "https://placehold.co/1080x1080/C9A56F/1A1A1A",
+      aspect_ratio: 1,
+      source_trainer_id: trainer.id,
+      watermarked: false,
+      published_at: at(2000),
+    },
+    // The DISCRIMINATING fixture. 1.7778, 0.8 and 1 are exactly the three
+    // bucket-class ratios in globals.css, so those three assertions would still
+    // pass off the class alone if the inline `aspect-ratio` disappeared
+    // entirely. 1.2 matches NO bucket: it buckets as `.square` (1/1) for the
+    // fallback, so the box can only measure 1.2 if the inline value is present
+    // AND wins over the class. This is the assertion that actually proves the
+    // ticket.
+    {
+      horse_id: horse.id,
+      type: "photo",
+      status: "published",
+      body: "1.2 — matches no bucket class; only the inline ratio can produce it.",
+      media_url: "https://placehold.co/1200x1000/C9A56F/1A1A1A",
+      aspect_ratio: 1.2,
+      source_trainer_id: trainer.id,
+      watermarked: false,
+      published_at: at(3000),
+    },
+  ]);
+  if (postError) throw postError;
+
+  const { data: userData, error: userError } = await admin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+  });
+  if (userError) throw userError;
+
+  try {
+    await page.goto("/signin");
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password").fill(password);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.waitForURL("**/explore");
+
+    await page.goto(`/horses/${horse.id}`);
+    const boxes = page.locator(".post-media-web");
+    await expect(boxes).toHaveCount(4);
+
+    // Let the poster images settle so the evidence shots show the CROP, not a
+    // half-loaded frame. The geometry assertions below do not depend on this.
+    await page
+      .waitForFunction(
+        () =>
+          Array.from(document.querySelectorAll(".post-media-web img")).every(
+            (img) => (img as HTMLImageElement).complete,
+          ),
+        undefined,
+        { timeout: 15_000 },
+      )
+      .catch(() => {
+        // Offline / placeholder host unreachable: the ground shows through
+        // instead, which is still valid evidence for the neutral-ground half.
+      });
+
+    const shots: Array<{ label: string; expected: number; bucket: string }> = [
+      { label: "landscape", expected: 1.7778, bucket: "post-media-web" },
+      { label: "portrait", expected: 0.8, bucket: "post-media-web tall" }, // 0.5625 clamped up to ASPECT_MIN
+      { label: "square", expected: 1, bucket: "post-media-web square" },
+      // Bucket says 1/1, inline says 1.2 — measuring 1.2 proves the inline wins.
+      { label: "inline-beats-bucket", expected: 1.2, bucket: "post-media-web square" },
+    ];
+
+    for (const [i, { label, expected, bucket }] of shots.entries()) {
+      const box = boxes.nth(i);
+      await expect(box).toBeVisible();
+
+      // Measure the REAL rendered box, not the declared style: this is what
+      // proves a landscape asset is not squashed into a reel and a reel is not
+      // stretched into a landscape.
+      const rect = await box.boundingBox();
+      expect(rect, `${label} box has no layout`).not.toBeNull();
+      expect(rect!.height).toBeGreaterThan(0);
+      expect(rect!.width / rect!.height).toBeCloseTo(expected, 1);
+
+      // The bucket class is only the fallback; the inline value is what wins.
+      // Pinning both is what makes the `inline-beats-bucket` row meaningful.
+      await expect(box).toHaveClass(bucket);
+
+      // The unpainted ground is neutral ink (#1A1A1A), never brand green
+      // (#1F4A40 = rgb(31, 74, 64)) — the "green screen" the client reported.
+      const ground = await box.evaluate((el) => getComputedStyle(el).backgroundColor);
+      expect(ground).toBe("rgb(26, 26, 26)");
+      expect(ground).not.toBe("rgb(31, 74, 64)");
+
+      await box.screenshot({ path: `.rx/review/eng-612-${label}.png` });
+    }
+
+    await page.screenshot({ path: ".rx/review/eng-612-horse-profile-all.png", fullPage: true });
+
+    // BOTH profile feeds, per the acceptance criteria. This is not ceremony:
+    // /api/trainers/:id/feed is the OTHER route that names its post columns
+    // explicitly, and `sb` is untyped, so a dropped `aspect_ratio` there is
+    // invisible to `tsc` and would silently flatten every ratio to 1.6. The
+    // 1.2 fixture is the one that proves the column survived the round trip,
+    // since no bucket class can produce that number.
+    await page.goto(`/trainers/${trainer.id}`);
+    const trainerBoxes = page.locator(".post-media-web");
+    await expect(trainerBoxes).toHaveCount(4);
+
+    const trainerRect = await trainerBoxes.nth(3).boundingBox();
+    expect(trainerRect, "trainer profile 1.2 box has no layout").not.toBeNull();
+    expect(trainerRect!.width / trainerRect!.height).toBeCloseTo(1.2, 1);
+
+    const trainerGround = await trainerBoxes
+      .nth(3)
+      .evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(trainerGround).toBe("rgb(26, 26, 26)");
+
+    await page.screenshot({ path: ".rx/review/eng-612-trainer-profile-all.png", fullPage: true });
+  } finally {
+    // Best-effort cleanup, matching the W6/W7 convention (content rows are
+    // left behind; only the throwaway user is removed).
+    if (userData?.user?.id) {
+      await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});
+    }
+  }
+});
+
+// ===========================================================================
+// ENG-613 (W2) — member card parity with mobile, rows 3 to 6.
+//
+// Split in two on purpose. The LOCAL Supabase edge runtime serves a `feed`
+// STUB that returns no rows (see the W6 note above), and BOTH /explore and
+// /following go through it via `edgeFetch(sb, "feed?…")` — so neither can show
+// a real card here, and neither can evidence the Follow pill. The pill and the
+// update card are therefore captured on the repo's existing no-auth component
+// gallery, and the full anatomy on real seeded data through the two profile
+// feeds, which are direct BFF reads and do render locally.
+// ===========================================================================
+
+test("ENG-613 the parity card and the Follow pill render (component gallery)", async ({ page }) => {
+  await page.goto("/preview/components");
+
+  const updateCard = page.locator("article.post-web").filter({ hasText: "Where the team is up to" });
+  await expect(updateCard).toBeVisible();
+
+  // Row 6 — pill, title, byline carrying BOTH trainer and horse, inset panel
+  // with its stable footer.
+  await expect(updateCard.locator(".post-badge")).toHaveText("Stable update");
+  await expect(updateCard.locator(".post-title")).toHaveText("Where the team is up to");
+  const byline = updateCard.locator(".post-byline");
+  await expect(byline).toContainText("Tom Alcott");
+  await expect(byline).toContainText("Mahogany");
+  await expect(updateCard.locator(".post-panel p")).toHaveCount(2);
+  await expect(updateCard.locator(".post-panel-foot")).toContainText("Tom Alcott Racing · Sydney");
+  // The panel stands in for the media box, so there must be no media box.
+  await expect(updateCard.locator(".post-media-web")).toHaveCount(0);
+
+  // Row 6 — the reaction bar sits BELOW the panel on screen.
+  const panelBox = await updateCard.locator(".post-panel").boundingBox();
+  const updateActions = await updateCard.locator(".post-actions-web").boundingBox();
+  expect(panelBox).not.toBeNull();
+  expect(updateActions).not.toBeNull();
+  expect(updateActions!.y).toBeGreaterThan(panelBox!.y);
+
+  // Row 3 — option D. Computed style, so this is the real cascade, not the
+  // stylesheet text: Inter at weight 500 on #3A3A38, never Cormorant.
+  const nameStyle = await page
+    .locator("article.post-web .post-horse")
+    .first()
+    .evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { family: s.fontFamily, weight: s.fontWeight, color: s.color };
+    });
+  expect(nameStyle.family).toContain("Inter");
+  expect(nameStyle.family).not.toContain("Cormorant");
+  expect(nameStyle.weight).toBe("500");
+  expect(nameStyle.color).toBe("rgb(58, 58, 56)"); // #3A3A38
+
+  // Row 4 — the caption is painted BELOW the reaction bar. Geometry, not tree
+  // order: `order` is a visual property and this is what the member sees.
+  const captioned = page.locator("article.post-web").filter({ hasText: "Recovery day in the paddock." }).first();
+  const capActions = await captioned.locator(".post-actions-web").boundingBox();
+  const capBody = await captioned.locator(".post-body-web").boundingBox();
+  expect(capActions).not.toBeNull();
+  expect(capBody).not.toBeNull();
+  expect(capBody!.y).toBeGreaterThan(capActions!.y);
+
+  // Row 5 — the Follow pill, top-right INSIDE the media box, transparent with
+  // a white rim and no shadow. The transparent fill is a DRI decision that
+  // knowingly costs contrast; asserting it here is what stops a later "fix".
+  const pillCard = page.locator("article.post-web").filter({ hasText: "Peter Moody" }).first();
+  const pill = pillCard.getByRole("button", { name: "Follow Peter Moody" });
+  await expect(pill).toBeVisible();
+
+  const pillStyle = await pill.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { background: s.backgroundColor, shadow: s.boxShadow, color: s.color };
+  });
+  expect(pillStyle.background).toBe("rgba(0, 0, 0, 0)"); // transparent
+  expect(pillStyle.shadow).toBe("none");
+  expect(pillStyle.color).toBe("rgb(255, 255, 255)");
+
+  // The watermark overlay (z-index 2) sits over this same media box, and the
+  // pill carries no z-index of its own — deliberately, so the rule stays
+  // verbatim to the design source. What makes that safe is `pointer-events:
+  // none` on the overlay. Hit-test the pill's centre: whatever the browser
+  // returns is what the member can actually click.
+  await expect(pillCard.locator(".post-overlay")).toHaveCount(1);
+  await pill.scrollIntoViewIfNeeded();
+  const topmostIsPill = await pill.evaluate((el) => {
+    // Viewport-relative: the element must be scrolled into view above, or this
+    // reads `null` and the assertion fails for the wrong reason.
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return hit !== null && (el === hit || el.contains(hit));
+  });
+  expect(topmostIsPill, "the watermark overlay must not paint over the Follow pill").toBe(true);
+
+  const mediaBox = await pillCard.locator(".post-media-web").boundingBox();
+  const pillBox = await pill.boundingBox();
+  expect(mediaBox).not.toBeNull();
+  expect(pillBox).not.toBeNull();
+  // Top-right inset 12, within a pixel of rounding.
+  expect(pillBox!.y - mediaBox!.y).toBeCloseTo(12, 0);
+  expect(mediaBox!.x + mediaBox!.width - (pillBox!.x + pillBox!.width)).toBeCloseTo(12, 0);
+
+  // A followed trainer gets NO pill — there is no "Following" variant. Not
+  // vacuous: the card above IS on screen and DOES carry one.
+  const followedCard = page.locator("article.post-web").filter({ hasText: "Recovery day in the paddock." }).first();
+  await expect(followedCard.getByRole("button", { name: /^Follow / })).toHaveCount(0);
+
+  await updateCard.screenshot({ path: ".rx/review/eng-613-stable-update-card.png" });
+  await pillCard.screenshot({ path: ".rx/review/eng-613-follow-pill.png" });
+  await page.screenshot({ path: ".rx/review/eng-613-cards-gallery.png", fullPage: true });
+});
+
+test("ENG-613 both profile feeds show the same card anatomy", async ({ page }) => {
+  const email = `eng613-harness-${Date.now()}@stablepass.test`;
+  const password = "harness-password-123!";
+  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+  const { data: trainer, error: trainerError } = await admin
+    .from("trainer")
+    .insert({
+      name: "Tom Alcott",
+      slug: `tom-alcott-eng613-${Date.now()}`,
+      stable_name: "Tom Alcott Racing",
+      location: "Sydney",
+    })
+    .select("id")
+    .single();
+  if (trainerError) throw trainerError;
+
+  const { data: horse, error: horseError } = await admin
+    .from("horse")
+    .insert({
+      trainer_id: trainer.id,
+      display_name: "Mahogany",
+      racing_name: "Mahogany",
+      status: "active",
+      training_status: "racing",
+    })
+    .select("id")
+    .single();
+  if (horseError) throw horseError;
+
+  // Newest first, so DOM order is deterministic: the update card, then the
+  // captioned photo.
+  const t = Date.now();
+  const { error: postError } = await admin.from("post").insert([
+    {
+      horse_id: horse.id,
+      type: "text",
+      status: "published",
+      title: "Where the team is up to",
+      body:
+        "Quiet week here and that is exactly how we want it going into Saturday.\n\n" +
+        "Banjo's Girl trials Tuesday at Rosehill.",
+      source_trainer_id: trainer.id,
+      watermarked: false,
+      published_at: new Date(t).toISOString(),
+    },
+    {
+      horse_id: horse.id,
+      type: "photo",
+      status: "published",
+      body: "Morning routine. Quiet day on the walker.",
+      media_url: "https://placehold.co/1600x1000/C9A56F/1A1A1A",
+      aspect_ratio: 1.6,
+      source_trainer_id: trainer.id,
+      watermarked: false,
+      published_at: new Date(t - 1000).toISOString(),
+    },
+  ]);
+  if (postError) throw postError;
+
+  const { data: userData, error: userError } = await admin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+  });
+  if (userError) throw userError;
+
+  try {
+    await page.goto("/signin");
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password").fill(password);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.waitForURL("**/explore");
+
+    for (const [label, path] of [
+      ["horse-profile", `/horses/${horse.id}`],
+      ["trainer-profile", `/trainers/${trainer.id}`],
+    ] as const) {
+      await page.goto(path);
+
+      const updateCard = page.locator("article.post-web").filter({ hasText: "Where the team is up to" });
+      await expect(updateCard, `${label} must render the update card`).toBeVisible();
+      await expect(updateCard.locator(".post-badge")).toHaveText("Stable update");
+      await expect(updateCard.locator(".post-panel p")).toHaveCount(2);
+      await expect(updateCard.locator(".post-panel-foot")).toContainText("Tom Alcott Racing · Sydney");
+      // The horse stays in the byline: `post.horse_id` is NOT NULL.
+      await expect(updateCard.locator(".post-byline")).toContainText("Mahogany");
+
+      // Row 4 on a real screen, measured.
+      const photoCard = page.locator("article.post-web").filter({ hasText: "Morning routine" }).first();
+      const actions = await photoCard.locator(".post-actions-web").boundingBox();
+      const body = await photoCard.locator(".post-body-web").boundingBox();
+      expect(actions, `${label} actions row has no layout`).not.toBeNull();
+      expect(body, `${label} caption has no layout`).not.toBeNull();
+      expect(body!.y, `${label} caption must sit below the reaction bar`).toBeGreaterThan(actions!.y);
+
+      // No Follow pill on either profile feed. Not vacuous — cards ARE on
+      // screen. Scoped to the pill's own class rather than an accessible name:
+      // BOTH profile headers render their own "Follow" button (follow-notify),
+      // which is a different control and must keep working.
+      await expect(page.locator("article.post-web").first()).toBeVisible();
+      await expect(page.locator(".post-media-web .media-follow")).toHaveCount(0);
+
+      await page.screenshot({ path: `.rx/review/eng-613-${label}.png`, fullPage: true });
+    }
+  } finally {
     if (userData?.user?.id) {
       await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});
     }

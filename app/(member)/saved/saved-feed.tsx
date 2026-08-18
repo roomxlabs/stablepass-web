@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
 import { AccessWall } from "@/components/access-wall";
-import { PostCard } from "@/components/post-card";
+import { PostCard, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { signPhotoMap, POST_MEDIA_BUCKET, signedPosterFor } from "@/lib/storage/photos";
@@ -21,16 +21,20 @@ type PostRow = {
   id: string;
   horse_id: string;
   type: PostMedia["type"];
+  title: string | null;
   body: string | null;
   media_url: string | null;
   poster_url: string | null;
+  aspect_ratio: number | null;
   watermarked: boolean;
   like_count: number;
   published_at: string;
 };
 type BookmarkRow = { created_at: string; post: PostRow | PostRow[] | null };
 
-type HorseTrainer = { name: string };
+// `stable_name`/`location` for the STABLE UPDATE panel footer. Stable identity
+// only — there is no owner field here and none may be added.
+type HorseTrainer = { name: string; stable_name: string | null; location: string | null };
 type HorseRow = { id: string; display_name: string; trainer: HorseTrainer | HorseTrainer[] | null };
 type ReactionRow = { post_id: string; emoji: ReactionEmoji };
 
@@ -122,7 +126,8 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
       const ids = postRows.map((p) => p.id);
       const horseIds = [...new Set(postRows.map((p) => p.horse_id))];
       const [{ data: horseRows }, { data: reactionRows }] = await Promise.all([
-        sb.from("horse").select("id, display_name, trainer:trainer_id(name)").in("id", horseIds),
+        // `sb` is untyped, so `tsc` can never catch a too-narrow `.select()`. Pinned by a test.
+        sb.from("horse").select("id, display_name, trainer:trainer_id(name, stable_name, location)").in("id", horseIds),
         sb.from("reaction").select("post_id,emoji").in("post_id", ids),
       ]);
 
@@ -140,9 +145,23 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
           horseId: r.horse_id,
           horseName: horse?.display_name ?? "Unknown horse",
           trainerName: trainer?.name ?? "Stablepass",
+          stableName: trainer?.stable_name ?? null,
+          stableLocation: trainer?.location ?? null,
           postedAgo: relativeTime(r.published_at),
+          title: r.title,
           body: r.body,
-          media: { type: r.type, posterUrl: signedPosterFor(r, postMedia), duration: null },
+          // `aspectRatio` is RAW here. `resolveAspect` (post-card) owns the clamp,
+          // so exactly one place decides what an unusable value becomes. The
+          // `typeof` guard is load-bearing, not belt-and-braces: `'NaN'::numeric`
+          // passes the be's `CHECK (aspect_ratio > 0)` and `to_json` serialises it
+          // as the QUOTED string "NaN", which would otherwise widen a string into
+          // a field typed `number | null`.
+          media: {
+            type: r.type,
+            posterUrl: signedPosterFor(r, postMedia),
+            duration: null,
+            aspectRatio: typeof r.aspect_ratio === "number" ? r.aspect_ratio : null,
+          },
           watermarked: r.watermarked,
           count: r.like_count,
           reacted: myReaction.get(r.id) ?? null,
@@ -270,15 +289,15 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
                       <div className="post-avatar-web" aria-hidden="true">{p.horseName[0]?.toUpperCase() ?? "?"}</div>
                       <div className="post-meta-web">
                         <h3 className="post-horse">{p.horseName}</h3>
+                        {p.title && <h3 className="post-title">{p.title}</h3>}
                         <div className="post-byline">
                           by <span className="by-trainer">{p.trainerName}</span> · {p.postedAgo}
                         </div>
                       </div>
                     </div>
-                    <div className="post-media-web">
-                      <video controls autoPlay src={playbackUrl} style={{ width: "100%", aspectRatio: "16/9", background: "#000" }} />
+                    <div {...mediaBoxProps(p.media.aspectRatio)}>
+                      <video controls autoPlay src={playbackUrl} />
                     </div>
-                    {p.body && <div className="post-body-web">{p.body}</div>}
                     <ReactionBar
                       count={p.count}
                       reacted={p.reacted}
@@ -286,6 +305,8 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
                       onReact={(e) => react(p.id, e)}
                       onBookmark={() => unsave(p.id)}
                     />
+                    {/* Caption below the reaction bar, same as PostCard. */}
+                    {p.body && <div className="post-body-web">{p.body}</div>}
                   </article>
                 );
               }
@@ -294,7 +315,6 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
                   <PostCard
                     post={p}
                     viewerId={viewerId}
-                    mediaAspect="wide"
                     onReact={(e) => react(p.id, e)}
                     onBookmark={() => unsave(p.id)}
                     onPlay={() => play(p.id)}

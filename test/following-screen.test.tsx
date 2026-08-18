@@ -17,7 +17,9 @@ const TRAINER_FOLLOWS = [
 const FEED_POSTS = [
   { id: "p1", horse_id: "fh1", type: "photo", body: "Trackwork.", media_url: null, watermarked: false, like_count: 3, published_at: "2026-07-10T00:00:00.000Z" },
 ];
-const FEED_HORSES = [{ id: "fh1", display_name: "Mahogany", trainer: { name: "G. Waterhouse" } }];
+// ENG-613: the trainer sub-select now carries `id` (the Follow pill keys on it —
+// a name is not a key) plus `stable_name`/`location` for the panel footer.
+const FEED_HORSES = [{ id: "fh1", display_name: "Mahogany", trainer: { id: "t9", name: "G. Waterhouse", stable_name: "Waterhouse Racing", location: "Randwick" } }];
 
 let subRow: { status: string; trial_ends_at: string | null; current_period_end: string | null };
 let horseFollows: unknown[];
@@ -143,5 +145,116 @@ describe("FollowingScreen", () => {
     expect(await screen.findByText(/your access has paused/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Buy 30 days" })).toHaveAttribute("href", "/checkout");
     expect(screen.queryByRole("button", { name: "Nature Strip" })).not.toBeInTheDocument();
+  });
+
+  describe("aspect ratio (ENG-612)", () => {
+    const ratioOf = (el: HTMLElement): number => {
+      const [w, h = "1"] = el.style.aspectRatio.split("/").map((part) => part.trim());
+      return Number(w) / Number(h);
+    };
+
+    it("a 16:9 aspect_ratio (1.7778) renders the wide box unclamped", async () => {
+      feedPosts = [{ ...FEED_POSTS[0], aspect_ratio: 1.7778 }];
+      const { container } = render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+      await screen.findByText("Mahogany");
+
+      const box = container.querySelector<HTMLElement>(".post-media-web");
+      expect(box).toBeTruthy();
+      expect(ratioOf(box!)).toBeCloseTo(1.7778, 4);
+      expect(box!.className).toBe("post-media-web");
+    });
+
+    it("a 9:16 reel aspect_ratio (0.5625) clamps to the tall bucket (ASPECT_MIN 0.8)", async () => {
+      feedPosts = [{ ...FEED_POSTS[0], aspect_ratio: 0.5625 }];
+      const { container } = render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+      await screen.findByText("Mahogany");
+
+      const box = container.querySelector<HTMLElement>(".post-media-web");
+      expect(box).toBeTruthy();
+      expect(ratioOf(box!)).toBeCloseTo(0.8, 4);
+      expect(box!.className).toBe("post-media-web tall");
+    });
+
+    it("a null aspect_ratio falls back to ASPECT_DEFAULT (1.6)", async () => {
+      feedPosts = [{ ...FEED_POSTS[0], aspect_ratio: null }];
+      const { container } = render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+      await screen.findByText("Mahogany");
+
+      const box = container.querySelector<HTMLElement>(".post-media-web");
+      expect(box).toBeTruthy();
+      expect(ratioOf(box!)).toBeCloseTo(1.6, 4);
+      expect(box!.className).toBe("post-media-web");
+    });
+  });
+});
+
+// ===========================================================================
+// ENG-613 (W2) — the mapper feeds the parity card. The Following feed also
+// carries posts from followed HORSES, whose trainer may be unfollowed, so the
+// Follow pill is meaningful here and is not merely inherited from Explore.
+// ===========================================================================
+describe("FollowingScreen — ENG-613 view model + Follow pill", () => {
+  // Sibling of the describe above, so ITS beforeEach does not run here.
+  // Without this, mock call HISTORY leaks in and the projection lookup below
+  // can resolve to an earlier test's `from("horse")` call.
+  beforeEach(() => {
+    fromMock.mockClear();
+  });
+
+  // `sb` is untyped, so a dropped column is invisible to `tsc` and blanks the
+  // panel footer at runtime instead.
+  it("selects the trainer columns the pill and the panel footer need", async () => {
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    const horseCallIndex = fromMock.mock.calls.findIndex((c) => c[0] === "horse");
+    expect(horseCallIndex).toBeGreaterThanOrEqual(0);
+    const chain = fromMock.mock.results[horseCallIndex].value as { select: ReturnType<typeof vi.fn> };
+    const projection = chain.select.mock.calls[0][0] as string;
+
+    // Assert the WHOLE embed, not a per-column `toContain`. "id" is a substring
+    // of `trainer_id(` and of the horse's own `id`, and "name" is a substring of
+    // `display_name`, so a per-column loop still passes after the trainer's `id`
+    // is dropped — while `trainerId` goes null on every post and the Follow pill
+    // silently vanishes feed-wide with a green suite. `sb` is untyped, so this
+    // string IS the only guard.
+    expect(projection).toContain("trainer:trainer_id(id, name, stable_name, location)");
+    // And nothing extra: a widened projection is how owner-adjacent columns
+    // would arrive on the card (guardrail 2).
+    expect(projection).toBe("id, display_name, trainer:trainer_id(id, name, stable_name, location)");
+  });
+
+  it("puts post.title on the view model and draws the STABLE UPDATE card", async () => {
+    feedPosts = [{ ...FEED_POSTS[0], type: "text", title: "Where the team is up to", body: "Quiet week here." }];
+
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+
+    expect(await screen.findByText("Where the team is up to")).toHaveClass("post-title");
+    expect(screen.getByText("Stable update")).toHaveClass("post-badge");
+  });
+
+  // The feed post's trainer (`G. Waterhouse`) is NOT in TRAINER_FOLLOWS, which
+  // only holds Chris Waller — exactly the followed-horse-unfollowed-trainer case.
+  it("offers the pill for a post whose trainer is not followed", async () => {
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    expect(await screen.findByRole("button", { name: "Follow G. Waterhouse" })).toBeInTheDocument();
+  });
+
+  // A walled member is shown no content at all, so an "absent pill" assertion
+  // would pass vacuously on the 402 path. Assert the absence of CARDS instead.
+  it("renders no cards, and so no pill, when the feed is gated", async () => {
+    feedStatus = 402;
+
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+
+    // POSITIVE anchor first — see the note in test/explore-feed.test.tsx. An
+    // all-negative assertion on a gated screen passes on a blank page and
+    // proves nothing.
+    expect(await screen.findByText("Your free trial has ended")).toBeInTheDocument();
+
+    expect(document.querySelector("article.post-web")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Follow / })).not.toBeInTheDocument();
   });
 });

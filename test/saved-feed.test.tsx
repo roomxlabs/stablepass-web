@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SavedFeed } from "@/app/(member)/saved/saved-feed";
@@ -11,9 +11,11 @@ const BOOKMARKS = [
   { created_at: "2026-07-12T00:00:00.000Z", post: { id: "p1", horse_id: "h1", type: "photo", body: "Trackwork.", media_url: null, watermarked: false, like_count: 3, published_at: "2026-07-10T00:00:00.000Z" } },
   { created_at: "2026-07-11T00:00:00.000Z", post: { id: "p2", horse_id: "h2", type: "photo", body: "Paddock day.", media_url: null, watermarked: false, like_count: 1, published_at: "2026-07-09T00:00:00.000Z" } },
 ];
+// ENG-613: the trainer sub-select gained `stable_name`/`location` for the STABLE
+// UPDATE panel footer. Saved offers no Follow pill, so it needs no trainer `id`.
 const HORSES = [
-  { id: "h1", display_name: "Nature Strip", trainer: { name: "Chris Waller" } },
-  { id: "h2", display_name: "Winx", trainer: { name: "Chris Waller" } },
+  { id: "h1", display_name: "Nature Strip", trainer: { name: "Chris Waller", stable_name: "Waller Racing", location: "Rosehill" } },
+  { id: "h2", display_name: "Winx", trainer: { name: "Chris Waller", stable_name: "Waller Racing", location: "Rosehill" } },
 ];
 
 // Per-test knobs.
@@ -152,5 +154,171 @@ describe("SavedFeed", () => {
     expect(await screen.findByText(/your access has paused/i)).toBeInTheDocument();
     expect(screen.queryByText("Nature Strip")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Buy 30 days" })).toHaveAttribute("href", "/checkout");
+  });
+
+  describe("aspect ratio (ENG-612)", () => {
+    const ratioOf = (el: HTMLElement): number => {
+      const [w, h = "1"] = el.style.aspectRatio.split("/").map((part) => part.trim());
+      return Number(w) / Number(h);
+    };
+
+    it("a 16:9 aspect_ratio (1.7778) renders the wide box unclamped", async () => {
+      bookmarkData = [{ ...BOOKMARKS[0], post: { ...BOOKMARKS[0].post, aspect_ratio: 1.7778 } }];
+      const { container } = render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+      await screen.findByText("Nature Strip");
+
+      const box = container.querySelector<HTMLElement>(".post-media-web");
+      expect(box).toBeTruthy();
+      expect(ratioOf(box!)).toBeCloseTo(1.7778, 4);
+      expect(box!.className).toBe("post-media-web");
+    });
+
+    it("a 9:16 reel aspect_ratio (0.5625) clamps to the tall bucket (ASPECT_MIN 0.8)", async () => {
+      bookmarkData = [{ ...BOOKMARKS[0], post: { ...BOOKMARKS[0].post, aspect_ratio: 0.5625 } }];
+      const { container } = render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+      await screen.findByText("Nature Strip");
+
+      const box = container.querySelector<HTMLElement>(".post-media-web");
+      expect(box).toBeTruthy();
+      expect(ratioOf(box!)).toBeCloseTo(0.8, 4);
+      expect(box!.className).toBe("post-media-web tall");
+    });
+
+    it("a null aspect_ratio falls back to ASPECT_DEFAULT (1.6)", async () => {
+      bookmarkData = [{ ...BOOKMARKS[0], post: { ...BOOKMARKS[0].post, aspect_ratio: null } }];
+      const { container } = render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+      await screen.findByText("Nature Strip");
+
+      const box = container.querySelector<HTMLElement>(".post-media-web");
+      expect(box).toBeTruthy();
+      expect(ratioOf(box!)).toBeCloseTo(1.6, 4);
+      expect(box!.className).toBe("post-media-web");
+    });
+  });
+
+  // ENG-612 — the PLAYING <video> box, not just the poster box.
+  //
+  // This is the branch that actually matters. Photos never carry an
+  // `aspect_ratio` (a Storage asset has no Mux ratio), so a VIDEO is the only
+  // media type that ever has a real one — yet the inline player on all five
+  // surfaces was covered by nothing. `tsc` catches a wrong field name here, but
+  // not a dropped `style`, a reverted spread, or a `mediaBoxProps(null)`.
+  describe("the playing <video> box (ENG-612)", () => {
+    const PLAYBACK_URL = "https://stream.mux.test/signed.m3u8?token=stub";
+
+    const ratioOf = (el: HTMLElement): number => {
+      const [w, h = "1"] = el.style.aspectRatio.split("/").map((part) => part.trim());
+      return Number(w) / Number(h);
+    };
+
+    beforeEach(() => {
+      // A 9:16 reel: the ratio must clamp to the 0.8 floor, and must still be
+      // 0.8 AFTER the poster is swapped for the player.
+      bookmarkData = [
+        { ...BOOKMARKS[0], post: { ...BOOKMARKS[0].post, type: "video", aspect_ratio: 0.5625 } },
+      ];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => ({
+          status: 200,
+          json: async () => ({ data: { playbackUrl: PLAYBACK_URL } }),
+        })),
+      );
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("keeps the clamped ratio after play, and the player carries no hardcoded 16/9 or #000", async () => {
+      const { container } = render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+      await screen.findByText("Nature Strip");
+
+      // Assert the poster box first, so a failure after play is unambiguous.
+      expect(ratioOf(container.querySelector<HTMLElement>(".post-media-web")!)).toBeCloseTo(0.8, 4);
+
+      await userEvent.click(screen.getByRole("button", { name: "Play video" }));
+
+      const video = await waitFor(() => {
+        const found = container.querySelector<HTMLVideoElement>(".post-media-web video");
+        expect(found).toBeTruthy();
+        return found!;
+      });
+
+      // Guardrail: the src is the minted signed URL, never a raw Mux asset.
+      expect(video.getAttribute("src")).toBe(PLAYBACK_URL);
+
+      // The box wrapping the player keeps the SAME clamped geometry as the poster.
+      const box = video.closest<HTMLElement>(".post-media-web")!;
+      expect(ratioOf(box)).toBeCloseTo(0.8, 4);
+      expect(box.className).toBe("post-media-web tall");
+
+      // Acceptance: the hardcoded player styles are gone. Geometry and ground
+      // both come from the box now, so the element has neither of its own.
+      expect(video.style.aspectRatio).toBe("");
+      expect(video.style.background).toBe("");
+    });
+  });
+
+});
+
+// ===========================================================================
+// ENG-613 (W2) — Saved gets the parity card too, but deliberately NO Follow
+// pill: it holds no trainer-follow state, and the ticket wires the pill on
+// Explore and Following only.
+// ===========================================================================
+describe("SavedFeed — ENG-613 view model", () => {
+  // Sibling of the describe above, so ITS beforeEach does not run here.
+  // Clear the call history the projection assertion reads.
+  beforeEach(() => {
+    fromMock.mockClear();
+  });
+
+  // `sb` is untyped, so `tsc` can never catch a too-narrow `.select()`; an
+  // omitted column silently blanks the panel footer at runtime.
+  it("selects the trainer columns the panel footer needs", async () => {
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Nature Strip");
+
+    const horseCallIndex = fromMock.mock.calls.findIndex((c) => c[0] === "horse");
+    expect(horseCallIndex).toBeGreaterThanOrEqual(0);
+    const chain = fromMock.mock.results[horseCallIndex].value as { select: ReturnType<typeof vi.fn> };
+    const projection = chain.select.mock.calls[0][0] as string;
+
+    // Assert the WHOLE embed, not a per-column `toContain`. "id" is a substring
+    // of `trainer_id(` and of the horse's own `id`, and "name" is a substring of
+    // `display_name`, so a per-column loop still passes after the trainer's `id`
+    // is dropped — while `trainerId` goes null on every post and the Follow pill
+    // silently vanishes feed-wide with a green suite. `sb` is untyped, so this
+    // string IS the only guard.
+    expect(projection).toContain("trainer:trainer_id(name, stable_name, location)");
+    // And nothing extra: a widened projection is how owner-adjacent columns
+    // would arrive on the card (guardrail 2).
+    expect(projection).toBe("id, display_name, trainer:trainer_id(name, stable_name, location)");
+  });
+
+  it("puts post.title on the view model and draws the STABLE UPDATE card", async () => {
+    bookmarkData = [
+      {
+        created_at: "2026-07-12T00:00:00.000Z",
+        post: { id: "p1", horse_id: "h1", type: "text", title: "Where the team is up to", body: "Quiet week here.", media_url: null, watermarked: false, like_count: 3, published_at: "2026-07-10T00:00:00.000Z" },
+      },
+    ];
+
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+
+    expect(await screen.findByText("Where the team is up to")).toHaveClass("post-title");
+    expect(screen.getByText("Stable update")).toHaveClass("post-badge");
+    expect(document.querySelector(".post-panel-foot")!.textContent).toContain("Waller Racing · Rosehill");
+  });
+
+  // Not vacuous: the card above IS rendered on this screen, so the pill's
+  // absence is a real assertion about this surface, not about an empty page.
+  it("offers no Follow pill on Saved", async () => {
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Nature Strip");
+
+    expect(document.querySelector("article.post-web")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /^Follow / })).not.toBeInTheDocument();
   });
 });
