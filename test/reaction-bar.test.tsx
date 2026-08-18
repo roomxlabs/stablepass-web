@@ -129,7 +129,12 @@ describe("post card spacing", () => {
   // behaviour under test is unchanged and still asserted — an uncaptioned post
   // is spaced exactly like a captioned one — only the mechanism moved.
   it("pads the actions row unconditionally, so a captionless post is spaced the same", () => {
-    const css = readGlobalsCss().replace(/\/\*[\s\S]*?\*\//g, "");
+    const css = readGlobalsCss()
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      // Collapse whitespace + combinator spacing so neither a line wrap nor
+      // `a+b` can smuggle the old conditional rules back past this guard.
+      .replace(/[^\S\n]+/g, " ")
+      .replace(/\s*\+\s*/g, " + ");
 
     const rules = css.match(/^\.post-actions-web\s*\{[^}]*\}/gm) ?? [];
     const withPadding = rules.filter((r) => r.includes("padding:"));

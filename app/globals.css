@@ -653,9 +653,12 @@ a { color: inherit; text-decoration: none; }
    same component and corner as mobile's M3. Transparent fill with a white rim is
    a DRI decision that KNOWINGLY costs contrast on a bright frame: do not add a
    fill to make the label pass 4.5:1.
-   Every declaration below is the design source verbatim EXCEPT `z-index`, which
-   is repo-specific: this codebase's watermark overlay takes `z-index: 2` and the
-   mockup has no such overlay, so without it the pill would paint underneath. */
+   Every declaration below is the design source VERBATIM — no additions. A
+   `z-index: 3` was tried here (this repo's watermark overlay takes `z-index: 2`,
+   which the mockup has no equivalent of) and then removed as unnecessary: the
+   overlay is `pointer-events: none`, so it never intercepts the pill's clicks,
+   and it paints nothing over the top-right corner — its two marks sit top-LEFT
+   and bottom-right. The e2e hit-tests the pill's centre to keep that true. */
 .post-media-web .media-follow {
   position: absolute; top: 12px; right: 12px;
   background: transparent;
@@ -667,7 +670,6 @@ a { color: inherit; text-decoration: none; }
   border-radius: var(--radius-pill);
   box-shadow: none;
   cursor: pointer;
-  z-index: 3;
 }
 
 /* Brand + forensic viewer-id overlay (deterrence only; asset never modified). */
@@ -687,7 +689,7 @@ a { color: inherit; text-decoration: none; }
    Same anatomy as mobile's M4, from the same design source, restated for the
    wider web column. There is no media box on these: the panel takes its place,
    which is why it shares `order: -2` with `.post-media-web` above. */
-.post-badge {
+.post-web .post-badge {
   display: inline-flex; align-items: center; gap: 6px;
   background: var(--brand-green);
   color: var(--cream);
@@ -696,7 +698,7 @@ a { color: inherit; text-decoration: none; }
   padding: 5px 12px; border-radius: var(--radius-pill);
   margin-bottom: 6px;
 }
-.post-badge::before {
+.post-web .post-badge::before {
   content: ''; width: 5px; height: 5px; border-radius: 50%;
   background: var(--cream);
 }

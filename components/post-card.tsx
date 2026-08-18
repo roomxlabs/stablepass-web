@@ -147,10 +147,15 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
   const paragraphs = isUpdate ? bodyParagraphs(post.body) : [];
   const showPanel = isUpdate && paragraphs.length > 0;
   const stableLine = [post.stableName, post.stableLocation].filter(Boolean).join(" · ");
-  const trainerInitial = post.trainerName[0]?.toUpperCase() ?? "?";
+  // `?.` is load-bearing. This now runs for EVERY card type, not just update
+  // cards, and PostCard is a shared exported component: an undefined
+  // `trainerName` slipping past an untyped `sb` payload would throw here and
+  // take the whole feed down, not just this card. Every current call site
+  // coalesces, so this is defence, not a live bug.
+  const trainerInitial = post.trainerName?.[0]?.toUpperCase() ?? "?";
   // An update card is the STABLE's voice, so it leads with the trainer's initial;
   // a media card is about the horse and leads with the horse's.
-  const initial = isUpdate ? trainerInitial : post.horseName[0]?.toUpperCase() ?? "?";
+  const initial = isUpdate ? trainerInitial : post.horseName?.[0]?.toUpperCase() ?? "?";
   // The box takes the asset's OWN ratio, clamped. There is no `mediaAspect`
   // prop any more: a call site cannot hardcode a shape the asset does not have.
   const mediaBox = mediaBoxProps(post.media.aspectRatio);
@@ -168,7 +173,19 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
           ) : (
             <h3 className="post-horse">{post.horseName}</h3>
           )}
-          {post.title && <h3 className="post-title">{post.title}</h3>}
+          {/* Exactly ONE heading per card, which is what the design source draws:
+              a media card is headed by the horse (06-explore.html:84,142,167) and
+              an update card by its title (:115-116) — never both. A media post
+              that also carries a title would otherwise emit two sibling <h3>s in
+              inverted visual hierarchy (17px/500 name above a 22px/600 title), a
+              state the source never shows. So the title is a heading only when it
+              IS the card's heading. */}
+          {post.title &&
+            (isUpdate ? (
+              <h3 className="post-title">{post.title}</h3>
+            ) : (
+              <p className="post-title">{post.title}</p>
+            ))}
           {/* The horse stays in the byline of an update card for the same reason
               as mobile's M4: `post.horse_id` is NOT NULL, and trainer → horse →
               post is the product's spine. The website sample drops it; we

@@ -78,6 +78,10 @@ const UPDATE_POST: FeedPost = {
 const UNFOLLOWED_POST: FeedPost = {
   ...PHOTO_POST,
   id: "post-photo-2",
+  // Watermarked ON PURPOSE. The pill's `z-index: 3` exists only because the
+  // watermark overlay takes `z-index: 2`, so a fixture without the overlay
+  // never exercises the one deviation from the design source.
+  watermarked: true,
   horseName: "Black Caviar",
   trainerName: "Peter Moody",
   trainerId: "trainer-3",

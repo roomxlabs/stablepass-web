@@ -194,6 +194,13 @@ describe("FollowingScreen", () => {
 // Follow pill is meaningful here and is not merely inherited from Explore.
 // ===========================================================================
 describe("FollowingScreen — ENG-613 view model + Follow pill", () => {
+  // Sibling of the describe above, so ITS beforeEach does not run here.
+  // Without this, mock call HISTORY leaks in and the projection lookup below
+  // can resolve to an earlier test's `from("horse")` call.
+  beforeEach(() => {
+    fromMock.mockClear();
+  });
+
   // `sb` is untyped, so a dropped column is invisible to `tsc` and blanks the
   // panel footer at runtime instead.
   it("selects the trainer columns the pill and the panel footer need", async () => {
@@ -205,9 +212,16 @@ describe("FollowingScreen — ENG-613 view model + Follow pill", () => {
     const chain = fromMock.mock.results[horseCallIndex].value as { select: ReturnType<typeof vi.fn> };
     const projection = chain.select.mock.calls[0][0] as string;
 
-    for (const column of ["id", "name", "stable_name", "location"]) {
-      expect(projection, `horse select must carry trainer.${column}`).toContain(column);
-    }
+    // Assert the WHOLE embed, not a per-column `toContain`. "id" is a substring
+    // of `trainer_id(` and of the horse's own `id`, and "name" is a substring of
+    // `display_name`, so a per-column loop still passes after the trainer's `id`
+    // is dropped — while `trainerId` goes null on every post and the Follow pill
+    // silently vanishes feed-wide with a green suite. `sb` is untyped, so this
+    // string IS the only guard.
+    expect(projection).toContain("trainer:trainer_id(id, name, stable_name, location)");
+    // And nothing extra: a widened projection is how owner-adjacent columns
+    // would arrive on the card (guardrail 2).
+    expect(projection).toBe("id, display_name, trainer:trainer_id(id, name, stable_name, location)");
   });
 
   it("puts post.title on the view model and draws the STABLE UPDATE card", async () => {

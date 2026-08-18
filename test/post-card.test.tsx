@@ -471,3 +471,43 @@ describe("PostCard — row 6, the STABLE UPDATE card", () => {
     expect(screen.getByText("Mahogany")).toHaveClass("post-horse");
   });
 });
+
+describe("PostCard — heading structure", () => {
+  // The design source draws exactly one heading per card: the horse on a media
+  // card, the title on an update card, never both. A titled photo post used to
+  // emit two sibling <h3>s in inverted visual hierarchy.
+  it("emits exactly one h3 on a titled media post, and it is the horse", () => {
+    render(
+      <PostCard
+        post={{ ...BASE, media: { type: "photo", posterUrl: null }, title: "Gallop day" }}
+        viewerId={VIEWER_ID}
+        onReact={noop}
+        onBookmark={noop}
+      />,
+    );
+
+    const headings = document.querySelectorAll("article.post-web h3");
+    expect(headings).toHaveLength(1);
+    expect(headings[0]).toHaveClass("post-horse");
+    // The title is still rendered and still styled — just not as a heading.
+    expect(screen.getByText("Gallop day")).toHaveClass("post-title");
+  });
+
+  it("emits exactly one h3 on an update card, and it is the title", () => {
+    render(<PostCard post={TEXT_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />);
+
+    const headings = document.querySelectorAll("article.post-web h3");
+    expect(headings).toHaveLength(1);
+    expect(headings[0]).toHaveClass("post-title");
+  });
+
+  // Defensive: A2 makes body required going forward, but whitespace is not null.
+  it("renders no panel for a whitespace-only body", () => {
+    render(
+      <PostCard post={{ ...TEXT_POST, body: "   \n\n  \t " }} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />,
+    );
+
+    expect(screen.getByText("Stable update")).toBeInTheDocument();
+    expect(document.querySelector(".post-panel")).toBeNull();
+  });
+});

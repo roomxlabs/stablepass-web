@@ -56,7 +56,12 @@ type RaceRow = {
 };
 
 type FollowTrainer = { id: string; name: string };
-type FollowRow = { trainer: FollowTrainer | FollowTrainer[] | null };
+// `trainer_id` is read RAW alongside the embed on purpose: the embed is what the
+// aside needs (it wants the NAME), but a row whose trainer embed comes back null
+// — RLS hid it, or the join missed — would silently drop that trainer from the
+// followed set and put a Follow pill on a trainer the viewer already follows.
+// The raw column cannot be hidden that way.
+type FollowRow = { trainer_id: string | null; trainer: FollowTrainer | FollowTrainer[] | null };
 
 const Search = () => (
   <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">
@@ -127,6 +132,8 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
   const [playError, setPlayError] = useState<Record<string, boolean>>({});
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  // Trainer ids with a follow write in flight — see follow() below.
+  const followInFlight = useRef<Set<string>>(new Set());
   const loadingRef = useRef(false);
 
   const fetchPage = useCallback(async (forCursor: string | null) => {
@@ -269,17 +276,33 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
       });
 
     (async () => {
-      const { data: followRows } = await sb.from("follow").select("trainer:trainer_id(id,name)").not("trainer_id", "is", null);
+      const { data: followRows, error: followError } = await sb
+        .from("follow")
+        .select("trainer_id, trainer:trainer_id(id,name)")
+        .not("trainer_id", "is", null);
+      const rows = (followRows ?? []) as FollowRow[];
       const trainerMap = new Map<string, string>();
-      for (const row of (followRows ?? []) as FollowRow[]) {
+      for (const row of rows) {
         const t = one(row.trainer);
         if (t) trainerMap.set(t.id, t.name);
       }
       const trainerIds = [...trainerMap.keys()];
+
       // Set BEFORE the horse-count round trip below, and on the empty path too:
-      // the pill only needs the ids, and an empty follow list is a real answer
-      // (every card gets a pill), not a reason to leave the state unknown.
-      setFollowedTrainerIds(new Set(trainerIds));
+      // an empty follow list is a real answer (every card gets a pill), not a
+      // reason to leave the state unknown.
+      //
+      // A FAILED read is the opposite: leaving it `null` keeps the pill hidden.
+      // Treating an error as "follows nobody" would put a Follow pill on every
+      // card INCLUDING trainers the viewer already follows, and clicking one
+      // then writes a duplicate `follow` row the unique constraint rejects — the
+      // pill flashes out and back. `null` means unknown; only a successful read
+      // may answer the question.
+      if (!followError) {
+        setFollowedTrainerIds(
+          new Set(rows.map((r) => r.trainer_id).filter((id): id is string => Boolean(id))),
+        );
+      }
       if (trainerIds.length === 0) {
         setTrainers([]);
         return;
@@ -343,15 +366,27 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
   }
 
   // Follow, from the pill on the media. Optimistic like react/bookmark above,
-  // and it hides the pill on EVERY card by that trainer at once, which is the
+  // and it clears the pill on EVERY card by that trainer at once, which is the
   // reason follow state lives on the screen rather than inside the card.
   async function follow(trainerId: string) {
+    // `follow_no_duplicate` is `unique (user_id, trainer_id, horse_id)`, and a
+    // TRAINER follow has `horse_id IS NULL` — Postgres treats NULLs as distinct,
+    // so that constraint does NOT stop a second row. A fast double-click before
+    // the optimistic re-render would write two, and the Following rail would
+    // then list the trainer twice with a duplicate React key.
+    if (followInFlight.current.has(trainerId)) return;
+    followInFlight.current.add(trainerId);
+
     setFollowedTrainerIds((prev) => new Set(prev ?? []).add(trainerId));
 
     const sb = supabaseBrowser();
     const { error: followError } = await sb.from("follow").insert({ user_id: viewerId, trainer_id: trainerId });
+    followInFlight.current.delete(trainerId);
 
-    if (followError) {
+    // 23505 is unique_violation: the row already exists, so the viewer already
+    // follows this trainer. That IS the desired end state — rolling back would
+    // put the pill back on a trainer they follow, which is the bug, not the fix.
+    if (followError && followError.code !== "23505") {
       setFollowedTrainerIds((prev) => {
         const next = new Set(prev ?? []);
         next.delete(trainerId);

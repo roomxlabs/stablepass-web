@@ -100,7 +100,9 @@ test("onboarding screen renders", async ({ page }) => {
 test("W4 shared component preview gallery renders", async ({ page }) => {
   await page.goto("/preview/components");
   await expect(page.getByRole("heading", { name: "W4 shared component preview" })).toBeVisible();
-  await expect(page.getByTestId("post-overlay")).toBeVisible();
+  // Two cards carry the watermark overlay since ENG-613 made the Follow-pill
+  // fixture watermarked, so this must name which one it means.
+  await expect(page.getByTestId("post-overlay").first()).toBeVisible();
   await page.screenshot({ path: ".rx/review/w4-components.png", fullPage: true });
 });
 
@@ -790,6 +792,22 @@ test("ENG-613 the parity card and the Follow pill render (component gallery)", a
   expect(pillStyle.background).toBe("rgba(0, 0, 0, 0)"); // transparent
   expect(pillStyle.shadow).toBe("none");
   expect(pillStyle.color).toBe("rgb(255, 255, 255)");
+
+  // The watermark overlay (z-index 2) sits over this same media box, and the
+  // pill carries no z-index of its own — deliberately, so the rule stays
+  // verbatim to the design source. What makes that safe is `pointer-events:
+  // none` on the overlay. Hit-test the pill's centre: whatever the browser
+  // returns is what the member can actually click.
+  await expect(pillCard.locator(".post-overlay")).toHaveCount(1);
+  await pill.scrollIntoViewIfNeeded();
+  const topmostIsPill = await pill.evaluate((el) => {
+    // Viewport-relative: the element must be scrolled into view above, or this
+    // reads `null` and the assertion fails for the wrong reason.
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return hit !== null && (el === hit || el.contains(hit));
+  });
+  expect(topmostIsPill, "the watermark overlay must not paint over the Follow pill").toBe(true);
 
   const mediaBox = await pillCard.locator(".post-media-web").boundingBox();
   const pillBox = await pill.boundingBox();

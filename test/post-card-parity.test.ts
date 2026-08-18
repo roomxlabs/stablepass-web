@@ -15,7 +15,13 @@ import { join } from "node:path";
  * comment that NAMES the selector it replaced, and an un-stripped "does not
  * contain" check would then fail on the explanation rather than on the CSS.
  */
-const strip = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, "");
+const strip = (css: string) =>
+  css
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    // Collapse whitespace and combinator spacing. A guard written as
+    // `a + b` is otherwise defeated by a line wrap OR by `a+b`.
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/\s*\+\s*/g, " + ");
 
 const GLOBALS = strip(readFileSync(join(process.cwd(), "app/globals.css"), "utf8"));
 const MARKETING = strip(readFileSync(join(process.cwd(), "app/(marketing)/marketing.css"), "utf8"));
@@ -116,7 +122,7 @@ describe("ENG-613 row 5 — the Follow pill", () => {
 
 describe("ENG-613 row 6 — the STABLE UPDATE card", () => {
   it("draws the pill in brand green on cream", () => {
-    const badge = rule(".post-badge");
+    const badge = rule(".post-web .post-badge");
     expect(badge).toContain("background: var(--brand-green)");
     expect(badge).toContain("color: var(--cream)");
     expect(badge).toContain("text-transform: uppercase");

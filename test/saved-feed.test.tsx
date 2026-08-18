@@ -268,6 +268,12 @@ describe("SavedFeed", () => {
 // Explore and Following only.
 // ===========================================================================
 describe("SavedFeed — ENG-613 view model", () => {
+  // Sibling of the describe above, so ITS beforeEach does not run here.
+  // Clear the call history the projection assertion reads.
+  beforeEach(() => {
+    fromMock.mockClear();
+  });
+
   // `sb` is untyped, so `tsc` can never catch a too-narrow `.select()`; an
   // omitted column silently blanks the panel footer at runtime.
   it("selects the trainer columns the panel footer needs", async () => {
@@ -279,9 +285,16 @@ describe("SavedFeed — ENG-613 view model", () => {
     const chain = fromMock.mock.results[horseCallIndex].value as { select: ReturnType<typeof vi.fn> };
     const projection = chain.select.mock.calls[0][0] as string;
 
-    for (const column of ["stable_name", "location"]) {
-      expect(projection, `horse select must carry trainer.${column}`).toContain(column);
-    }
+    // Assert the WHOLE embed, not a per-column `toContain`. "id" is a substring
+    // of `trainer_id(` and of the horse's own `id`, and "name" is a substring of
+    // `display_name`, so a per-column loop still passes after the trainer's `id`
+    // is dropped — while `trainerId` goes null on every post and the Follow pill
+    // silently vanishes feed-wide with a green suite. `sb` is untyped, so this
+    // string IS the only guard.
+    expect(projection).toContain("trainer:trainer_id(name, stable_name, location)");
+    // And nothing extra: a widened projection is how owner-adjacent columns
+    // would arrive on the card (guardrail 2).
+    expect(projection).toBe("id, display_name, trainer:trainer_id(name, stable_name, location)");
   });
 
   it("puts post.title on the view model and draws the STABLE UPDATE card", async () => {
