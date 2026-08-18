@@ -8,34 +8,21 @@
 // Career stats (starts/wins/places/prize_money_cents), the cover (photo_url) and
 // the About blurb (story) all live directly on `horse` — hand-maintained by the
 // stable, not derived from `race_horse`.
+//
+// ENG-617: this screen reads Supabase DIRECTLY, so it used to carry its own copy
+// of the age formula — and its own copy of the bug. The age and the race-day
+// description are now `horse_age` / `horse_description`, computed in Postgres;
+// see lib/horse/profile.ts. This file does no date arithmetic.
 import { notFound } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
 import { signPhoto, HORSE_PHOTO_BUCKET } from "@/lib/storage/photos";
+import { HORSE_PROFILE_COLUMNS, ageDescriptionLine, type HorseProfileRow } from "@/lib/horse/profile";
 import { readSubscriptionState } from "@/lib/api/subscription-state";
 import { AccessWall } from "@/components/access-wall";
 import { TrainerCard } from "@/components/trainer-card";
 import { FollowNotify } from "./follow-notify";
 import { HorsePosts } from "./horse-posts";
 
-type TrainerRow = { id: string; name: string; stable_name: string | null; location: string | null };
-type HorseRow = {
-  id: string;
-  sire: string | null;
-  dam: string | null;
-  display_name: string;
-  racing_name: string | null;
-  sex: string | null;
-  colour: string | null;
-  foaling_year: number | null;
-  training_status: string;
-  starts: number;
-  wins: number;
-  places: number;
-  prize_money_cents: number;
-  story: string | null;
-  photo_url: string | null;
-  trainer: TrainerRow | TrainerRow[] | null;
-};
 type NextRaceRow = {
   barrier: number | null;
   jockey: string | null;
@@ -53,11 +40,6 @@ function pedigree(sire: string | null, dam: string | null): string | null {
   if (!sire && !dam) return null;
   if (sire && dam) return `by ${sire} out of ${dam}`;
   return sire ? `by ${sire}` : `out of ${dam}`;
-}
-
-function ageSexLabel(foalingYear: number | null, sex: string | null): string {
-  const age = foalingYear ? new Date().getFullYear() - foalingYear : null;
-  return [age != null ? `${age}yo` : null, sex].filter(Boolean).join(" · ");
 }
 
 function trainingStatusLabel(status: string): string {
@@ -106,19 +88,25 @@ export default async function HorseProfilePage({ params }: { params: Promise<{ i
     );
   }
 
-  const { data: horseRow } = await sb
+  const { data: horseRow, error: horseError } = await sb
     .from("horse")
-    .select(
-      "id, sire, dam, display_name, racing_name, sex, colour, foaling_year, training_status, starts, wins, places, prize_money_cents, story, photo_url, trainer:trainer_id(id, name, stable_name, location)",
-    )
+    .select(HORSE_PROFILE_COLUMNS)
     .eq("id", id)
     .maybeSingle();
+  // A query error lands in the same branch as a hidden row (see the matching
+  // note in app/api/horses/[id]/route.ts): before H1 deploys, the named computed
+  // columns raise 42703 and this notFound()s every horse silently. Log it.
+  if (horseError) console.error("horse profile read failed", horseError);
   if (!horseRow) notFound();
 
-  const row = horseRow as HorseRow;
+  const row = horseRow as HorseProfileRow;
   const trainer = one(row.trainer);
   const displayName = row.racing_name || row.display_name;
   const pedigreeLine = pedigree(row.sire, row.dam);
+  // "5yo · gelding" — read from the database's derivation (1 August rule,
+  // Australia/Sydney), never computed here. Empty when the row has neither an
+  // age nor a description, in which case the pill is not rendered at all.
+  const ageDescription = ageDescriptionLine(row.horse_age, row.horse_description);
   // `photo_url` holds a bare object path in the PRIVATE `horse-photos` bucket;
   // it must be signed before it can be rendered (see lib/storage/photos.ts).
   const coverUrl = await signPhoto(sb, HORSE_PHOTO_BUCKET, row.photo_url);
@@ -178,7 +166,7 @@ export default async function HorseProfilePage({ params }: { params: Promise<{ i
               <span className={`tag${row.training_status === "racing" ? " race-day" : ""}`}>
                 {row.training_status === "racing" ? "● Racing" : trainingStatusLabel(row.training_status)}
               </span>
-              <span className="tag">{ageSexLabel(row.foaling_year, row.sex)}</span>
+              {ageDescription && <span className="tag">{ageDescription}</span>}
             </div>
             <h1 className="profile-name-web">{displayName}</h1>
             {pedigreeLine && <p className="profile-pedigree-web">{pedigreeLine}</p>}

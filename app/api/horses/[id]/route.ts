@@ -7,30 +7,16 @@
 // Career stats (starts/wins/places/prize_money_cents), the cover (photo_url) and
 // the About blurb (story) all live directly on `horse` — hand-maintained by the
 // stable (see the mockup's stats-note copy), not derived from `race_horse`.
+//
+// ENG-617: the age is NOT computed here. `horse_age` / `horse_description` are
+// PostgREST computed columns derived in Postgres on the 1 August rule; see
+// lib/horse/profile.ts for why this route does no date arithmetic at all.
 import { ok, fail, UNAUTH, GATED } from "@/lib/api/envelope";
 import { hasAccess, ACCESS_COLUMNS } from "@/lib/api/access";
 import { supabaseServer } from "@/lib/supabase/server";
 import { signPhoto, HORSE_PHOTO_BUCKET } from "@/lib/storage/photos";
+import { HORSE_PROFILE_COLUMNS, ageDescriptionLine, type HorseProfileRow } from "@/lib/horse/profile";
 
-type TrainerRow = { id: string; name: string; stable_name: string | null; location: string | null };
-type HorseRow = {
-  id: string;
-  sire: string | null;
-  dam: string | null;
-  display_name: string;
-  racing_name: string | null;
-  sex: string | null;
-  colour: string | null;
-  foaling_year: number | null;
-  training_status: string;
-  starts: number;
-  wins: number;
-  places: number;
-  prize_money_cents: number;
-  story: string | null;
-  photo_url: string | null;
-  trainer: TrainerRow | TrainerRow[] | null;
-};
 type NextRaceRow = {
   barrier: number | null;
   jockey: string | null;
@@ -51,11 +37,6 @@ function pedigree(sire: string | null, dam: string | null): string | null {
   return sire ? `by ${sire}` : `out of ${dam}`;
 }
 
-function ageSex(foalingYear: number | null, sex: string | null): string {
-  const age = foalingYear ? new Date().getFullYear() - foalingYear : null;
-  return [age != null ? `${age}yo` : null, sex].filter(Boolean).join(" · ");
-}
-
 // prize_money_cents -> "$1.2M" (>=$1m), "$45k" (>=$1k), else "$N".
 function formatPrize(cents: number): string {
   const dollars = cents / 100;
@@ -73,16 +54,21 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const { data: sub } = await sb.from("subscription").select(ACCESS_COLUMNS).eq("user_id", user.id).single();
   if (!hasAccess(sub)) return GATED();
 
-  const { data: horseRow } = await sb
+  const { data: horseRow, error: horseError } = await sb
     .from("horse")
-    .select(
-      "id, sire, dam, display_name, racing_name, sex, colour, foaling_year, training_status, starts, wins, places, prize_money_cents, story, photo_url, trainer:trainer_id(id, name, stable_name, location)",
-    )
+    .select(HORSE_PROFILE_COLUMNS)
     .eq("id", id)
     .maybeSingle();
+  // The 404 is deliberate for a hidden/foreign row (enumeration resistance), but
+  // a QUERY error lands in the same branch and must not be silent: before H1
+  // (ENG-615) is deployed, the named computed columns raise 42703 and EVERY
+  // horse profile 404s, indistinguishable from a genuinely hidden horse. Log it
+  // so the deploy-order failure is loud. Never "fix" a 42703 by trimming the
+  // projection — naming the columns is the point.
+  if (horseError) console.error("horse profile read failed", horseError);
   if (!horseRow) return fail("not_found", "Horse not found.", 404);
 
-  const row = horseRow as HorseRow;
+  const row = horseRow as HorseProfileRow;
   const trainer = one(row.trainer);
 
   // Next race — earliest upcoming scheduled_at, or null.
@@ -115,7 +101,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       id: row.id,
       displayName: row.racing_name || row.display_name,
       pedigree: pedigree(row.sire, row.dam),
-      ageSex: ageSex(row.foaling_year, row.sex),
+      // "5yo · gelding", straight from the database's derivation — no local
+      // arithmetic, so this flips itself on 1 August without a deploy.
+      ageDescription: ageDescriptionLine(row.horse_age, row.horse_description),
       trainingStatus: row.training_status,
       // Signed, never the raw path: `horse-photos` is a private bucket.
       coverUrl: await signPhoto(sb, HORSE_PHOTO_BUCKET, row.photo_url),
