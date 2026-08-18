@@ -7,7 +7,7 @@
 // the horse version, a trainer's updates span their whole stable, so each post
 // carries its OWN horse name for the byline. Mirrors W7 HorsePosts otherwise.
 import { useEffect, useState } from "react";
-import { PostCard } from "@/components/post-card";
+import { PostCard, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { relativeTime } from "@/app/(member)/explore/explore-feed";
 import { supabaseBrowser } from "@/lib/supabase/client";
@@ -21,6 +21,7 @@ type PostRow = {
   body: string | null;
   media_url: string | null;
   poster_url: string | null;
+  aspect_ratio: number | null;
   watermarked: boolean;
   like_count: number;
   published_at: string;
@@ -86,7 +87,18 @@ export function TrainerPosts({ trainerId, trainerName, viewerId }: TrainerPostsP
             trainerName,
             postedAgo: relativeTime(r.published_at),
             body: r.body,
-            media: { type: r.type, posterUrl: signedPosterFor(r, postMedia), duration: null },
+            // `aspectRatio` is RAW here. `resolveAspect` (post-card) owns the clamp,
+            // so exactly one place decides what an unusable value becomes. The
+            // `typeof` guard is load-bearing, not belt-and-braces: `'NaN'::numeric`
+            // passes the be's `CHECK (aspect_ratio > 0)` and `to_json` serialises it
+            // as the QUOTED string "NaN", which would otherwise widen a string into
+            // a field typed `number | null`.
+            media: {
+              type: r.type,
+              posterUrl: signedPosterFor(r, postMedia),
+              duration: null,
+              aspectRatio: typeof r.aspect_ratio === "number" ? r.aspect_ratio : null,
+            },
             watermarked: r.watermarked,
             count: r.like_count,
             reacted: myReaction.get(r.id) ?? null,
@@ -185,8 +197,8 @@ export function TrainerPosts({ trainerId, trainerName, viewerId }: TrainerPostsP
                   </div>
                 </div>
               </div>
-              <div className="post-media-web">
-                <video controls autoPlay src={playbackUrl} style={{ width: "100%", aspectRatio: "16/9", background: "#000" }} />
+              <div {...mediaBoxProps(p.media.aspectRatio)}>
+                <video controls autoPlay src={playbackUrl} />
               </div>
               {p.body && <div className="post-body-web">{p.body}</div>}
               <ReactionBar

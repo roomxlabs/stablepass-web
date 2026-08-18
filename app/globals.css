@@ -15,6 +15,11 @@
   --navy: #1A2B3F;
   --gold: #C9A56F;
   --ink: #1A1A1A;
+  /* The unpainted ground behind post media. Neutral ink, not brand green: the
+     media box is edge to edge, so a green fill reads as chrome the app drew
+     rather than as the letterbox behind someone else's asset. Same call as
+     mobile's round-4 M5. Round 5 design source: mockups/web/style.css. */
+  --media-ground: #1A1A1A;
   --muted: #6B6963;
   --muted-light: #A8A6A0;
   --line: #E2DED6;
@@ -607,7 +612,10 @@ a { color: inherit; text-decoration: none; }
 .post-meta-web .post-byline .by-trainer { color: var(--brand-green); font-weight: 500; }
 .post-more-web { color: var(--muted); background: none; border: none; cursor: pointer; padding: 4px; }
 
-.post-media-web { position: relative; background: var(--brand-green-dark); aspect-ratio: 16/9; overflow: hidden; }
+/* The bucket classes below stay as the CSS fallback so the box is never
+   zero-height; the card sets an inline `aspect-ratio` from `post.aspect_ratio`
+   (clamped 0.8–1.91, 1.6 when unknown) which wins over all three. */
+.post-media-web { position: relative; background: var(--media-ground); aspect-ratio: 16/9; overflow: hidden; }
 .post-media-web img, .post-media-web video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .post-media-web.tall { aspect-ratio: 4/5; }
 .post-media-web.square { aspect-ratio: 1/1; }

@@ -144,4 +144,44 @@ describe("FollowingScreen", () => {
     expect(screen.getByRole("link", { name: "Buy 30 days" })).toHaveAttribute("href", "/checkout");
     expect(screen.queryByRole("button", { name: "Nature Strip" })).not.toBeInTheDocument();
   });
+
+  describe("aspect ratio (ENG-612)", () => {
+    const ratioOf = (el: HTMLElement): number => {
+      const [w, h = "1"] = el.style.aspectRatio.split("/").map((part) => part.trim());
+      return Number(w) / Number(h);
+    };
+
+    it("a 16:9 aspect_ratio (1.7778) renders the wide box unclamped", async () => {
+      feedPosts = [{ ...FEED_POSTS[0], aspect_ratio: 1.7778 }];
+      const { container } = render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+      await screen.findByText("Mahogany");
+
+      const box = container.querySelector<HTMLElement>(".post-media-web");
+      expect(box).toBeTruthy();
+      expect(ratioOf(box!)).toBeCloseTo(1.7778, 4);
+      expect(box!.className).toBe("post-media-web");
+    });
+
+    it("a 9:16 reel aspect_ratio (0.5625) clamps to the tall bucket (ASPECT_MIN 0.8)", async () => {
+      feedPosts = [{ ...FEED_POSTS[0], aspect_ratio: 0.5625 }];
+      const { container } = render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+      await screen.findByText("Mahogany");
+
+      const box = container.querySelector<HTMLElement>(".post-media-web");
+      expect(box).toBeTruthy();
+      expect(ratioOf(box!)).toBeCloseTo(0.8, 4);
+      expect(box!.className).toBe("post-media-web tall");
+    });
+
+    it("a null aspect_ratio falls back to ASPECT_DEFAULT (1.6)", async () => {
+      feedPosts = [{ ...FEED_POSTS[0], aspect_ratio: null }];
+      const { container } = render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+      await screen.findByText("Mahogany");
+
+      const box = container.querySelector<HTMLElement>(".post-media-web");
+      expect(box).toBeTruthy();
+      expect(ratioOf(box!)).toBeCloseTo(1.6, 4);
+      expect(box!.className).toBe("post-media-web");
+    });
+  });
 });

@@ -16,9 +16,14 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const { data: sub } = await sb.from("subscription").select(ACCESS_COLUMNS).eq("user_id", user.id).single();
   if (!hasAccess(sub)) return GATED();
 
+  // `aspect_ratio` is EXPLICIT here and must stay. Unlike /api/feed — which
+  // proxies the be `feed` fn's `setof post` untouched — this route names its
+  // columns, so a column omitted here simply never reaches the card and the
+  // profile feed silently falls back to the unknown-ratio box. `sb` is untyped,
+  // so `tsc` cannot catch that; test/horses-route.test.ts pins the column set.
   const { data: posts } = await sb
     .from("post")
-    .select("id, type, title, body, media_url, poster_url, mux_playback_id, watermarked, like_count, published_at, source_trainer_id")
+    .select("id, type, title, body, media_url, poster_url, mux_playback_id, aspect_ratio, watermarked, like_count, published_at, source_trainer_id")
     .eq("horse_id", id)
     .eq("status", "published")
     .order("published_at", { ascending: false })

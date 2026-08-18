@@ -7,6 +7,12 @@ export interface PostMedia {
   type: "video" | "photo" | "text" | "voice" | "news";
   posterUrl?: string | null; // image, or a video poster frame
   duration?: string | null; // "0:47" (video)
+  /**
+   * `post.aspect_ratio`, raw. Null means unknown, which is every photo and
+   * every pre-backfill video. Not clamped here: `resolveAspect` (post-card)
+   * owns that, so exactly one place decides what an unusable value becomes.
+   */
+  aspectRatio?: number | null;
 }
 
 export interface FeedPost {
