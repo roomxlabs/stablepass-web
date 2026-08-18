@@ -100,7 +100,9 @@ test("onboarding screen renders", async ({ page }) => {
 test("W4 shared component preview gallery renders", async ({ page }) => {
   await page.goto("/preview/components");
   await expect(page.getByRole("heading", { name: "W4 shared component preview" })).toBeVisible();
-  await expect(page.getByTestId("post-overlay")).toBeVisible();
+  // Two cards carry the watermark overlay since ENG-613 made the Follow-pill
+  // fixture watermarked, so this must name which one it means.
+  await expect(page.getByTestId("post-overlay").first()).toBeVisible();
   await page.screenshot({ path: ".rx/review/w4-components.png", fullPage: true });
 });
 
@@ -710,6 +712,227 @@ test("ENG-612 post media takes the asset's real aspect ratio on a neutral ground
   } finally {
     // Best-effort cleanup, matching the W6/W7 convention (content rows are
     // left behind; only the throwaway user is removed).
+    if (userData?.user?.id) {
+      await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});
+    }
+  }
+});
+
+// ===========================================================================
+// ENG-613 (W2) — member card parity with mobile, rows 3 to 6.
+//
+// Split in two on purpose. The LOCAL Supabase edge runtime serves a `feed`
+// STUB that returns no rows (see the W6 note above), and BOTH /explore and
+// /following go through it via `edgeFetch(sb, "feed?…")` — so neither can show
+// a real card here, and neither can evidence the Follow pill. The pill and the
+// update card are therefore captured on the repo's existing no-auth component
+// gallery, and the full anatomy on real seeded data through the two profile
+// feeds, which are direct BFF reads and do render locally.
+// ===========================================================================
+
+test("ENG-613 the parity card and the Follow pill render (component gallery)", async ({ page }) => {
+  await page.goto("/preview/components");
+
+  const updateCard = page.locator("article.post-web").filter({ hasText: "Where the team is up to" });
+  await expect(updateCard).toBeVisible();
+
+  // Row 6 — pill, title, byline carrying BOTH trainer and horse, inset panel
+  // with its stable footer.
+  await expect(updateCard.locator(".post-badge")).toHaveText("Stable update");
+  await expect(updateCard.locator(".post-title")).toHaveText("Where the team is up to");
+  const byline = updateCard.locator(".post-byline");
+  await expect(byline).toContainText("Tom Alcott");
+  await expect(byline).toContainText("Mahogany");
+  await expect(updateCard.locator(".post-panel p")).toHaveCount(2);
+  await expect(updateCard.locator(".post-panel-foot")).toContainText("Tom Alcott Racing · Sydney");
+  // The panel stands in for the media box, so there must be no media box.
+  await expect(updateCard.locator(".post-media-web")).toHaveCount(0);
+
+  // Row 6 — the reaction bar sits BELOW the panel on screen.
+  const panelBox = await updateCard.locator(".post-panel").boundingBox();
+  const updateActions = await updateCard.locator(".post-actions-web").boundingBox();
+  expect(panelBox).not.toBeNull();
+  expect(updateActions).not.toBeNull();
+  expect(updateActions!.y).toBeGreaterThan(panelBox!.y);
+
+  // Row 3 — option D. Computed style, so this is the real cascade, not the
+  // stylesheet text: Inter at weight 500 on #3A3A38, never Cormorant.
+  const nameStyle = await page
+    .locator("article.post-web .post-horse")
+    .first()
+    .evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { family: s.fontFamily, weight: s.fontWeight, color: s.color };
+    });
+  expect(nameStyle.family).toContain("Inter");
+  expect(nameStyle.family).not.toContain("Cormorant");
+  expect(nameStyle.weight).toBe("500");
+  expect(nameStyle.color).toBe("rgb(58, 58, 56)"); // #3A3A38
+
+  // Row 4 — the caption is painted BELOW the reaction bar. Geometry, not tree
+  // order: `order` is a visual property and this is what the member sees.
+  const captioned = page.locator("article.post-web").filter({ hasText: "Recovery day in the paddock." }).first();
+  const capActions = await captioned.locator(".post-actions-web").boundingBox();
+  const capBody = await captioned.locator(".post-body-web").boundingBox();
+  expect(capActions).not.toBeNull();
+  expect(capBody).not.toBeNull();
+  expect(capBody!.y).toBeGreaterThan(capActions!.y);
+
+  // Row 5 — the Follow pill, top-right INSIDE the media box, transparent with
+  // a white rim and no shadow. The transparent fill is a DRI decision that
+  // knowingly costs contrast; asserting it here is what stops a later "fix".
+  const pillCard = page.locator("article.post-web").filter({ hasText: "Peter Moody" }).first();
+  const pill = pillCard.getByRole("button", { name: "Follow Peter Moody" });
+  await expect(pill).toBeVisible();
+
+  const pillStyle = await pill.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { background: s.backgroundColor, shadow: s.boxShadow, color: s.color };
+  });
+  expect(pillStyle.background).toBe("rgba(0, 0, 0, 0)"); // transparent
+  expect(pillStyle.shadow).toBe("none");
+  expect(pillStyle.color).toBe("rgb(255, 255, 255)");
+
+  // The watermark overlay (z-index 2) sits over this same media box, and the
+  // pill carries no z-index of its own — deliberately, so the rule stays
+  // verbatim to the design source. What makes that safe is `pointer-events:
+  // none` on the overlay. Hit-test the pill's centre: whatever the browser
+  // returns is what the member can actually click.
+  await expect(pillCard.locator(".post-overlay")).toHaveCount(1);
+  await pill.scrollIntoViewIfNeeded();
+  const topmostIsPill = await pill.evaluate((el) => {
+    // Viewport-relative: the element must be scrolled into view above, or this
+    // reads `null` and the assertion fails for the wrong reason.
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return hit !== null && (el === hit || el.contains(hit));
+  });
+  expect(topmostIsPill, "the watermark overlay must not paint over the Follow pill").toBe(true);
+
+  const mediaBox = await pillCard.locator(".post-media-web").boundingBox();
+  const pillBox = await pill.boundingBox();
+  expect(mediaBox).not.toBeNull();
+  expect(pillBox).not.toBeNull();
+  // Top-right inset 12, within a pixel of rounding.
+  expect(pillBox!.y - mediaBox!.y).toBeCloseTo(12, 0);
+  expect(mediaBox!.x + mediaBox!.width - (pillBox!.x + pillBox!.width)).toBeCloseTo(12, 0);
+
+  // A followed trainer gets NO pill — there is no "Following" variant. Not
+  // vacuous: the card above IS on screen and DOES carry one.
+  const followedCard = page.locator("article.post-web").filter({ hasText: "Recovery day in the paddock." }).first();
+  await expect(followedCard.getByRole("button", { name: /^Follow / })).toHaveCount(0);
+
+  await updateCard.screenshot({ path: ".rx/review/eng-613-stable-update-card.png" });
+  await pillCard.screenshot({ path: ".rx/review/eng-613-follow-pill.png" });
+  await page.screenshot({ path: ".rx/review/eng-613-cards-gallery.png", fullPage: true });
+});
+
+test("ENG-613 both profile feeds show the same card anatomy", async ({ page }) => {
+  const email = `eng613-harness-${Date.now()}@stablepass.test`;
+  const password = "harness-password-123!";
+  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+  const { data: trainer, error: trainerError } = await admin
+    .from("trainer")
+    .insert({
+      name: "Tom Alcott",
+      slug: `tom-alcott-eng613-${Date.now()}`,
+      stable_name: "Tom Alcott Racing",
+      location: "Sydney",
+    })
+    .select("id")
+    .single();
+  if (trainerError) throw trainerError;
+
+  const { data: horse, error: horseError } = await admin
+    .from("horse")
+    .insert({
+      trainer_id: trainer.id,
+      display_name: "Mahogany",
+      racing_name: "Mahogany",
+      status: "active",
+      training_status: "racing",
+    })
+    .select("id")
+    .single();
+  if (horseError) throw horseError;
+
+  // Newest first, so DOM order is deterministic: the update card, then the
+  // captioned photo.
+  const t = Date.now();
+  const { error: postError } = await admin.from("post").insert([
+    {
+      horse_id: horse.id,
+      type: "text",
+      status: "published",
+      title: "Where the team is up to",
+      body:
+        "Quiet week here and that is exactly how we want it going into Saturday.\n\n" +
+        "Banjo's Girl trials Tuesday at Rosehill.",
+      source_trainer_id: trainer.id,
+      watermarked: false,
+      published_at: new Date(t).toISOString(),
+    },
+    {
+      horse_id: horse.id,
+      type: "photo",
+      status: "published",
+      body: "Morning routine. Quiet day on the walker.",
+      media_url: "https://placehold.co/1600x1000/C9A56F/1A1A1A",
+      aspect_ratio: 1.6,
+      source_trainer_id: trainer.id,
+      watermarked: false,
+      published_at: new Date(t - 1000).toISOString(),
+    },
+  ]);
+  if (postError) throw postError;
+
+  const { data: userData, error: userError } = await admin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+  });
+  if (userError) throw userError;
+
+  try {
+    await page.goto("/signin");
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password").fill(password);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.waitForURL("**/explore");
+
+    for (const [label, path] of [
+      ["horse-profile", `/horses/${horse.id}`],
+      ["trainer-profile", `/trainers/${trainer.id}`],
+    ] as const) {
+      await page.goto(path);
+
+      const updateCard = page.locator("article.post-web").filter({ hasText: "Where the team is up to" });
+      await expect(updateCard, `${label} must render the update card`).toBeVisible();
+      await expect(updateCard.locator(".post-badge")).toHaveText("Stable update");
+      await expect(updateCard.locator(".post-panel p")).toHaveCount(2);
+      await expect(updateCard.locator(".post-panel-foot")).toContainText("Tom Alcott Racing · Sydney");
+      // The horse stays in the byline: `post.horse_id` is NOT NULL.
+      await expect(updateCard.locator(".post-byline")).toContainText("Mahogany");
+
+      // Row 4 on a real screen, measured.
+      const photoCard = page.locator("article.post-web").filter({ hasText: "Morning routine" }).first();
+      const actions = await photoCard.locator(".post-actions-web").boundingBox();
+      const body = await photoCard.locator(".post-body-web").boundingBox();
+      expect(actions, `${label} actions row has no layout`).not.toBeNull();
+      expect(body, `${label} caption has no layout`).not.toBeNull();
+      expect(body!.y, `${label} caption must sit below the reaction bar`).toBeGreaterThan(actions!.y);
+
+      // No Follow pill on either profile feed. Not vacuous — cards ARE on
+      // screen. Scoped to the pill's own class rather than an accessible name:
+      // BOTH profile headers render their own "Follow" button (follow-notify),
+      // which is a different control and must keep working.
+      await expect(page.locator("article.post-web").first()).toBeVisible();
+      await expect(page.locator(".post-media-web .media-follow")).toHaveCount(0);
+
+      await page.screenshot({ path: `.rx/review/eng-613-${label}.png`, fullPage: true });
+    }
+  } finally {
     if (userData?.user?.id) {
       await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});
     }

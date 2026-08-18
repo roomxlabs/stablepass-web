@@ -20,7 +20,24 @@ export interface FeedPost {
   horseId: string;
   horseName: string;
   trainerName: string;
+  /**
+   * `horse.trainer_id` — the post's trainer, for the Follow pill. The pill is a
+   * property of WHO wrote the post, so the card needs the id, not just the name;
+   * a name is not a key. Optional because two surfaces (Saved, the profile feeds)
+   * do not offer the pill and so never resolve it.
+   */
+  trainerId?: string | null;
+  /** `trainer.stable_name` — the STABLE UPDATE panel footer. Not owner identity. */
+  stableName?: string | null;
+  /** `trainer.location` — the other half of the panel footer. */
+  stableLocation?: string | null;
   postedAgo: string; // "2h ago"
+  /**
+   * `post.title`. The headline, and the trigger for the title line on every card
+   * type. It does NOT select the STABLE UPDATE card — `media.type` does, exactly
+   * as on mobile's M4 — so a text post with no title still gets pill and panel.
+   */
+  title?: string | null;
   body?: string | null;
   media: PostMedia;
   watermarked: boolean;

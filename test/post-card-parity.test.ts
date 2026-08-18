@@ -1,0 +1,173 @@
+// ENG-613 (W2) — member card parity with mobile, rows 3 to 6 of the divergence
+// list. These assertions read the STYLESHEET SOURCE rather than a rendered node:
+// jsdom applies no real stylesheet and resolves no custom property, so a
+// render-level `toHaveStyle` here would pass vacuously against an empty string.
+// Reading the CSS is what actually pins option D, the reorder and the pill.
+//
+// Design source: 06-stage1-design/mockups/web/style.css, round 5 member block
+// (re-cut 17 Aug 2026) + screens/06-explore.html.
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+/**
+ * Comments are stripped before anything is asserted. Several rules here carry a
+ * comment that NAMES the selector it replaced, and an un-stripped "does not
+ * contain" check would then fail on the explanation rather than on the CSS.
+ */
+const strip = (css: string) =>
+  css
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    // Collapse whitespace and combinator spacing. A guard written as
+    // `a + b` is otherwise defeated by a line wrap OR by `a+b`.
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/\s*\+\s*/g, " + ");
+
+const GLOBALS = strip(readFileSync(join(process.cwd(), "app/globals.css"), "utf8"));
+const MARKETING = strip(readFileSync(join(process.cwd(), "app/(marketing)/marketing.css"), "utf8"));
+
+/** The one rule whose body we care about, matched by its exact selector. */
+function rule(selector: string, css = GLOBALS): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = css.match(new RegExp(`(^|\\})\\s*${escaped}\\s*\\{[^}]*\\}`, "m"));
+  expect(match, `no rule found for \`${selector}\``).not.toBeNull();
+  return match![0];
+}
+
+describe("ENG-613 row 3 — names are Inter 500 on #3A3A38 (option D)", () => {
+  // The literal itself. Deliberately restated per-repo rather than imported from
+  // mobile's token, so neither codebase can drift the other silently.
+  it("defines --name-ink as the design source's literal", () => {
+    expect(GLOBALS).toMatch(/--name-ink:\s*#3A3A38;/i);
+  });
+
+  it("sets the horse name in the sans stack at weight 500 on --name-ink", () => {
+    const horse = rule(".post-meta-web .post-horse");
+    expect(horse).toContain("font-family: var(--font-sans)");
+    expect(horse).toContain("font-weight: 500");
+    expect(horse).toContain("color: var(--name-ink)");
+  });
+
+  // Row 3 is two client calls behind until the serif is actually gone: ENG-419
+  // moved names off Cormorant on 5 Aug, option D set weight + colour on 17 Aug.
+  it("leaves no serif on the horse name", () => {
+    expect(rule(".post-meta-web .post-horse")).not.toContain("--font-serif");
+  });
+
+  // `--font-sans` is what makes "Inter" true rather than merely "not Cormorant".
+  it("binds --font-sans to the Inter face", () => {
+    expect(GLOBALS).toMatch(/--font-sans:\s*var\(--font-inter\)/);
+  });
+});
+
+describe("ENG-613 row 4 — the caption sits below the reaction bar", () => {
+  it("makes the card a flex column so `order` applies at all", () => {
+    const card = rule(".post-web");
+    expect(card).toContain("display: flex");
+    expect(card).toContain("flex-direction: column");
+  });
+
+  // The reorder is global to `.post-web`, which is exactly why the horse- and
+  // trainer-profile feeds inherit it without being touched (scope decision 7).
+  it("orders head, media/panel, reactions, caption", () => {
+    expect(rule(".post-head-web")).toContain("order: -3");
+    expect(rule(".post-media-web")).toContain("order: -2");
+    expect(rule(".post-panel")).toContain("order: -2");
+    expect(rule(".post-actions-web")).toContain("order: 1");
+    expect(rule(".post-body-web")).toContain("order: 2");
+  });
+
+  // An uncaptioned post must be spaced like a captioned one. The old rules were
+  // `.post-media-web + .post-actions-web` and `.post-head-web + .post-actions-web`,
+  // which stopped describing the order the moment the caption moved.
+  it("gives the reaction bar its top padding unconditionally", () => {
+    // `.post-actions-web` now has TWO rules (the `order` one above and the
+    // layout one); pick the one that actually declares padding rather than
+    // whichever comes first in the file.
+    const rules = GLOBALS.match(/^\.post-actions-web\s*\{[^}]*\}/gm) ?? [];
+    const withPadding = rules.filter((r) => r.includes("padding:"));
+    expect(withPadding, "exactly one .post-actions-web rule should set padding").toHaveLength(1);
+    expect(withPadding[0]).toMatch(/padding:\s*14px 22px 18px/);
+  });
+
+  it("no longer relies on the adjacent-sibling selectors that stopped matching", () => {
+    expect(GLOBALS).not.toContain(".post-media-web + .post-actions-web");
+    expect(GLOBALS).not.toContain(".post-head-web + .post-actions-web");
+  });
+});
+
+describe("ENG-613 row 5 — the Follow pill", () => {
+  const pill = () => rule(".post-media-web .media-follow");
+
+  it("is transparent with a white rim and a white label, top-right inset 12", () => {
+    expect(pill()).toContain("background: transparent");
+    expect(pill()).toContain("border: 1px solid rgba(255,255,255,0.95)");
+    expect(pill()).toContain("color: #FFFFFF");
+    expect(pill()).toContain("top: 12px");
+    expect(pill()).toContain("right: 12px");
+  });
+
+  it("carries no shadow", () => {
+    expect(pill()).toContain("box-shadow: none");
+  });
+
+  // The accepted contrast cost is a DRI decision recorded in M3 and in the
+  // design source. A fill added later to make the label pass 4.5:1 would be a
+  // silent reversal of it, so the absence of one is asserted, not assumed.
+  it("has no fill added to buy contrast", () => {
+    const fills = pill().match(/background(-color)?\s*:\s*[^;]+/g) ?? [];
+    expect(fills).toEqual(["background: transparent"]);
+  });
+});
+
+describe("ENG-613 row 6 — the STABLE UPDATE card", () => {
+  it("draws the pill in brand green on cream", () => {
+    const badge = rule(".post-web .post-badge");
+    expect(badge).toContain("background: var(--brand-green)");
+    expect(badge).toContain("color: var(--cream)");
+    expect(badge).toContain("text-transform: uppercase");
+  });
+
+  // Inter, NOT the website sample's serif: two client calls have already moved
+  // names off Cormorant, and 22 is one point up from mobile's 20 for the wider
+  // web column.
+  it("sets the title in Inter 600 at 22, not the sample's serif", () => {
+    const title = rule(".post-web .post-title");
+    expect(title).toContain("font-family: var(--font-sans)");
+    expect(title).toContain("font-size: 22px");
+    expect(title).toContain("font-weight: 600");
+    expect(title).not.toContain("--font-serif");
+  });
+
+  // The panel is INSET rather than bleeding like the media box, because the web
+  // card has horizontal padding the phone card does not.
+  it("insets the panel from the card edges", () => {
+    const panel = rule(".post-web .post-panel");
+    expect(panel).toContain("background: var(--cream)");
+    expect(panel).toMatch(/margin:\s*0 22px/);
+  });
+
+  it("rules off the panel footer", () => {
+    expect(rule(".post-web .post-panel-foot")).toContain("border-top: 1px solid var(--line)");
+  });
+});
+
+// Guardrail. `marketing.css` is a separate, deliberately different design system
+// diffed rule-for-rule by test/marketing-shell.test.tsx, and `.btn`/`.btn-ghost`
+// exist in BOTH sheets — so a globals.css addition leaking across is a real and
+// easy mistake, not a hypothetical one.
+describe("ENG-613 guardrail — nothing leaks into the frozen marketing sheet", () => {
+  it("keeps every new member class and token out of marketing.css", () => {
+    for (const token of [
+      "--name-ink",
+      "media-follow",
+      "post-badge",
+      "post-panel",
+      "post-title",
+      "post-actions-web",
+      "post-body-web",
+    ]) {
+      expect(MARKETING, `marketing.css must not mention \`${token}\``).not.toContain(token);
+    }
+  });
+});
