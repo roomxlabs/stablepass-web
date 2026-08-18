@@ -141,9 +141,9 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
   // text / news get the STABLE UPDATE anatomy: pill, title, the inset panel in
   // place of the media box, and the horse carried in the byline.
   const isUpdate = isUpdateType(post.media.type);
-  // The horse stays in the byline of an update card for the same reason as M4:
-  // `post.horse_id` is NOT NULL, and trainer → horse → post is the product's
-  // spine. The website sample drops it; we deliberately do not.
+  // An update card's body IS the panel, so it is never also a caption. Empty or
+  // whitespace-only means no panel at all (defensive: A2 makes body required
+  // going forward).
   const paragraphs = isUpdate ? bodyParagraphs(post.body) : [];
   const showPanel = isUpdate && paragraphs.length > 0;
   const stableLine = [post.stableName, post.stableLocation].filter(Boolean).join(" · ");
@@ -169,6 +169,10 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
             <h3 className="post-horse">{post.horseName}</h3>
           )}
           {post.title && <h3 className="post-title">{post.title}</h3>}
+          {/* The horse stays in the byline of an update card for the same reason
+              as mobile's M4: `post.horse_id` is NOT NULL, and trainer → horse →
+              post is the product's spine. The website sample drops it; we
+              deliberately do not. A media card already leads with the horse. */}
           <div className="post-byline">
             by <span className="by-trainer">{post.trainerName}</span>
             {isUpdate && <> · {post.horseName}</>} · {post.postedAgo}

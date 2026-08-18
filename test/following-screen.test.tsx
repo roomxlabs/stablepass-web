@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FollowingScreen } from "@/app/(member)/following/following-screen";
 
@@ -235,9 +235,12 @@ describe("FollowingScreen — ENG-613 view model + Follow pill", () => {
 
     render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
 
-    await waitFor(() => {
-      expect(document.querySelector("article.post-web")).toBeNull();
-    });
+    // POSITIVE anchor first — see the note in test/explore-feed.test.tsx. An
+    // all-negative assertion on a gated screen passes on a blank page and
+    // proves nothing.
+    expect(await screen.findByText("Your free trial has ended")).toBeInTheDocument();
+
+    expect(document.querySelector("article.post-web")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Follow / })).not.toBeInTheDocument();
   });
 });

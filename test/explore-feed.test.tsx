@@ -335,9 +335,13 @@ describe("ExploreFeed — ENG-613 view model + Follow pill", () => {
 
     render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
 
-    await waitFor(() => {
-      expect(document.querySelector("article.post-web")).toBeNull();
-    });
+    // POSITIVE anchor first. Without it every assertion below is all-negative
+    // and would pass on a blank screen — the exact vacuous-on-402 trap this
+    // repo has been bitten by. The wall being present is what proves the 402
+    // path actually ran.
+    expect(await screen.findByText("Your free trial has ended")).toBeInTheDocument();
+
+    expect(document.querySelector("article.post-web")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Follow / })).not.toBeInTheDocument();
     expect(document.querySelector(".post-panel")).toBeNull();
   });
