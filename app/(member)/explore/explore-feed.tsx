@@ -25,6 +25,7 @@ type PostRow = {
   id: string;
   horse_id: string;
   type: PostMedia["type"];
+  title: string | null;
   body: string | null;
   media_url: string | null;
   poster_url: string | null;
@@ -34,7 +35,10 @@ type PostRow = {
   published_at: string;
 };
 
-type HorseTrainer = { name: string };
+// `id` for the Follow pill (a name is not a key), `stable_name`/`location` for the
+// STABLE UPDATE panel footer. Stable identity only — there is no owner field here
+// and none may be added.
+type HorseTrainer = { id: string; name: string; stable_name: string | null; location: string | null };
 type HorseRow = { id: string; display_name: string; trainer: HorseTrainer | HorseTrainer[] | null };
 type ReactionRow = { post_id: string; emoji: ReactionEmoji };
 type BookmarkRow = { post_id: string };
@@ -113,6 +117,12 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
   const [gated, setGated] = useState(false);
   const [races, setRaces] = useState<RaceDayEntry[]>([]);
   const [trainers, setTrainers] = useState<TrainerSummary[]>([]);
+  // Which trainers the viewer already follows — the Follow pill's only input.
+  // `null` means "not known yet", which is NOT the same as "follows nobody":
+  // treating the two alike would flash a pill on every card and then retract the
+  // ones that were wrong. Populated from the follow read this screen ALREADY
+  // makes for the aside, so the pill costs no extra query and none per card.
+  const [followedTrainerIds, setFollowedTrainerIds] = useState<Set<string> | null>(null);
   const [playing, setPlaying] = useState<Record<string, string>>({});
   const [playError, setPlayError] = useState<Record<string, boolean>>({});
 
@@ -160,7 +170,10 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
       const sb = supabaseBrowser();
 
       const [{ data: horseRows }, { data: reactionRows }, { data: bookmarkRows }] = await Promise.all([
-        sb.from("horse").select("id, display_name, trainer:trainer_id(name)").in("id", horseIds),
+        // `sb` is untyped, so `tsc` can never catch a too-narrow `.select()`:
+        // dropping a column here would silently blank the byline, the panel
+        // footer or the Follow pill with no type error. Pinned by a test.
+        sb.from("horse").select("id, display_name, trainer:trainer_id(id, name, stable_name, location)").in("id", horseIds),
         sb.from("reaction").select("post_id,emoji").in("post_id", ids),
         sb.from("bookmark").select("post_id").in("post_id", ids),
       ]);
@@ -180,7 +193,11 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
           horseId: r.horse_id,
           horseName: horse?.display_name ?? "Unknown horse",
           trainerName: trainer?.name ?? "Stablepass",
+          trainerId: trainer?.id ?? null,
+          stableName: trainer?.stable_name ?? null,
+          stableLocation: trainer?.location ?? null,
           postedAgo: relativeTime(r.published_at),
+          title: r.title,
           body: r.body,
           // `aspectRatio` is RAW here. `resolveAspect` (post-card) owns the clamp,
           // so exactly one place decides what an unusable value becomes. The
@@ -259,6 +276,10 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
         if (t) trainerMap.set(t.id, t.name);
       }
       const trainerIds = [...trainerMap.keys()];
+      // Set BEFORE the horse-count round trip below, and on the empty path too:
+      // the pill only needs the ids, and an empty follow list is a real answer
+      // (every card gets a pill), not a reason to leave the state unknown.
+      setFollowedTrainerIds(new Set(trainerIds));
       if (trainerIds.length === 0) {
         setTrainers([]);
         return;
@@ -321,6 +342,24 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
     }
   }
 
+  // Follow, from the pill on the media. Optimistic like react/bookmark above,
+  // and it hides the pill on EVERY card by that trainer at once, which is the
+  // reason follow state lives on the screen rather than inside the card.
+  async function follow(trainerId: string) {
+    setFollowedTrainerIds((prev) => new Set(prev ?? []).add(trainerId));
+
+    const sb = supabaseBrowser();
+    const { error: followError } = await sb.from("follow").insert({ user_id: viewerId, trainer_id: trainerId });
+
+    if (followError) {
+      setFollowedTrainerIds((prev) => {
+        const next = new Set(prev ?? []);
+        next.delete(trainerId);
+        return next;
+      });
+    }
+  }
+
   async function play(postId: string) {
     setPlayError((prev) => ({ ...prev, [postId]: false }));
     try {
@@ -343,6 +382,12 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
 
   const showEmpty = !gated && !error && !loading && posts.length === 0;
   const showSkeleton = !gated && !error && loading && posts.length === 0;
+
+  // No pill until the follow read has answered (see the state's comment), and
+  // none for a trainer already followed — there is no "Following" variant.
+  function canFollowTrainer(post: FeedPost): boolean {
+    return followedTrainerIds !== null && Boolean(post.trainerId) && !followedTrainerIds.has(post.trainerId!);
+  }
 
   return (
     <>
@@ -389,6 +434,7 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
                         <div className="post-avatar-web" aria-hidden="true">{p.horseName[0]?.toUpperCase() ?? "?"}</div>
                         <div className="post-meta-web">
                           <h3 className="post-horse">{p.horseName}</h3>
+                          {p.title && <h3 className="post-title">{p.title}</h3>}
                           <div className="post-byline">
                             by <span className="by-trainer">{p.trainerName}</span> · {p.postedAgo}
                           </div>
@@ -401,7 +447,6 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
                           src={playbackUrl}
                         />
                       </div>
-                      {p.body && <div className="post-body-web">{p.body}</div>}
                       <ReactionBar
                         count={p.count}
                         reacted={p.reacted}
@@ -409,6 +454,8 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
                         onReact={(e) => react(p.id, e)}
                         onBookmark={() => bookmark(p.id)}
                       />
+                      {/* Caption below the reaction bar, same as PostCard. */}
+                      {p.body && <div className="post-body-web">{p.body}</div>}
                     </article>
                   );
                 }
@@ -420,6 +467,8 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
                       onReact={(e) => react(p.id, e)}
                       onBookmark={() => bookmark(p.id)}
                       onPlay={() => play(p.id)}
+                      canFollow={canFollowTrainer(p)}
+                      onFollow={() => p.trainerId && follow(p.trainerId)}
                     />
                     {playError[p.id] && (
                       <p role="alert" style={{ color: "var(--red)", marginTop: -16, marginBottom: 24, fontSize: 13.5 }}>

@@ -236,3 +236,109 @@ describe("ExploreFeed", () => {
     });
   });
 });
+
+// ===========================================================================
+// ENG-613 (W2) — the mapper feeds the parity card, and the Follow pill reads
+// follow state the screen ALREADY holds.
+// ===========================================================================
+describe("ExploreFeed — ENG-613 view model + Follow pill", () => {
+  const TRAINER = { id: "t1", name: "Chris Waller", stable_name: "Waller Racing", location: "Rosehill" };
+
+  /**
+   * `undefined` vanishes from a JSON response, so a mapper bug that drops a
+   * field looks exactly like a field the payload never had. These fixtures pin
+   * the whole key set instead of probing one field at a time.
+   */
+  function feedWith(rows: unknown[]) {
+    return vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/feed/seen")) return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
+      if (url.startsWith("/api/feed")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: rows, meta: { nextCursor: null, hasMore: false } }) });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    });
+  }
+
+  function mockTables(opts: { follows?: unknown[] } = {}) {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "horse") return chainable({ data: [{ id: "h1", display_name: "Mahogany", trainer: TRAINER }], error: null });
+      if (table === "follow") return chainable({ data: opts.follows ?? [], error: null });
+      return chainable({ data: [], error: null });
+    });
+  }
+
+  // `sb` is untyped, so `tsc` can NEVER catch a too-narrow `.select()`: dropping
+  // a column here fails silently at runtime, blanking the panel footer or the
+  // pill. Pin the projection string itself.
+  it("selects the trainer columns the pill and the panel footer need", async () => {
+    mockTables();
+    global.fetch = feedWith([{ id: "p1", horse_id: "h1", type: "photo", title: null, body: "x", media_url: null, poster_url: null, aspect_ratio: null, watermarked: false, like_count: 1, published_at: "2026-07-10T00:00:00.000Z" }]) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    const horseCallIndex = fromMock.mock.calls.findIndex((c) => c[0] === "horse");
+    expect(horseCallIndex).toBeGreaterThanOrEqual(0);
+    const chain = fromMock.mock.results[horseCallIndex].value as { select: ReturnType<typeof vi.fn> };
+    const projection = chain.select.mock.calls[0][0] as string;
+
+    for (const column of ["id", "name", "stable_name", "location"]) {
+      expect(projection, `horse select must carry trainer.${column}`).toContain(column);
+    }
+  });
+
+  it("puts post.title on the view model and renders the STABLE UPDATE card for a text post", async () => {
+    mockTables();
+    global.fetch = feedWith([
+      { id: "p1", horse_id: "h1", type: "text", title: "Where the team is up to", body: "Quiet week here.", media_url: null, poster_url: null, aspect_ratio: null, watermarked: false, like_count: 1, published_at: "2026-07-10T00:00:00.000Z" },
+    ]) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+
+    expect(await screen.findByText("Where the team is up to")).toHaveClass("post-title");
+    expect(screen.getByText("Stable update")).toHaveClass("post-badge");
+    // The footer proves stable_name AND location survived the mapper.
+    expect(document.querySelector(".post-panel-foot")!.textContent).toContain("Waller Racing · Rosehill");
+  });
+
+  it("offers the Follow pill when the viewer follows nobody", async () => {
+    mockTables({ follows: [] });
+    global.fetch = feedWith([{ id: "p1", horse_id: "h1", type: "photo", title: null, body: "x", media_url: null, poster_url: null, aspect_ratio: null, watermarked: false, like_count: 1, published_at: "2026-07-10T00:00:00.000Z" }]) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    expect(await screen.findByRole("button", { name: "Follow Chris Waller" })).toBeInTheDocument();
+  });
+
+  it("offers no pill for a trainer the viewer already follows", async () => {
+    mockTables({ follows: [{ trainer: { id: "t1", name: "Chris Waller" } }] });
+    global.fetch = feedWith([{ id: "p1", horse_id: "h1", type: "photo", title: null, body: "x", media_url: null, poster_url: null, aspect_ratio: null, watermarked: false, like_count: 1, published_at: "2026-07-10T00:00:00.000Z" }]) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    // Waits for the follow read to land, so this cannot pass merely because the
+    // pill has not rendered YET.
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /^Follow / })).not.toBeInTheDocument();
+    });
+  });
+
+  // The gate, not the pill, is the guardrail here: a 402 renders the wall and no
+  // cards at all, so an "absent pill" assertion on a gated screen would pass
+  // vacuously. Assert the WALL is what is on screen.
+  it("renders the reactivate wall, not cards, when the feed returns 402", async () => {
+    mockTables();
+    global.fetch = fetchImpl(402) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+
+    await waitFor(() => {
+      expect(document.querySelector("article.post-web")).toBeNull();
+    });
+    expect(screen.queryByRole("button", { name: /^Follow / })).not.toBeInTheDocument();
+    expect(document.querySelector(".post-panel")).toBeNull();
+  });
+});

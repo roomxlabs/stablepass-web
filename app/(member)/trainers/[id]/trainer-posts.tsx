@@ -18,6 +18,7 @@ type HorseRef = { display_name: string; racing_name: string | null };
 type PostRow = {
   id: string;
   type: PostMedia["type"];
+  title: string | null;
   body: string | null;
   media_url: string | null;
   poster_url: string | null;
@@ -38,10 +39,15 @@ function one<T>(v: T | T[] | null): T | null {
 export interface TrainerPostsProps {
   trainerId: string;
   trainerName: string;
+  /** `trainer.stable_name` — the STABLE UPDATE panel footer. Passed down from the
+   *  page, which already selects it; this screen makes no trainer read of its own. */
+  stableName?: string | null;
+  /** `trainer.location` — the other half of that footer. */
+  stableLocation?: string | null;
   viewerId: string;
 }
 
-export function TrainerPosts({ trainerId, trainerName, viewerId }: TrainerPostsProps) {
+export function TrainerPosts({ trainerId, trainerName, stableName = null, stableLocation = null, viewerId }: TrainerPostsProps) {
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -85,7 +91,10 @@ export function TrainerPosts({ trainerId, trainerName, viewerId }: TrainerPostsP
             horseId: r.horse_id,
             horseName: horse ? horse.racing_name || horse.display_name : "Horse",
             trainerName,
+            stableName,
+            stableLocation,
             postedAgo: relativeTime(r.published_at),
+            title: r.title,
             body: r.body,
             // `aspectRatio` is RAW here. `resolveAspect` (post-card) owns the clamp,
             // so exactly one place decides what an unusable value becomes. The
@@ -113,7 +122,7 @@ export function TrainerPosts({ trainerId, trainerName, viewerId }: TrainerPostsP
     return () => {
       cancelled = true;
     };
-  }, [trainerId, trainerName]);
+  }, [trainerId, trainerName, stableName, stableLocation]);
 
   async function react(postId: string, emoji: ReactionEmoji) {
     const target = posts.find((p) => p.id === postId);
@@ -192,6 +201,7 @@ export function TrainerPosts({ trainerId, trainerName, viewerId }: TrainerPostsP
                 <div className="post-avatar-web" aria-hidden="true">{p.horseName[0]?.toUpperCase() ?? "?"}</div>
                 <div className="post-meta-web">
                   <h3 className="post-horse">{p.horseName}</h3>
+                  {p.title && <h3 className="post-title">{p.title}</h3>}
                   <div className="post-byline">
                     by <span className="by-trainer">{p.trainerName}</span> · {p.postedAgo}
                   </div>
@@ -200,7 +210,6 @@ export function TrainerPosts({ trainerId, trainerName, viewerId }: TrainerPostsP
               <div {...mediaBoxProps(p.media.aspectRatio)}>
                 <video controls autoPlay src={playbackUrl} />
               </div>
-              {p.body && <div className="post-body-web">{p.body}</div>}
               <ReactionBar
                 count={p.count}
                 reacted={p.reacted}
@@ -208,6 +217,8 @@ export function TrainerPosts({ trainerId, trainerName, viewerId }: TrainerPostsP
                 onReact={(e) => react(p.id, e)}
                 onBookmark={() => bookmark(p.id)}
               />
+              {/* Caption below the reaction bar, same as PostCard. */}
+              {p.body && <div className="post-body-web">{p.body}</div>}
             </article>
           );
         }

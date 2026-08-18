@@ -23,6 +23,7 @@ type PostRow = {
   id: string;
   horse_id: string;
   type: PostMedia["type"];
+  title: string | null;
   body: string | null;
   media_url: string | null;
   poster_url: string | null;
@@ -31,7 +32,9 @@ type PostRow = {
   like_count: number;
   published_at: string;
 };
-type HorseTrainer = { name: string };
+// `id` for the Follow pill (a name is not a key), `stable_name`/`location` for the
+// STABLE UPDATE panel footer. Stable identity only — no owner field, ever.
+type HorseTrainer = { id: string; name: string; stable_name: string | null; location: string | null };
 type HorseRow = { id: string; display_name: string; trainer: HorseTrainer | HorseTrainer[] | null };
 type ReactionRow = { post_id: string; emoji: ReactionEmoji };
 type BookmarkRow = { post_id: string };
@@ -109,6 +112,12 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
   const [horses, setHorses] = useState<RailItem[]>([]);
   const [trainers, setTrainers] = useState<RailItem[]>([]);
   const [followsLoaded, setFollowsLoaded] = useState(false);
+  // The Follow pill's only input, from the trainer rail read this screen ALREADY
+  // makes — no extra query, and none per card. `null` means "not known yet",
+  // which is deliberately NOT the same as "follows nobody": the Following feed
+  // also carries posts from followed HORSES, whose trainer may be unfollowed, so
+  // the pill is meaningful here and must not flash on before the answer lands.
+  const [followedTrainerIds, setFollowedTrainerIds] = useState<Set<string> | null>(null);
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -154,6 +163,10 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
       const followedTrainers = ((tRows ?? []) as TrainerFollowRow[])
         .map((r) => one(r.trainer))
         .filter((t): t is FollowedTrainer => t !== null);
+      // Set as soon as the answer exists, before the photo-signing round trips.
+      // Left `null` on the gated path above on purpose: a walled member is shown
+      // no content, so there is nothing to offer a Follow pill on.
+      setFollowedTrainerIds(new Set(followedTrainers.map((t) => t.id)));
 
       // `photo_url` is a bare path in a PRIVATE bucket — sign it or the avatar
       // renders as a broken relative URL. One batch call per bucket.
@@ -212,7 +225,9 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
       const horseIds = [...new Set(rows.map((r) => r.horse_id))];
       const sb = supabaseBrowser();
       const [{ data: horseRows }, { data: reactionRows }, { data: bookmarkRows }] = await Promise.all([
-        sb.from("horse").select("id, display_name, trainer:trainer_id(name)").in("id", horseIds),
+        // `sb` is untyped, so `tsc` can never catch a too-narrow `.select()`.
+        // Pinned by a test instead.
+        sb.from("horse").select("id, display_name, trainer:trainer_id(id, name, stable_name, location)").in("id", horseIds),
         sb.from("reaction").select("post_id,emoji").in("post_id", ids),
         sb.from("bookmark").select("post_id").in("post_id", ids),
       ]);
@@ -232,7 +247,11 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
           horseId: r.horse_id,
           horseName: horse?.display_name ?? "Unknown horse",
           trainerName: trainer?.name ?? "Stablepass",
+          trainerId: trainer?.id ?? null,
+          stableName: trainer?.stable_name ?? null,
+          stableLocation: trainer?.location ?? null,
           postedAgo: relativeTime(r.published_at),
+          title: r.title,
           body: r.body,
           // `aspectRatio` is RAW here. `resolveAspect` (post-card) owns the clamp,
           // so exactly one place decides what an unusable value becomes. The
@@ -311,6 +330,27 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
     if (bookmarkError) setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, bookmarked: prevBookmarked } : p)));
   }
 
+  // Follow, from the pill on the media. Optimistic, and it clears the pill on
+  // every card by that trainer at once — the reason follow state is screen-level.
+  async function follow(trainerId: string) {
+    setFollowedTrainerIds((prev) => new Set(prev ?? []).add(trainerId));
+    const sb = supabaseBrowser();
+    const { error: followError } = await sb.from("follow").insert({ user_id: viewerId, trainer_id: trainerId });
+    if (followError) {
+      setFollowedTrainerIds((prev) => {
+        const next = new Set(prev ?? []);
+        next.delete(trainerId);
+        return next;
+      });
+    }
+  }
+
+  // No pill until the follow read has answered, and none for a trainer already
+  // followed — there is no "Following" variant.
+  function canFollowTrainer(post: FeedPost): boolean {
+    return followedTrainerIds !== null && Boolean(post.trainerId) && !followedTrainerIds.has(post.trainerId!);
+  }
+
   async function play(postId: string) {
     setPlayError((prev) => ({ ...prev, [postId]: false }));
     try {
@@ -377,6 +417,7 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
                           <div className="post-avatar-web" aria-hidden="true">{p.horseName[0]?.toUpperCase() ?? "?"}</div>
                           <div className="post-meta-web">
                             <h3 className="post-horse">{p.horseName}</h3>
+                            {p.title && <h3 className="post-title">{p.title}</h3>}
                             <div className="post-byline">
                               by <span className="by-trainer">{p.trainerName}</span> · {p.postedAgo}
                             </div>
@@ -385,14 +426,15 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
                         <div {...mediaBoxProps(p.media.aspectRatio)}>
                           <video controls autoPlay src={playbackUrl} />
                         </div>
-                        {p.body && <div className="post-body-web">{p.body}</div>}
                         <ReactionBar count={p.count} reacted={p.reacted} bookmarked={p.bookmarked} onReact={(e) => react(p.id, e)} onBookmark={() => bookmark(p.id)} />
+                        {/* Caption below the reaction bar, same as PostCard. */}
+                        {p.body && <div className="post-body-web">{p.body}</div>}
                       </article>
                     );
                   }
                   return (
                     <Fragment key={p.id}>
-                      <PostCard post={p} viewerId={viewerId} onReact={(e) => react(p.id, e)} onBookmark={() => bookmark(p.id)} onPlay={() => play(p.id)} />
+                      <PostCard post={p} viewerId={viewerId} onReact={(e) => react(p.id, e)} onBookmark={() => bookmark(p.id)} onPlay={() => play(p.id)} canFollow={canFollowTrainer(p)} onFollow={() => p.trainerId && follow(p.trainerId)} />
                       {playError[p.id] && (
                         <p role="alert" style={{ color: "var(--red)", marginTop: -16, marginBottom: 24, fontSize: 13.5 }}>Couldn&rsquo;t load the video.</p>
                       )}

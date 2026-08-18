@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FollowingScreen } from "@/app/(member)/following/following-screen";
 
@@ -17,7 +17,9 @@ const TRAINER_FOLLOWS = [
 const FEED_POSTS = [
   { id: "p1", horse_id: "fh1", type: "photo", body: "Trackwork.", media_url: null, watermarked: false, like_count: 3, published_at: "2026-07-10T00:00:00.000Z" },
 ];
-const FEED_HORSES = [{ id: "fh1", display_name: "Mahogany", trainer: { name: "G. Waterhouse" } }];
+// ENG-613: the trainer sub-select now carries `id` (the Follow pill keys on it —
+// a name is not a key) plus `stable_name`/`location` for the panel footer.
+const FEED_HORSES = [{ id: "fh1", display_name: "Mahogany", trainer: { id: "t9", name: "G. Waterhouse", stable_name: "Waterhouse Racing", location: "Randwick" } }];
 
 let subRow: { status: string; trial_ends_at: string | null; current_period_end: string | null };
 let horseFollows: unknown[];
@@ -183,5 +185,59 @@ describe("FollowingScreen", () => {
       expect(ratioOf(box!)).toBeCloseTo(1.6, 4);
       expect(box!.className).toBe("post-media-web");
     });
+  });
+});
+
+// ===========================================================================
+// ENG-613 (W2) — the mapper feeds the parity card. The Following feed also
+// carries posts from followed HORSES, whose trainer may be unfollowed, so the
+// Follow pill is meaningful here and is not merely inherited from Explore.
+// ===========================================================================
+describe("FollowingScreen — ENG-613 view model + Follow pill", () => {
+  // `sb` is untyped, so a dropped column is invisible to `tsc` and blanks the
+  // panel footer at runtime instead.
+  it("selects the trainer columns the pill and the panel footer need", async () => {
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    const horseCallIndex = fromMock.mock.calls.findIndex((c) => c[0] === "horse");
+    expect(horseCallIndex).toBeGreaterThanOrEqual(0);
+    const chain = fromMock.mock.results[horseCallIndex].value as { select: ReturnType<typeof vi.fn> };
+    const projection = chain.select.mock.calls[0][0] as string;
+
+    for (const column of ["id", "name", "stable_name", "location"]) {
+      expect(projection, `horse select must carry trainer.${column}`).toContain(column);
+    }
+  });
+
+  it("puts post.title on the view model and draws the STABLE UPDATE card", async () => {
+    feedPosts = [{ ...FEED_POSTS[0], type: "text", title: "Where the team is up to", body: "Quiet week here." }];
+
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+
+    expect(await screen.findByText("Where the team is up to")).toHaveClass("post-title");
+    expect(screen.getByText("Stable update")).toHaveClass("post-badge");
+  });
+
+  // The feed post's trainer (`G. Waterhouse`) is NOT in TRAINER_FOLLOWS, which
+  // only holds Chris Waller — exactly the followed-horse-unfollowed-trainer case.
+  it("offers the pill for a post whose trainer is not followed", async () => {
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    expect(await screen.findByRole("button", { name: "Follow G. Waterhouse" })).toBeInTheDocument();
+  });
+
+  // A walled member is shown no content at all, so an "absent pill" assertion
+  // would pass vacuously on the 402 path. Assert the absence of CARDS instead.
+  it("renders no cards, and so no pill, when the feed is gated", async () => {
+    feedStatus = 402;
+
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+
+    await waitFor(() => {
+      expect(document.querySelector("article.post-web")).toBeNull();
+    });
+    expect(screen.queryByRole("button", { name: /^Follow / })).not.toBeInTheDocument();
   });
 });

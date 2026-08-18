@@ -121,12 +121,24 @@ describe("ReactionBar — saved state and confirmation", () => {
 });
 
 describe("post card spacing", () => {
-  it("pads the actions row only when no caption precedes it", () => {
-    const css = readGlobalsCss();
-    // Captionless posts render no .post-body-web, so the row butted against the media.
-    expect(css).toMatch(
-      /\.post-media-web \+ \.post-actions-web,\s*\n?\s*\.post-head-web \+ \.post-actions-web\s*\{[^}]*padding-top:\s*14px/,
-    );
+  // SUPERSEDED BY ENG-613. This used to pin the two adjacent-sibling rules
+  // (`.post-media-web + .post-actions-web`, `.post-head-web + .post-actions-web`)
+  // that gave the row its top padding only when no caption preceded it. The
+  // caption now renders BELOW this row, so neither selector describes the order
+  // any more and both were removed; the padding is unconditional instead. The
+  // behaviour under test is unchanged and still asserted — an uncaptioned post
+  // is spaced exactly like a captioned one — only the mechanism moved.
+  it("pads the actions row unconditionally, so a captionless post is spaced the same", () => {
+    const css = readGlobalsCss().replace(/\/\*[\s\S]*?\*\//g, "");
+
+    const rules = css.match(/^\.post-actions-web\s*\{[^}]*\}/gm) ?? [];
+    const withPadding = rules.filter((r) => r.includes("padding:"));
+    expect(withPadding).toHaveLength(1);
+    expect(withPadding[0]).toMatch(/padding:\s*14px 22px 18px/);
+
+    // The old conditional mechanism must be gone, not merely overridden.
+    expect(css).not.toContain(".post-media-web + .post-actions-web");
+    expect(css).not.toContain(".post-head-web + .post-actions-web");
   });
 
   it("anchors the toast above the actions row so it cannot cover the chips", () => {

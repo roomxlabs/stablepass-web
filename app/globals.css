@@ -20,6 +20,11 @@
      rather than as the letterbox behind someone else's asset. Same call as
      mobile's round-4 M5. Round 5 design source: mockups/web/style.css. */
   --media-ground: #1A1A1A;
+  /* Horse and trainer NAMES on the member card (option D, 17 Aug). Restated as
+     a literal here rather than imported from mobile's token: web, mobile and
+     admin are separate codebases, and a cross-repo reference is how they drift.
+     Round 5 design source: mockups/web/style.css. */
+  --name-ink: #3A3A38;
   --muted: #6B6963;
   --muted-light: #A8A6A0;
   --line: #E2DED6;
@@ -598,7 +603,17 @@ a { color: inherit; text-decoration: none; }
    SHARED MEMBER COMPONENTS (W4) — post card, media, reactions, cards
    From 06-explore.html / 07-horse-profile.html / style.css
    ==================================================================== */
-.post-web { background: var(--white); border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; margin-bottom: 24px; }
+/* ROUND 5 / ENG-613 — the caption moves BELOW the reaction bar, Instagram-style,
+   as mobile has done since 5 Aug. Done with `order` on the flex column so the
+   JSX still reads top to bottom (head, media/panel, caption, reactions) and the
+   markup stays the obvious thing to read. Every `.post-web` inherits it, which
+   is why the horse- and trainer-profile feeds get the reorder for free. */
+.post-web { background: var(--white); border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; margin-bottom: 24px; display: flex; flex-direction: column; }
+.post-head-web    { order: -3; }
+.post-media-web   { order: -2; }
+.post-panel       { order: -2; }
+.post-actions-web { order: 1; }
+.post-body-web    { order: 2; }
 .post-head-web { display: flex; align-items: center; gap: 12px; padding: 16px 22px 14px; }
 .post-avatar-web {
   width: 44px; height: 44px; border-radius: 50%;
@@ -607,7 +622,10 @@ a { color: inherit; text-decoration: none; }
   color: var(--cream); font-family: var(--font-serif); font-size: 18px; font-weight: 600; flex-shrink: 0;
 }
 .post-meta-web { flex: 1; min-width: 0; }
-.post-meta-web .post-horse { font-family: var(--font-serif); font-size: 18px; font-weight: 600; margin: 0; line-height: 1.2; }
+/* ROUND 5 / ENG-613 row 3 — option D. Was `var(--font-serif)` 18px/600 on
+   `var(--ink)`, which is two client calls behind: ENG-419 moved names off
+   Cormorant on 5 Aug, and option D set the weight and colour on 17 Aug. */
+.post-meta-web .post-horse { font-family: var(--font-sans); font-size: 17px; font-weight: 500; color: var(--name-ink); margin: 0; line-height: 1.2; }
 .post-meta-web .post-byline { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
 .post-meta-web .post-byline .by-trainer { color: var(--brand-green); font-weight: 500; }
 .post-more-web { color: var(--muted); background: none; border: none; cursor: pointer; padding: 4px; }
@@ -631,6 +649,26 @@ a { color: inherit; text-decoration: none; }
   background: rgba(0,0,0,0.6); color: #fff; font-size: 11.5px; font-weight: 500;
   padding: 4px 9px; border-radius: var(--radius-pill); font-variant-numeric: tabular-nums;
 }
+/* ROUND 5 / ENG-613 row 5 — the Follow pill, matching Instagram exactly, and the
+   same component and corner as mobile's M3. Transparent fill with a white rim is
+   a DRI decision that KNOWINGLY costs contrast on a bright frame: do not add a
+   fill to make the label pass 4.5:1.
+   Every declaration below is the design source verbatim EXCEPT `z-index`, which
+   is repo-specific: this codebase's watermark overlay takes `z-index: 2` and the
+   mockup has no such overlay, so without it the pill would paint underneath. */
+.post-media-web .media-follow {
+  position: absolute; top: 12px; right: 12px;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.95);
+  color: #FFFFFF;
+  font-family: var(--font-sans);
+  font-size: 12px; font-weight: 600;
+  padding: 7px 16px;
+  border-radius: var(--radius-pill);
+  box-shadow: none;
+  cursor: pointer;
+  z-index: 3;
+}
 
 /* Brand + forensic viewer-id overlay (deterrence only; asset never modified). */
 .post-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
@@ -645,15 +683,66 @@ a { color: inherit; text-decoration: none; }
   color: rgba(250,247,242,0.28); text-transform: uppercase; user-select: none;
 }
 
+/* ROUND 5 / ENG-613 row 6 — the STABLE UPDATE card (`post.type` text | news).
+   Same anatomy as mobile's M4, from the same design source, restated for the
+   wider web column. There is no media box on these: the panel takes its place,
+   which is why it shares `order: -2` with `.post-media-web` above. */
+.post-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--brand-green);
+  color: var(--cream);
+  font-size: 10.5px; font-weight: 600;
+  letter-spacing: 0.09em; text-transform: uppercase;
+  padding: 5px 12px; border-radius: var(--radius-pill);
+  margin-bottom: 6px;
+}
+.post-badge::before {
+  content: ''; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--cream);
+}
+/* Inter, NOT the website sample's serif: two client calls have already moved
+   names off Cormorant, and 22px is one point up from mobile's 20 for the
+   wider column. */
+.post-web .post-title {
+  font-family: var(--font-sans);
+  font-size: 22px; font-weight: 600; line-height: 1.25;
+  color: var(--name-ink);
+  margin: 0 0 2px;
+}
+/* Inset from the card edges (`margin: 0 22px`) rather than bleeding like the
+   media box, because the web card has horizontal padding the phone card does not. */
+.post-web .post-panel {
+  background: var(--cream);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 18px 22px;
+  margin: 0 22px 4px;
+}
+.post-web .post-panel p { font-size: 15px; line-height: 1.55; color: var(--ink); margin: 0 0 12px; }
+.post-web .post-panel p:last-of-type { margin-bottom: 0; }
+.post-web .post-panel-foot {
+  display: flex; align-items: center; gap: 10px;
+  border-top: 1px solid var(--line);
+  margin-top: 16px; padding-top: 12px;
+  font-size: 12.5px; color: var(--muted);
+}
+.post-web .post-panel-foot .av {
+  width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+  background: linear-gradient(135deg, var(--brand-green-light), var(--brand-green-dark));
+  color: var(--cream); font-size: 12px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
+}
+
 .post-body-web { padding: 16px 22px; font-size: 15px; line-height: 1.55; color: var(--ink); }
-/* position: relative anchors the save toast, which sits ABOVE this row. */
-.post-actions-web { position: relative; display: flex; align-items: center; gap: 14px; padding: 0 22px 18px; }
-/* A post with media but no caption renders no .post-body-web at all, so the actions
-   row landed flush against the media (the shorthand above sets padding-top: 0, and a
-   captioned post gets its 16px from .post-body-web instead). The adjacent-sibling
-   selector adds the breathing room ONLY in that case, leaving captioned posts alone. */
-.post-media-web + .post-actions-web,
-.post-head-web + .post-actions-web { padding-top: 14px; }
+/* position: relative anchors the save toast, which sits ABOVE this row.
+   ROUND 5 / ENG-613: the top padding is now UNCONDITIONAL. It used to come from
+   two adjacent-sibling rules (`.post-media-web + .post-actions-web`,
+   `.post-head-web + .post-actions-web`) that no longer describe the order — the
+   caption sits below this row now, so the actions row always follows the media
+   or the panel visually, whether or not a caption exists. Those selectors are
+   exactly the kind of thing that silently stops matching, which is why the
+   spacing is stated once here instead. */
+.post-actions-web { position: relative; display: flex; align-items: center; gap: 14px; padding: 14px 22px 18px; }
 
 .action-web { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; background: none; border: none; padding: 0; font-family: var(--font-sans); }
 .action-web .ic { width: 18px; height: 18px; }

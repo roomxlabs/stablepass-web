@@ -50,8 +50,15 @@ describe("post media ground (ENG-612 rows 1 and 2)", () => {
   // Deliberately scoped to `background`: `.post-media-web .media-play` legitimately
   // uses `--brand-green-dark` as its `color` (the play glyph on a white pill),
   // which is foreground chrome, not the ground behind unpainted media.
+  // ENG-613 hardening: the scan now runs over COMMENT-STRIPPED css. The old
+  // version matched `.post-media-web` wherever it appeared — including inside a
+  // comment — and then ran on to the next rule, so merely MENTIONING the
+  // selector in prose could attribute an unrelated rule's brand-green fill to
+  // the media box. Strictly stricter about what counts as a rule; it can still
+  // only ever fail on real CSS.
   it("leaves no brand-green BACKGROUND on any post-media rule, not just the base", () => {
-    const rules = GLOBALS.match(/\.post-media-web[^{]*\{[^}]*\}/g) ?? [];
+    const css = GLOBALS.replace(/\/\*[\s\S]*?\*\//g, "");
+    const rules = css.match(/\.post-media-web[^{]*\{[^}]*\}/g) ?? [];
     expect(rules.length).toBeGreaterThan(0);
 
     const offenders = rules.filter((rule) =>
