@@ -219,7 +219,6 @@ test("W7 horse profile renders the real horse (Mahogany, stats, posts)", async (
     .single();
   if (trainerError) throw trainerError;
 
-  const thisYear = new Date().getFullYear();
   const { data: horse, error: horseError } = await admin
     .from("horse")
     .insert({
@@ -228,8 +227,13 @@ test("W7 horse profile renders the real horse (Mahogany, stats, posts)", async (
       racing_name: "Mahogany",
       sire: "Snitzel",
       dam: "Polar Success",
-      sex: "gelding",
-      foaling_year: thisYear - 5,
+      // ENG-617/H1: `sex` is now male|female under a CHECK and the gelding is a
+      // separate flag, so the old `sex: "gelding"` seed is rejected (23514) once
+      // the migration is deployed. The age is derived by Postgres from this
+      // ABSOLUTE year (1 August rule), not by the app from today's date.
+      sex: "male",
+      is_gelded: true,
+      foaling_year: 2021,
       training_status: "racing",
       status: "active",
       starts: 24,
