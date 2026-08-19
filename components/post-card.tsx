@@ -23,10 +23,8 @@ function isUpdateType(type: PostMedia["type"]): boolean {
   return (UPDATE_TYPES as readonly string[]).includes(type);
 }
 
-/** `Stable update` for `text`, `News` for `news`. Copy, not data. */
-export function badgeLabel(type: PostMedia["type"]): string {
-  return type === "news" ? "News" : "Stable update";
-}
+// The `badgeLabel` copy helper is gone with the `.post-badge` pill (Justin via
+// Naufal, 18 Aug 2026): the horse-name headline heads every card variant.
 
 /**
  * The panel renders the admin-authored post body as paragraphs, splitting on
@@ -57,6 +55,25 @@ export const ASPECT_MAX = 1.91;
  * other repo" reference is exactly how they drift.
  */
 export const ASPECT_DEFAULT = 1.6;
+/**
+ * 9:16 — the tallest box a REEL draws (client, 18 Aug 2026, ported from
+ * mobile): a portrait VIDEO keeps its full uncropped ratio down to 9:16 and
+ * takes the reel layout (header overlaid on the frame). Portrait PHOTOS keep
+ * the 4:5 clamp, exactly as Instagram crops them in the home feed.
+ */
+export const REEL_ASPECT_MIN = 9 / 16;
+
+/** A portrait VIDEO is a reel. Decided on the RAW ratio, before any clamp —
+ * `resolveAspect` would floor a 9:16 at 4:5 and hide what makes it a reel. */
+export function isReelMedia(media: PostMedia): boolean {
+  return (
+    media.type === "video" &&
+    media.aspectRatio != null &&
+    Number.isFinite(media.aspectRatio) &&
+    media.aspectRatio > 0 &&
+    media.aspectRatio < 1
+  );
+}
 
 /**
  * Total by construction. The value arrives off the wire from an untyped `sb`
@@ -93,10 +110,30 @@ export function aspectBucket(aspect: number): "wide" | "tall" | "square" {
  * this, so the box, the poster and the playing video all agree on one ratio.
  * `wide` is the stylesheet's base rule and therefore has no modifier class.
  */
-export function mediaBoxProps(ratio: number | null | undefined): {
+export function mediaBoxProps(
+  ratio: number | null | undefined,
+  opts?: { video?: boolean },
+): {
   className: string;
   style: CSSProperties;
 } {
+  // A portrait VIDEO escapes the 4:5 clamp entirely (client, 18 Aug 2026):
+  // the box takes the asset's own ratio down to 9:16, tagged `reel` so the
+  // stylesheet's fallback keeps it tall before the inline value applies. The
+  // five inline players in `app/(member)/**` pass `video: true`, so a playing
+  // reel keeps the same tall box the card drew.
+  if (
+    opts?.video &&
+    ratio != null &&
+    Number.isFinite(ratio) &&
+    ratio > 0 &&
+    ratio < 1
+  ) {
+    return {
+      className: "post-media-web reel",
+      style: { aspectRatio: String(Math.max(REEL_ASPECT_MIN, ratio)) },
+    };
+  }
   const aspect = resolveAspect(ratio);
   const bucket = aspectBucket(aspect);
   return {
@@ -156,47 +193,39 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
   // An update card is the STABLE's voice, so it leads with the trainer's initial;
   // a media card is about the horse and leads with the horse's.
   const initial = isUpdate ? trainerInitial : post.horseName?.[0]?.toUpperCase() ?? "?";
-  // The box takes the asset's OWN ratio, clamped. There is no `mediaAspect`
-  // prop any more: a call site cannot hardcode a shape the asset does not have.
-  const mediaBox = mediaBoxProps(post.media.aspectRatio);
+  // The box takes the asset's OWN ratio, clamped — except a REEL (portrait
+  // video), which keeps its true ratio down to 9:16 and takes Instagram's
+  // in-feed reel layout: the header overlays the top of the frame on an ink
+  // scrim, while actions and caption stay BELOW the media on the card ground
+  // (client, 18 Aug 2026: "it shouldnt look like 1:1 with the fullscreen").
+  const isReel = isReelMedia(post.media);
+  const mediaBox = mediaBoxProps(post.media.aspectRatio, { video: isVideo });
 
   return (
     <article className="post-web">
+      {!isReel && (
       <div className="post-head-web">
         <div className="post-avatar-web" aria-hidden="true">{initial}</div>
         <div className="post-meta-web">
           {post.raceBadge && (
             <div className={`race-badge${post.raceBadge.kind === "result" ? " result" : ""}`}>{post.raceBadge.text}</div>
           )}
-          {isUpdate ? (
-            <span className="post-badge">{badgeLabel(post.media.type)}</span>
-          ) : (
-            <h3 className="post-horse">{post.horseName}</h3>
-          )}
-          {/* Exactly ONE heading per card, which is what the design source draws:
-              a media card is headed by the horse (06-explore.html:84,142,167) and
-              an update card by its title (:115-116) — never both. A media post
-              that also carries a title would otherwise emit two sibling <h3>s in
-              inverted visual hierarchy (17px/500 name above a 22px/600 title), a
-              state the source never shows. So the title is a heading only when it
-              IS the card's heading. */}
-          {post.title &&
-            (isUpdate ? (
-              <h3 className="post-title">{post.title}</h3>
-            ) : (
-              <p className="post-title">{post.title}</p>
-            ))}
-          {/* The horse stays in the byline of an update card for the same reason
-              as mobile's M4: `post.horse_id` is NOT NULL, and trainer → horse →
-              post is the product's spine. The website sample drops it; we
-              deliberately do not. A media card already leads with the horse. */}
+          {/* The `.post-badge` PILL IS RETIRED (Justin via Naufal, 18 Aug
+              2026: not needed — "the header will stay the same as the
+              others"). The horse heads EVERY card, update cards included,
+              which also means it leaves the update byline below. */}
+          <h3 className="post-horse">{post.horseName}</h3>
+          {/* `post.title` is not drawn AT ALL — on any variant (client, 18
+              Aug 2026, in two steps: media cards first, then the update card:
+              "dont need the title. same as others"). The data still flows;
+              the cards just never render it. */}
           <div className="post-byline">
-            by <span className="by-trainer">{post.trainerName}</span>
-            {isUpdate && <> · {post.horseName}</>} · {post.postedAgo}
+            <span className="by-trainer">{post.trainerName}</span> · {post.postedAgo}
           </div>
         </div>
         <button className="post-more-web" type="button" aria-label="More"><More /></button>
       </div>
+      )}
 
       {hasMedia && (
         <div {...mediaBox}>
@@ -206,12 +235,27 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
           ) : (
             <div style={{ width: "100%", height: "100%" }} />
           )}
+          {isReel && (
+            /* THE REEL HEADER — the card's identity on a top scrim, with the
+               Follow pill IN the row next to the name (mobile's 18 Aug
+               placement: aligned and legible, ENG-606's pill untouched). */
+            <div className="reel-head">
+              <div className="post-avatar-web" aria-hidden="true">{initial}</div>
+              <div className="reel-head-meta">
+                <h3 className="reel-horse">{post.horseName}</h3>
+                <div className="reel-byline">
+                  <span className="by-trainer">{post.trainerName}</span> · {post.postedAgo}
+                </div>
+              </div>
+              {canFollow && <FollowPill trainerName={post.trainerName} onFollow={onFollow} />}
+            </div>
+          )}
           {isVideo && (
             <button className="media-play" type="button" aria-label="Play video" onClick={onPlay}><Play /></button>
           )}
           {isVideo && post.media.duration && <div className="media-duration">{post.media.duration}</div>}
           {post.watermarked && <PostOverlay viewerId={viewerId} />}
-          {canFollow && <FollowPill trainerName={post.trainerName} onFollow={onFollow} />}
+          {!isReel && canFollow && <FollowPill trainerName={post.trainerName} onFollow={onFollow} />}
         </div>
       )}
 

@@ -221,7 +221,7 @@ describe("PostCard media geometry", () => {
     expect(box.className).toBe("post-media-web");
   });
 
-  it("still draws a media box when the media type is video", () => {
+  it("still draws a media box when the media type is video — at the REEL ratio since 18 Aug", () => {
     const { container } = render(
       <PostCard
         post={{ ...BASE, media: { type: "video", posterUrl: null, duration: "0:47", aspectRatio: 0.5625 } }}
@@ -231,7 +231,9 @@ describe("PostCard media geometry", () => {
         onPlay={vi.fn()}
       />,
     );
-    expect(ratioOf(boxOf(container)!)).toBeCloseTo(0.8, 4);
+    // A portrait VIDEO is a reel: the 4:5 clamp is lifted and the true 9:16
+    // renders (see "the reel card" below). Photos keep the 0.8 floor.
+    expect(ratioOf(boxOf(container)!)).toBeCloseTo(0.5625, 4);
   });
 
   // A text/voice post renders no media box at all — unchanged by this ticket,
@@ -343,11 +345,15 @@ describe("PostCard — row 5, the Follow pill", () => {
 });
 
 describe("PostCard — row 6, the STABLE UPDATE card", () => {
-  it("gives a text post the pill, the title, the panel and the byline", () => {
+  // 18 Aug 2026 (Justin): the ".post-badge" pill is retired — the horse-name
+  // headline heads this card exactly like every other variant.
+  it("gives a text post the horse headline, the title, the panel and the byline", () => {
     render(<PostCard post={TEXT_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />);
 
-    expect(screen.getByText("Stable update")).toHaveClass("post-badge");
-    expect(screen.getByText("Where the team is up to")).toHaveClass("post-title");
+    expect(screen.queryByText("Stable update")).not.toBeInTheDocument();
+    expect(screen.getByText("Mahogany")).toHaveClass("post-horse");
+    // 18 Aug, second amendment: the title is not drawn either.
+    expect(screen.queryByText("Where the team is up to")).toBeNull();
     expect(document.querySelector(".post-panel")).not.toBeNull();
     // No media box: the panel stands in its place.
     expect(document.querySelector(".post-media-web")).toBeNull();
@@ -362,17 +368,19 @@ describe("PostCard — row 6, the STABLE UPDATE card", () => {
     expect(actions).toBeGreaterThan(panel);
   });
 
-  // The horse stays in the byline for the same reason as mobile's M4:
-  // `post.horse_id` is NOT NULL and trainer → horse → post is the product's
-  // spine. The website sample drops the horse; we deliberately do not.
-  it("carries BOTH the trainer and the horse in the byline", () => {
+  // The horse is back in the HEADLINE (pill retired, 18 Aug 2026), so the
+  // byline is the trainer line — with NO "by" prefix (18 Aug: "just the
+  // trainer name straight away") — and never repeats the horse.
+  it("carries the bare trainer name in the byline, with the horse in the headline above", () => {
     render(<PostCard post={TEXT_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />);
 
     const byline = document.querySelector(".post-byline");
     expect(byline).not.toBeNull();
     expect(byline!.textContent).toContain("Tom Alcott");
-    expect(byline!.textContent).toContain("Mahogany");
+    expect(byline!.textContent).not.toMatch(/\bby\b/);
+    expect(byline!.textContent).not.toContain("Mahogany");
     expect(byline!.textContent).toContain("2h ago");
+    expect(screen.getByText("Mahogany")).toHaveClass("post-horse");
   });
 
   it("splits the body into a paragraph per blank-line break, with the stable footer", () => {
@@ -420,22 +428,20 @@ describe("PostCard — row 6, the STABLE UPDATE card", () => {
       <PostCard post={{ ...TEXT_POST, body: null }} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />,
     );
 
-    expect(screen.getByText("Stable update")).toBeInTheDocument();
+    expect(screen.getByText("Mahogany")).toHaveClass("post-horse");
     expect(document.querySelector(".post-panel")).toBeNull();
   });
 
-  it("still renders pill and panel for a text post with no title", () => {
+  it("still renders the panel for a text post with no title", () => {
     render(
       <PostCard post={{ ...TEXT_POST, title: null }} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />,
     );
 
-    expect(screen.getByText("Stable update")).toBeInTheDocument();
     expect(document.querySelector(".post-panel")).not.toBeNull();
     expect(document.querySelector(".post-title")).toBeNull();
   });
 
-  // The pill copy is COPY, not data: nothing in the payload names the card.
-  it("labels a news post `News`", () => {
+  it("draws no pill on a news post either — the horse heads every variant", () => {
     render(
       <PostCard
         post={{ ...TEXT_POST, media: { type: "news", posterUrl: null } }}
@@ -445,14 +451,15 @@ describe("PostCard — row 6, the STABLE UPDATE card", () => {
       />,
     );
 
-    expect(screen.getByText("News")).toHaveClass("post-badge");
-    expect(screen.queryByText("Stable update")).not.toBeInTheDocument();
+    expect(document.querySelector(".post-badge")).toBeNull();
+    expect(screen.getByText("Mahogany")).toHaveClass("post-horse");
     expect(document.querySelector(".post-panel")).not.toBeNull();
   });
 
   // Card selection is by `type`, exactly as in mobile's M4 table — a title is
-  // not what makes a STABLE UPDATE card.
-  it("gives a titled VIDEO post a bare headline, with no pill and no panel", () => {
+  // not what makes a STABLE UPDATE card. And on a media card the title is not
+  // drawn at all (client, 18 Aug 2026): the caption is the card's only copy.
+  it("hides the title on a titled VIDEO post, with no pill and no panel", () => {
     render(
       <PostCard
         post={{ ...BASE, media: { type: "video", posterUrl: null, duration: "0:47" }, title: "Gallop day" }}
@@ -463,7 +470,7 @@ describe("PostCard — row 6, the STABLE UPDATE card", () => {
       />,
     );
 
-    expect(screen.getByText("Gallop day")).toHaveClass("post-title");
+    expect(screen.queryByText("Gallop day")).toBeNull();
     expect(document.querySelector(".post-badge")).toBeNull();
     expect(document.querySelector(".post-panel")).toBeNull();
     // The horse keeps its own line on a media card; only the update card
@@ -489,16 +496,17 @@ describe("PostCard — heading structure", () => {
     const headings = document.querySelectorAll("article.post-web h3");
     expect(headings).toHaveLength(1);
     expect(headings[0]).toHaveClass("post-horse");
-    // The title is still rendered and still styled — just not as a heading.
-    expect(screen.getByText("Gallop day")).toHaveClass("post-title");
+    // The title is not rendered at all on a media card (client, 18 Aug 2026).
+    expect(screen.queryByText("Gallop day")).toBeNull();
   });
 
-  it("emits exactly one h3 on an update card, and it is the title", () => {
+  it("emits exactly one h3 on an update card too — the horse; no title at all", () => {
     render(<PostCard post={TEXT_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />);
 
     const headings = document.querySelectorAll("article.post-web h3");
     expect(headings).toHaveLength(1);
-    expect(headings[0]).toHaveClass("post-title");
+    expect(headings[0]).toHaveClass("post-horse");
+    expect(document.querySelector(".post-title")).toBeNull();
   });
 
   // Defensive: A2 makes body required going forward, but whitespace is not null.
@@ -507,7 +515,79 @@ describe("PostCard — heading structure", () => {
       <PostCard post={{ ...TEXT_POST, body: "   \n\n  \t " }} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />,
     );
 
-    expect(screen.getByText("Stable update")).toBeInTheDocument();
+    expect(screen.getByText("Mahogany")).toHaveClass("post-horse");
     expect(document.querySelector(".post-panel")).toBeNull();
+  });
+});
+
+// THE REEL CARD, ported from mobile (client, 18 Aug 2026): a portrait VIDEO
+// keeps its true ratio down to 9:16 and overlays the header on the frame;
+// actions and caption stay below the media, and the classic white header row
+// stands down. Portrait PHOTOS keep the classic 4:5 card.
+describe("PostCard — the reel card", () => {
+  const REEL: FeedPost = {
+    ...BASE,
+    body: "Morning trackwork.",
+    media: { type: "video", posterUrl: null, duration: "0:30", aspectRatio: 9 / 16 },
+  };
+
+  const renderReel = (post: FeedPost, extra: Partial<Parameters<typeof PostCard>[0]> = {}) =>
+    render(
+      <PostCard post={post} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={vi.fn()} {...extra} />,
+    );
+
+  it("draws the FULL 9:16 box, tagged reel", () => {
+    const { container } = renderReel(REEL);
+    const box = container.querySelector<HTMLElement>(".post-media-web")!;
+    expect(box.className).toBe("post-media-web reel");
+    const [w, h = "1"] = box.style.aspectRatio.split("/").map((s) => s.trim());
+    expect(Number(w) / Number(h)).toBeCloseTo(9 / 16, 4);
+  });
+
+  it("overlays the header on the media and hides the classic header row", () => {
+    const { container } = renderReel(REEL);
+    expect(container.querySelector(".reel-head")).not.toBeNull();
+    expect(container.querySelector(".post-head-web")).toBeNull();
+    expect(container.querySelector(".reel-head .reel-horse")!.textContent).toBe("Mahogany");
+    // No "by" prefix here either.
+    expect(container.querySelector(".reel-head .reel-byline")!.textContent).not.toMatch(/\bby\b/);
+  });
+
+  it("keeps actions and caption BELOW the media — this is not the fullscreen", () => {
+    const { container } = renderReel(REEL);
+    expect(container.querySelector(".post-actions-web, [class*='actions']")).not.toBeNull();
+    expect(container.querySelector(".post-body-web")!.textContent).toBe("Morning trackwork.");
+  });
+
+  it("puts the Follow pill IN the reel header row, not in the media corner", () => {
+    const { container } = renderReel(REEL, { canFollow: true, onFollow: vi.fn() });
+    expect(container.querySelector(".reel-head .media-follow")).not.toBeNull();
+    expect(container.querySelectorAll(".media-follow")).toHaveLength(1);
+  });
+
+  it("a portrait PHOTO keeps the classic card at the 4:5 clamp", () => {
+    const { container } = renderReel({
+      ...BASE,
+      media: { type: "photo", posterUrl: null, aspectRatio: 9 / 16 },
+    });
+    expect(container.querySelector(".reel-head")).toBeNull();
+    expect(container.querySelector(".post-head-web")).not.toBeNull();
+    const box = container.querySelector<HTMLElement>(".post-media-web")!;
+    expect(box.className).toBe("post-media-web tall");
+  });
+
+  it("a video with an UNKNOWN ratio keeps the classic card", () => {
+    const { container } = renderReel({
+      ...BASE,
+      media: { type: "video", posterUrl: null, duration: "0:12" },
+    });
+    expect(container.querySelector(".reel-head")).toBeNull();
+    expect(container.querySelector(".post-head-web")).not.toBeNull();
+  });
+
+  it("mediaBoxProps only lifts the clamp for a VIDEO — the shared geometry stays safe", () => {
+    expect(mediaBoxProps(0.5625, { video: true }).className).toBe("post-media-web reel");
+    expect(mediaBoxProps(0.5625).className).toBe("post-media-web tall");
+    expect(mediaBoxProps(1.7778, { video: true }).className).toBe("post-media-web");
   });
 });

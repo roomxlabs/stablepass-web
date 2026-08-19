@@ -71,19 +71,20 @@ describe("HorsePosts — ENG-613 parity on the horse profile", () => {
       />,
     );
 
-    expect(await screen.findByText("Where the team is up to")).toHaveClass("post-title");
-    expect(screen.getByText("Stable update")).toHaveClass("post-badge");
+    // 18 Aug: neither the pill nor the title renders — the panel is the
+    // card's face, and the horse heads the card from the headline.
+    expect(await screen.findByText("Quiet week here.")).toBeInTheDocument();
+    expect(document.querySelector(".post-title")).toBeNull();
+    expect(document.querySelector(".post-badge")).toBeNull();
     // The footer arrives as PROPS from the page (which already selects both
     // columns), not from a trainer read this screen makes for itself.
     expect(document.querySelector(".post-panel-foot")!.textContent).toContain("Tom Alcott Racing · Sydney");
-    // The horse stays in the byline: `post.horse_id` is NOT NULL.
-    expect(document.querySelector(".post-byline")!.textContent).toContain("Mahogany");
   });
 
   it("omits the panel footer when the page has neither stable column", async () => {
     render(<HorsePosts horseId="h1" horseName="Mahogany" trainerName="Tom Alcott" viewerId={VIEWER_ID} />);
 
-    await screen.findByText("Where the team is up to");
+    await screen.findByText("Quiet week here.");
     expect(document.querySelector(".post-panel")).not.toBeNull();
     expect(document.querySelector(".post-panel-foot")).toBeNull();
   });
@@ -114,8 +115,10 @@ describe("TrainerPosts — ENG-613 parity on the trainer profile", () => {
       />,
     );
 
-    expect(await screen.findByText("Where the team is up to")).toHaveClass("post-title");
-    expect(screen.getByText("Stable update")).toHaveClass("post-badge");
+    // 18 Aug: neither the pill nor the title renders — the panel is the card's face.
+    expect(await screen.findByText("Quiet week here.")).toBeInTheDocument();
+    expect(document.querySelector(".post-title")).toBeNull();
+    expect(document.querySelector(".post-badge")).toBeNull();
     expect(document.querySelector(".post-panel-foot")!.textContent).toContain("Tom Alcott Racing · Sydney");
   });
 

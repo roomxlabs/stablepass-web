@@ -637,6 +637,27 @@ a { color: inherit; text-decoration: none; }
 .post-media-web img, .post-media-web video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .post-media-web.tall { aspect-ratio: 4/5; }
 .post-media-web.square { aspect-ratio: 1/1; }
+/* THE REEL (client, 18 Aug 2026, ported from mobile): a portrait video keeps
+   its true ratio — the inline style carries the exact value; this fallback
+   keeps the box tall before it applies. The header overlays the frame on an
+   ink scrim; actions and caption stay below on the card ground. */
+.post-media-web.reel { aspect-ratio: 9/16; }
+.post-web .reel-head {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 2;
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px 28px;
+  background: linear-gradient(to bottom, rgba(26,26,26,0.55), rgba(26,26,26,0));
+}
+.reel-head .reel-head-meta { flex: 1; min-width: 0; }
+.reel-head .reel-horse {
+  margin: 0; font-size: 15px; font-weight: 600; line-height: 20px; color: #fff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.reel-head .reel-byline { font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.85); }
+.reel-head .reel-byline .by-trainer { color: rgba(255,255,255,0.85); }
+/* The Follow pill sits IN the header row on a reel, not in the media corner.
+   Scoped under .post-media-web to outrank the corner rule's specificity. */
+.post-media-web .reel-head .media-follow { position: static; margin-left: auto; flex-shrink: 0; }
 .post-media-web .media-play {
   position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
   width: 64px; height: 64px; border-radius: 50%; background: rgba(255,255,255,0.95);

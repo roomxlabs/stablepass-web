@@ -321,8 +321,10 @@ describe("ExploreFeed — ENG-613 view model + Follow pill", () => {
 
     render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
 
-    expect(await screen.findByText("Where the team is up to")).toHaveClass("post-title");
-    expect(screen.getByText("Stable update")).toHaveClass("post-badge");
+    // 18 Aug: neither the pill nor the title renders — the panel is the card's face.
+    expect(await screen.findByText("Quiet week here.")).toBeInTheDocument();
+    expect(document.querySelector(".post-title")).toBeNull();
+    expect(document.querySelector(".post-badge")).toBeNull();
     // The footer proves stable_name AND location survived the mapper.
     expect(document.querySelector(".post-panel-foot")!.textContent).toContain("Waller Racing · Rosehill");
   });

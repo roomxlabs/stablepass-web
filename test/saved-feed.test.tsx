@@ -212,8 +212,9 @@ describe("SavedFeed", () => {
     };
 
     beforeEach(() => {
-      // A 9:16 reel: the ratio must clamp to the 0.8 floor, and must still be
-      // 0.8 AFTER the poster is swapped for the player.
+      // A 9:16 reel VIDEO: since 18 Aug the true ratio renders (no 4:5
+      // clamp), and it must still hold AFTER the poster is swapped for the
+      // player — the same box wraps both.
       bookmarkData = [
         { ...BOOKMARKS[0], post: { ...BOOKMARKS[0].post, type: "video", aspect_ratio: 0.5625 } },
       ];
@@ -235,7 +236,8 @@ describe("SavedFeed", () => {
       await screen.findByText("Nature Strip");
 
       // Assert the poster box first, so a failure after play is unambiguous.
-      expect(ratioOf(container.querySelector<HTMLElement>(".post-media-web")!)).toBeCloseTo(0.8, 4);
+      // 18 Aug: a portrait VIDEO is a reel — the true ratio renders, not the 4:5 clamp.
+      expect(ratioOf(container.querySelector<HTMLElement>(".post-media-web")!)).toBeCloseTo(0.5625, 4);
 
       await userEvent.click(screen.getByRole("button", { name: "Play video" }));
 
@@ -248,10 +250,10 @@ describe("SavedFeed", () => {
       // Guardrail: the src is the minted signed URL, never a raw Mux asset.
       expect(video.getAttribute("src")).toBe(PLAYBACK_URL);
 
-      // The box wrapping the player keeps the SAME clamped geometry as the poster.
+      // The box wrapping the player keeps the SAME reel geometry as the poster.
       const box = video.closest<HTMLElement>(".post-media-web")!;
-      expect(ratioOf(box)).toBeCloseTo(0.8, 4);
-      expect(box.className).toBe("post-media-web tall");
+      expect(ratioOf(box)).toBeCloseTo(0.5625, 4);
+      expect(box.className).toBe("post-media-web reel");
 
       // Acceptance: the hardcoded player styles are gone. Geometry and ground
       // both come from the box now, so the element has neither of its own.
@@ -307,8 +309,10 @@ describe("SavedFeed — ENG-613 view model", () => {
 
     render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
 
-    expect(await screen.findByText("Where the team is up to")).toHaveClass("post-title");
-    expect(screen.getByText("Stable update")).toHaveClass("post-badge");
+    // 18 Aug: neither the pill nor the title renders — the panel is the card's face.
+    expect(await screen.findByText("Quiet week here.")).toBeInTheDocument();
+    expect(document.querySelector(".post-title")).toBeNull();
+    expect(document.querySelector(".post-badge")).toBeNull();
     expect(document.querySelector(".post-panel-foot")!.textContent).toContain("Waller Racing · Rosehill");
   });
 

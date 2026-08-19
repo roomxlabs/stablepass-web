@@ -229,8 +229,10 @@ describe("FollowingScreen — ENG-613 view model + Follow pill", () => {
 
     render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
 
-    expect(await screen.findByText("Where the team is up to")).toHaveClass("post-title");
-    expect(screen.getByText("Stable update")).toHaveClass("post-badge");
+    // 18 Aug: neither the pill nor the title renders — the panel is the card's face.
+    expect(await screen.findByText("Quiet week here.")).toBeInTheDocument();
+    expect(document.querySelector(".post-title")).toBeNull();
+    expect(document.querySelector(".post-badge")).toBeNull();
   });
 
   // The feed post's trainer (`G. Waterhouse`) is NOT in TRAINER_FOLLOWS, which

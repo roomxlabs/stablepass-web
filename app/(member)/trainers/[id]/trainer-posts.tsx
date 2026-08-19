@@ -201,13 +201,13 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
                 <div className="post-avatar-web" aria-hidden="true">{p.horseName[0]?.toUpperCase() ?? "?"}</div>
                 <div className="post-meta-web">
                   <h3 className="post-horse">{p.horseName}</h3>
-                  {p.title && <h3 className="post-title">{p.title}</h3>}
+                  {/* title on a media card is withheld (client, 18 Aug 2026) — see post-card.tsx */}
                   <div className="post-byline">
-                    by <span className="by-trainer">{p.trainerName}</span> · {p.postedAgo}
+                    <span className="by-trainer">{p.trainerName}</span> · {p.postedAgo}
                   </div>
                 </div>
               </div>
-              <div {...mediaBoxProps(p.media.aspectRatio)}>
+              <div {...mediaBoxProps(p.media.aspectRatio, { video: true })}>
                 <video controls autoPlay src={playbackUrl} />
               </div>
               <ReactionBar

@@ -733,16 +733,20 @@ test("ENG-612 post media takes the asset's real aspect ratio on a neutral ground
 test("ENG-613 the parity card and the Follow pill render (component gallery)", async ({ page }) => {
   await page.goto("/preview/components");
 
-  const updateCard = page.locator("article.post-web").filter({ hasText: "Where the team is up to" });
+  const updateCard = page.locator("article.post-web").filter({ hasText: "Quiet week here" });
   await expect(updateCard).toBeVisible();
 
-  // Row 6 — pill, title, byline carrying BOTH trainer and horse, inset panel
-  // with its stable footer.
-  await expect(updateCard.locator(".post-badge")).toHaveText("Stable update");
-  await expect(updateCard.locator(".post-title")).toHaveText("Where the team is up to");
+  // Row 6, as amended 18 Aug 2026 (Justin): NO pill — the horse-name headline
+  // heads the card, the title sits under it, standard trainer byline, inset
+  // panel with its stable footer.
+  await expect(updateCard.locator(".post-badge")).toHaveCount(0);
+  await expect(updateCard.locator(".post-horse")).toHaveText("Mahogany");
+  // Second 18 Aug amendment: no title either.
+  await expect(updateCard.locator(".post-title")).toHaveCount(0);
   const byline = updateCard.locator(".post-byline");
   await expect(byline).toContainText("Tom Alcott");
-  await expect(byline).toContainText("Mahogany");
+  await expect(byline).not.toContainText("by ");
+  await expect(byline).not.toContainText("Mahogany");
   await expect(updateCard.locator(".post-panel p")).toHaveCount(2);
   await expect(updateCard.locator(".post-panel-foot")).toContainText("Tom Alcott Racing · Sydney");
   // The panel stands in for the media box, so there must be no media box.
@@ -907,13 +911,13 @@ test("ENG-613 both profile feeds show the same card anatomy", async ({ page }) =
     ] as const) {
       await page.goto(path);
 
-      const updateCard = page.locator("article.post-web").filter({ hasText: "Where the team is up to" });
+      const updateCard = page.locator("article.post-web").filter({ hasText: "Quiet week here" });
       await expect(updateCard, `${label} must render the update card`).toBeVisible();
-      await expect(updateCard.locator(".post-badge")).toHaveText("Stable update");
+      // 18 Aug 2026: no pill — the horse heads the card from the headline.
+      await expect(updateCard.locator(".post-badge")).toHaveCount(0);
+      await expect(updateCard.locator(".post-horse")).toHaveText("Mahogany");
       await expect(updateCard.locator(".post-panel p")).toHaveCount(2);
       await expect(updateCard.locator(".post-panel-foot")).toContainText("Tom Alcott Racing · Sydney");
-      // The horse stays in the byline: `post.horse_id` is NOT NULL.
-      await expect(updateCard.locator(".post-byline")).toContainText("Mahogany");
 
       // Row 4 on a real screen, measured.
       const photoCard = page.locator("article.post-web").filter({ hasText: "Morning routine" }).first();
