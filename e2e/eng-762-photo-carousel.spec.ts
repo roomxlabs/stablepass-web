@@ -34,6 +34,31 @@ function slideSvg(bg: string, fg: string, n: number): string {
   );
 }
 
+/**
+ * Storage occasionally answers a burst of uploads with a non-JSON 5xx, which
+ * supabase-js surfaces as "invalid response from the upstream server". One
+ * retry is enough and keeps a flaky container from reading as a product bug.
+ */
+type BucketUploader = {
+  upload(
+    path: string,
+    body: Blob,
+    opts: { contentType: string; upsert: boolean },
+  ): Promise<{ error: unknown }>;
+};
+
+async function uploadSlide(uploader: BucketUploader, path: string, svg: string): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { error } = await uploader.upload(path, new Blob([svg], { type: "image/svg+xml" }), {
+      contentType: "image/svg+xml",
+      upsert: true,
+    });
+    if (!error) return;
+    if (attempt === 2) throw error;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
 const SLIDES = [
   { bg: "#1A1A1A", fg: "#FAF7F2" },
   { bg: "#F1ECE3", fg: "#1A1A1A" },
@@ -98,13 +123,7 @@ test("ENG-762 a 3-photo post renders dots + an n/m count on the horse profile fe
   // `<postId>/photo-<n>`.
   const paths = [`${post.id}/original`, `${post.id}/photo-1`, `${post.id}/photo-2`];
   for (let i = 0; i < SLIDES.length; i++) {
-    const { error } = await admin.storage
-      .from(BUCKET)
-      .upload(paths[i], Buffer.from(slideSvg(SLIDES[i].bg, SLIDES[i].fg, i + 1)), {
-        contentType: "image/svg+xml",
-        upsert: true,
-      });
-    if (error) throw error;
+    await uploadSlide(admin.storage.from(BUCKET), paths[i], slideSvg(SLIDES[i].bg, SLIDES[i].fg, i + 1));
   }
 
   const { error: mediaError } = await admin.from("post_media").insert(
@@ -135,8 +154,14 @@ test("ENG-762 a 3-photo post renders dots + an n/m count on the horse profile fe
     const dots = card.getByTestId("photo-dots").getByRole("button");
     const count = card.getByTestId("media-photo-count");
 
+    // The card must arrive before anything inside it is asserted. In dev, the
+    // first hit on /api/horses/[id]/feed compiles the route, which can take far
+    // longer than a default expect budget — a timeout here would otherwise read
+    // as "the carousel is missing" when the feed simply had not landed yet.
+    await expect(card).toBeVisible({ timeout: 120_000 });
+
     // The read path really produced three signed photos.
-    await expect(track).toBeVisible();
+    await expect(track).toBeVisible({ timeout: 30_000 });
     await expect(card.getByTestId("photo-slide")).toHaveCount(3);
     await expect(dots).toHaveCount(3);
 
@@ -161,10 +186,12 @@ test("ENG-762 a 3-photo post renders dots + an n/m count on the horse profile fe
     await dots.nth(1).click();
     await expect(count).toHaveText("2/3");
     await expect(dots.nth(1)).toHaveAttribute("aria-current", "true");
-    // The snap has to settle before the frame is worth capturing.
+    // Wait for the smooth scroll to land EXACTLY, not merely to round to the
+    // right slide: a rounded check is satisfied while the animation is still
+    // running, and the screenshot then shows a sliver of the previous photo.
     await expect
-      .poll(async () => track.evaluate((el) => Math.round(el.scrollLeft / el.clientWidth)))
-      .toBe(1);
+      .poll(async () => track.evaluate((el) => Math.abs(el.scrollLeft - el.clientWidth) <= 1))
+      .toBe(true);
     await card.screenshot({ path: `${SHOTS}/eng-762-02-card-middle.png` });
 
     // --- LAST ----------------------------------------------------------
@@ -172,8 +199,8 @@ test("ENG-762 a 3-photo post renders dots + an n/m count on the horse profile fe
     await expect(count).toHaveText("3/3");
     await expect(dots.nth(2)).toHaveAttribute("aria-current", "true");
     await expect
-      .poll(async () => track.evaluate((el) => Math.round(el.scrollLeft / el.clientWidth)))
-      .toBe(2);
+      .poll(async () => track.evaluate((el) => Math.abs(el.scrollLeft - el.clientWidth * 2) <= 1))
+      .toBe(true);
     await card.screenshot({ path: `${SHOTS}/eng-762-03-card-last.png` });
 
     // The carousel must not have changed the card's height between slides —
@@ -181,6 +208,7 @@ test("ENG-762 a 3-photo post renders dots + an n/m count on the horse profile fe
     const box = card.locator(".post-media-web");
     const first = await box.boundingBox();
     await dots.nth(0).click();
+    await expect.poll(async () => track.evaluate((el) => el.scrollLeft <= 1)).toBe(true);
     const back = await box.boundingBox();
     expect(Math.round(first!.height)).toBe(Math.round(back!.height));
 
@@ -247,13 +275,7 @@ test("ENG-762 a single-photo post keeps the plain chip and draws no dots", async
   if (postError) throw postError;
 
   const path = `${post.id}/original`;
-  const { error: uploadError } = await admin.storage
-    .from(BUCKET)
-    .upload(path, Buffer.from(slideSvg("#1A1A1A", "#FAF7F2", 1)), {
-      contentType: "image/svg+xml",
-      upsert: true,
-    });
-  if (uploadError) throw uploadError;
+  await uploadSlide(admin.storage.from(BUCKET), path, slideSvg("#1A1A1A", "#FAF7F2", 1));
 
   // ONE row, plus the mirror. The contract is explicit that this must render
   // identically to a legacy post with zero rows: no dots, no count, no pager.
@@ -275,7 +297,8 @@ test("ENG-762 a single-photo post keeps the plain chip and draws no dots", async
 
     await page.goto(`/horses/${horse.id}`);
     const card = page.locator(".post-web").first();
-    await expect(card.getByTestId("media-photo-chip")).toBeVisible();
+    await expect(card).toBeVisible({ timeout: 120_000 });
+    await expect(card.getByTestId("media-photo-chip")).toBeVisible({ timeout: 30_000 });
     await expect(card.getByTestId("media-photo-chip")).toHaveAttribute("aria-label", "Photo");
     await expect(card.getByTestId("photo-dots")).toHaveCount(0);
     await expect(card.getByTestId("photo-track")).toHaveCount(0);
@@ -288,4 +311,38 @@ test("ENG-762 a single-photo post keeps the plain chip and draws no dots", async
     await admin.from("horse").delete().eq("id", horse.id).then(undefined, () => {});
     await admin.from("trainer").delete().eq("id", trainer.id).then(undefined, () => {});
   }
+});
+
+// The component gallery covers the states that need no live data: the degraded
+// slide and the 10-photo cap. It is NOT the evidence for the read path — the two
+// specs above are, deliberately, because the gallery builds its props by hand.
+test("ENG-762 the gallery shows the degraded slide and the 10-photo cap", async ({ page }) => {
+  // A viewport TALLER than the gallery. Playwright stitches an element
+  // screenshot from several scroll positions when it does not fit, and the
+  // absolutely-positioned chips then appear twice — an artifact that reads like
+  // a duplicated chip in the evidence. Capturing in one pass avoids it.
+  await page.setViewportSize({ width: 1280, height: 2400 });
+  await page.goto("/preview/components#round6-carousel");
+  const gallery = page.getByTestId("round6-carousel-gallery");
+  await expect(gallery).toBeVisible({ timeout: 120_000 });
+
+  const cards = gallery.locator(".post-web");
+  await expect(cards).toHaveCount(4);
+
+  // 1: three photos. 2: one photo, so no dots at all. 3: middle slide dead.
+  // 4: the contract cap.
+  await expect(cards.nth(0).getByTestId("photo-dots").getByRole("button")).toHaveCount(3);
+  await expect(cards.nth(1).getByTestId("photo-dots")).toHaveCount(0);
+  await expect(cards.nth(1).getByTestId("media-photo-chip")).toHaveAttribute("aria-label", "Photo");
+  await expect(cards.nth(2).getByTestId("photo-slide-empty")).toHaveCount(1);
+  await expect(cards.nth(3).getByTestId("photo-dots").getByRole("button")).toHaveCount(10);
+
+  // Ten dots at the narrow card width must still fit on one row — the ticket's
+  // explicit edge case. Measured, not eyeballed.
+  const dotsBox = await cards.nth(3).getByTestId("photo-dots").boundingBox();
+  const mediaBox = await cards.nth(3).locator(".post-media-web").boundingBox();
+  expect(dotsBox!.width).toBeLessThan(mediaBox!.width);
+  expect(dotsBox!.height).toBeLessThan(24);
+
+  await gallery.screenshot({ path: `${SHOTS}/eng-762-06-gallery-states.png` });
 });
