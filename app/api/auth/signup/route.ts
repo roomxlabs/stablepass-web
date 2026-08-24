@@ -127,8 +127,8 @@ export async function POST(req: Request) {
     // product, already had its free trial, so it gets the SAME wall as a repeat
     // phone (ENG-763 decision 2) rather than a second, subtly different dead
     // end. The old code is gone rather than aliased: this BFF has exactly one
-    // consumer, the form below, and two codes meaning one thing is how the two
-    // branches drift apart.
+    // consumer, app/start/trial-start-form.tsx, and two codes meaning one thing
+    // is how the two branches drift apart.
     return fail(TRIAL_ALREADY_USED, TRIAL_ALREADY_USED_MESSAGE, 409);
   }
 

@@ -22,7 +22,7 @@ Derived from the Stage 1 blueprint (API Design 03, Auth & RBAC 04). REST over HT
 
 | Method | Path | Description | Request (params/body) | Response | Status |
 |---|---|---|---|---|---|
-| POST | `/api/auth/signup` | Create auth user + subscriber + **trial** subscription atomically. No card, no Stripe. Trial-start form collects **name, email, phone, and a password** (the FE mockup adds the password field). | `{ name, email, phone, password }` | `{ data: { subscriber, subscription:{ status:"trial", trialEndsAt } } }` | 201 · 400 `validation_failed` · 409 `email_taken` · 429 |
+| POST | `/api/auth/signup` | Create auth user + subscriber + **trial** subscription atomically. No card, no Stripe. Trial-start form collects **name, email, phone, and a password** (the FE mockup adds the password field). | `{ name, email, phone, password }` | `{ data: { subscriber, subscription:{ status:"trial", trialEndsAt } } }` | 201 · 400 `validation_failed` · 409 `trial_already_used` · 429 |
 | POST | `/api/auth/bootstrap` | Idempotently ensure subscriber + trial subscription exist after a first **social** (Apple/Google/Facebook) login. Also backed by a DB trigger on `auth.users` insert. | *(JWT only)* | `{ data: { subscriber, subscription } }` | 200 · 201 · 401 |
 | GET | `/api/me` | Current subscriber profile + subscription summary + notification prefs. | *(JWT)* | `{ data: { subscriber, subscription:{ status, trialEndsAt, currentPeriodEnd }, prefs } }` | 200 · 401 |
 | PATCH | `/api/me` | Edit own profile (Account → *Profile · Edit*) and notification-type toggles. Email/password change go through **Supabase Auth**, not here. | `{ name?, phone?, prefs?:{ newPost?, raceDay?, raceResult?, milestone? } }` | `{ data: { subscriber, prefs } }` | 200 · 400 · 401 |
