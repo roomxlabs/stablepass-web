@@ -24,6 +24,7 @@ type PostRow = {
   type: PostMedia["type"];
   title: string | null;
   body: string | null;
+  label: string | null;
   media_url: string | null;
   poster_url: string | null;
   aspect_ratio: number | null;
@@ -168,11 +169,10 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
             duration: null,
             aspectRatio: typeof r.aspect_ratio === "number" ? r.aspect_ratio : null,
           },
-          // ENG-762. NOTE for whoever picks up ENG-775: this mapper is ALSO the
-          // one that drops `post.label` — the bug that ticket records. The
-          // projection here is `post:post_id(*)`, so the column IS on the row;
-          // it is this object literal that never copies it. Deliberately NOT
-          // fixed here: it is ENG-775's change, not this ticket's surface.
+          // ENG-775. The projection is `post:post_id(*)`, so `label` IS on the
+          // row — this literal is the only place it was being dropped. The card
+          // (ENG-761) renders the `.post-badge` pill off it; nothing else needed.
+          label: r.label,
           photos: photosByPost.get(r.id) ?? [],
           watermarked: r.watermarked,
           count: r.like_count,
