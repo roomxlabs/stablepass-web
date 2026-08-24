@@ -3,14 +3,33 @@
 import { redirect } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
 import { TrialStartForm } from "./trial-start-form";
+import { TrialUsedWall } from "./trial-used-wall";
 import { Wordmark } from "@/components/wordmark";
 
 export const metadata = { title: "Start your free trial · StablePass" };
 
-export default async function StartPage() {
+export default async function StartPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ trial?: string }>;
+}) {
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (user) redirect("/explore");
+
+  // `/start?trial=used` server-renders the repeat-signup wall (ENG-763).
+  //
+  // The client path in trial-start-form.tsx flips to the same component after
+  // /api/auth/signup answers 409, but that path needs JavaScript, and this
+  // screen is reviewed on a phone with scripting blocked — where the form
+  // cannot submit at all, so the wall would be unreachable and unreviewable.
+  // This gives it a real URL that renders as plain HTML with a working link
+  // out. It is a rendering switch and nothing more: it creates no account,
+  // reads nothing, and asserts nothing about the visitor, so an arbitrary
+  // visitor appending it sees a page inviting them to sign in, which is
+  // harmless and true of `/signin` itself.
+  const { trial } = await searchParams;
+  const trialUsed = trial === "used";
 
   return (
     <div className="auth-page">
@@ -32,7 +51,7 @@ export default async function StartPage() {
       </aside>
 
       <main className="auth-page-form">
-        <TrialStartForm />
+        {trialUsed ? <TrialUsedWall /> : <TrialStartForm />}
       </main>
     </div>
   );
