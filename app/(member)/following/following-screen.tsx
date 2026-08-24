@@ -120,12 +120,6 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
   const [horses, setHorses] = useState<RailItem[]>([]);
   const [trainers, setTrainers] = useState<RailItem[]>([]);
   const [followsLoaded, setFollowsLoaded] = useState(false);
-  // The Follow pill's only input, from the trainer rail read this screen ALREADY
-  // makes — no extra query, and none per card. `null` means "not known yet",
-  // which is deliberately NOT the same as "follows nobody": the Following feed
-  // also carries posts from followed HORSES, whose trainer may be unfollowed, so
-  // the pill is meaningful here and must not flash on before the answer lands.
-  const [followedTrainerIds, setFollowedTrainerIds] = useState<Set<string> | null>(null);
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -136,8 +130,6 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
   const [playError, setPlayError] = useState<Record<string, boolean>>({});
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
-  // Trainer ids with a follow write in flight — see follow() below.
-  const followInFlight = useRef<Set<string>>(new Set());
   const loadingRef = useRef(false);
 
   // Load the follow rails once (own follows via RLS `follow_rw_self`, newest first).
@@ -163,7 +155,7 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
         setFollowsLoaded(true);
         return;
       }
-      const [{ data: hRows }, { data: tRows, error: tError }] = await Promise.all([
+      const [{ data: hRows }, { data: tRows }] = await Promise.all([
         sb.from("follow").select("created_at, horse:horse_id(id, display_name, racing_name, photo_url)").not("horse_id", "is", null).order("created_at", { ascending: false }),
         sb.from("follow").select("created_at, trainer:trainer_id(id, name, display_name, photo_url)").not("trainer_id", "is", null).order("created_at", { ascending: false }),
       ]);
@@ -180,10 +172,6 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
       // A FAILED read must also leave it `null`, not empty. Treating an error as
       // "follows nobody" collapses the exact distinction this state exists to
       // preserve, and would offer Follow on trainers the viewer already follows.
-      if (!tError) {
-        setFollowedTrainerIds(new Set(followedTrainers.map((t) => t.id)));
-      }
-
       // `photo_url` is a bare path in a PRIVATE bucket — sign it or the avatar
       // renders as a broken relative URL. One batch call per bucket.
       const [horsePhotos, trainerPhotos] = await Promise.all([
@@ -352,36 +340,6 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
     if (bookmarkError) setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, bookmarked: prevBookmarked } : p)));
   }
 
-  // Follow, from the pill on the media. Optimistic like react/bookmark above,
-  // and it clears the pill on EVERY card by that trainer at once, which is the
-  // reason follow state lives on the screen rather than inside the card.
-  async function follow(trainerId: string) {
-    // `follow_no_duplicate` is `unique (user_id, trainer_id, horse_id)`, and a
-    // TRAINER follow has `horse_id IS NULL` — Postgres treats NULLs as distinct,
-    // so that constraint does NOT stop a second row. A fast double-click before
-    // the optimistic re-render would write two, and the Following rail would
-    // then list the trainer twice with a duplicate React key.
-    if (followInFlight.current.has(trainerId)) return;
-    followInFlight.current.add(trainerId);
-
-    setFollowedTrainerIds((prev) => new Set(prev ?? []).add(trainerId));
-
-    const sb = supabaseBrowser();
-    const { error: followError } = await sb.from("follow").insert({ user_id: viewerId, trainer_id: trainerId });
-    followInFlight.current.delete(trainerId);
-
-    // 23505 is unique_violation: the row already exists, so the viewer already
-    // follows this trainer. That IS the desired end state — rolling back would
-    // put the pill back on a trainer they follow, which is the bug, not the fix.
-    if (followError && followError.code !== "23505") {
-      setFollowedTrainerIds((prev) => {
-        const next = new Set(prev ?? []);
-        next.delete(trainerId);
-        return next;
-      });
-    }
-  }
-
   /**
    * ROUND 6 / ENG-761 item 4 — the Following screen offers NO Follow pill, ever.
    *
@@ -485,11 +443,15 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
                   }
                   return (
                     <Fragment key={p.id}>
-                      {/* No `canFollow`/`onFollow`: the pill is gone from this
-                          screen entirely (ENG-761 item 4). `canFollow`
-                          defaults to false on PostCard, so the absence here
-                          IS the decision — see `canFollowTrainer` above. */}
-                      <PostCard post={p} viewerId={viewerId} onReact={(e) => react(p.id, e)} onBookmark={() => bookmark(p.id)} onPlay={() => play(p.id)} />
+                      {/* `canFollowTrainer()` is a constant `false` (ENG-761
+                          item 4), so no pill is ever drawn here. It is CALLED
+                          rather than simply omitted so the decision is live
+                          code a test can pin and a reader can find, instead of
+                          an absence that looks like an oversight. `onFollow`
+                          is deliberately not passed: there is nothing to
+                          follow from, so this screen holds no follow-write
+                          path at all. */}
+                      <PostCard post={p} viewerId={viewerId} onReact={(e) => react(p.id, e)} onBookmark={() => bookmark(p.id)} onPlay={() => play(p.id)} canFollow={canFollowTrainer()} />
                       {playError[p.id] && (
                         <p role="alert" style={{ color: "var(--red)", marginTop: -16, marginBottom: 24, fontSize: 13.5 }}>Couldn&rsquo;t load the video.</p>
                       )}

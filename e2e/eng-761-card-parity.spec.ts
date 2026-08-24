@@ -135,20 +135,49 @@ test("ENG-761 PRIZEMONEY holds one line at 360px and (AUS) is stripped from the 
     // registrar truth; this is the rendered string only.
     await expect(page.locator(".profile-name-web")).toHaveText("Cannonbrook");
 
-    // ITEM 5 — measured, not eyeballed. A wrapped label would be two line-boxes
-    // tall, so comparing the rendered height against ONE line height is what
-    // actually pins "never wraps"; `toBeVisible` would pass either way.
+    // ITEM 5 — the stat label must never wrap.
+    //
+    // HONEST SCOPE OF THIS ASSERTION. The reported "PRIZEMONEY wraps at 360px"
+    // does NOT reproduce — not on this branch and not on the merge-base. Both
+    // were measured:
+    //
+    //   innerWidth 360  ->  document.scrollWidth 731
+    //   .profile-stats-web 576.8px wide  ->  each stat cell 144px
+    //   PRIZEMONEY: 15px tall WITH `nowrap` and 15px tall WITHOUT it
+    //
+    // `.profile-header-web` (app/globals.css) is `grid-template-columns: 1fr auto`
+    // with no mobile breakpoint, so its max-content minimum pushes the whole page
+    // to 731px; every stat cell gets 144px rather than the ~90px a true 360px
+    // column would give, and the label has room to spare either way. Constraining
+    // the grid by hand to 360px does not wrap it either, because the narrow-width
+    // rules added for this item (10px, 0.02em) make the string fit a ~90px cell
+    // comfortably. In other words the CSS here is DEFENSIVE, and this test is a
+    // regression guard, not a reproduction. Do not dress it up as a measured fix.
+    //
+    // The real defect on this screen is that horizontal overflow. It is larger
+    // than this item, it is NOT fixed here, and it is raised separately.
     const label = page.locator(".profile-stats-web .stat-label", { hasText: "Prizemoney" });
     await expect(label).toBeVisible();
+
     const metrics = await label.evaluate((el) => {
       const cs = getComputedStyle(el);
-      return { height: el.getBoundingClientRect().height, lineHeight: parseFloat(cs.lineHeight), whiteSpace: cs.whiteSpace };
+      return {
+        height: el.getBoundingClientRect().height,
+        lineHeight: parseFloat(cs.lineHeight),
+        whiteSpace: cs.whiteSpace,
+        // With `nowrap` an over-wide string overflows its box instead of
+        // wrapping, so this is what would catch the label outgrowing its cell.
+        overflowsCell: el.scrollWidth > el.clientWidth,
+      };
     });
-    expect(metrics.whiteSpace).toBe("nowrap");
-    // Allow a pixel of rounding; two lines would be ~double.
-    expect(metrics.height).toBeLessThanOrEqual(metrics.lineHeight + 1);
 
-    await page.screenshot({ path: `${SHOTS}/eng-761-03-stats-360-aus-stripped.png`, fullPage: true });
+    expect(metrics.whiteSpace).toBe("nowrap");
+    expect(metrics.height).toBeLessThanOrEqual(metrics.lineHeight + 1);
+    expect(metrics.overflowsCell).toBe(false);
+
+    // NOT fullPage: fullPage captures `scrollWidth` (731px here, see above),
+    // which would silently produce a 731px-wide '360px' screenshot.
+    await page.screenshot({ path: `${SHOTS}/eng-761-03-stats-360-aus-stripped.png` });
   } finally {
     if (userData?.user?.id) {
       await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});

@@ -13,6 +13,7 @@ import { relativeTime } from "@/app/(member)/explore/explore-feed";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { signPhotoMap, POST_MEDIA_BUCKET, signedPosterFor } from "@/lib/storage/photos";
 import type { FeedPost, PostMedia, ReactionEmoji } from "@/components/types";
+import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 
 type HorseRef = { display_name: string; racing_name: string | null };
 type PostRow = {
@@ -89,7 +90,13 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
           return {
             id: r.id,
             horseId: r.horse_id,
-            horseName: horse ? horse.racing_name || horse.display_name : "Horse",
+            // Formatted per side of the `||` so a racing_name of just "(AUS)"
+            // falls through (ENG-761 item 6). Without this the trainer profile
+            // shows two spellings of one horse: the formatted name in the
+            // stable-horses list above, the raw registrar caps on these cards.
+            horseName: horse
+              ? displayHorseNameOrEmpty(horse.racing_name) || displayHorseNameOrEmpty(horse.display_name) || "Horse"
+              : "Horse",
             trainerName,
             stableName,
             stableLocation,
