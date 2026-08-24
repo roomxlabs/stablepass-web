@@ -218,7 +218,18 @@ export function PostCaption({ body }: { body: string }) {
         {body}
       </div>
       {overflows && !expanded && (
-        <button type="button" className="post-caption-more" onClick={() => setExpanded(true)}>
+        // The visible word is "more", but the card ALREADY has a button whose
+        // accessible name is "More" — the `⋯` post-options control in the head.
+        // Two same-named buttons in one card is a real ambiguity for anyone
+        // navigating by name (and it made the first version of the e2e spec
+        // match five controls where one was meant). The label disambiguates
+        // without changing what a sighted reader sees.
+        <button
+          type="button"
+          className="post-caption-more"
+          aria-label="Expand caption"
+          onClick={() => setExpanded(true)}
+        >
           more
         </button>
       )}
