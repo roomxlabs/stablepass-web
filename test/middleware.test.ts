@@ -364,25 +364,55 @@ describe("the BFF belongs to the app host", () => {
     }
   });
 
-  // KNOWN GAP, not a desired property — see the "HONEST CAVEAT" block in
-  // middleware.ts and ENG-773. `isExcludedPath()` (and `config.matcher`) skip
-  // middleware entirely for any path whose last segment contains a dot, so
-  // these never reach the 404 above. `/api/me.json` is harmless (App Router
-  // has no `app/api/me.json/route.ts` to resolve to), but
-  // `/api/trainers/[id]/route.ts` and `/api/horses/[id]/route.ts` happily
-  // capture `abc.json` as `[id]`, so those handlers actually EXECUTE on the
-  // marketing origin — answering 401 rather than 404. That leaks nothing
-  // (cookies are host-only, so the apex carries no session to check), but the
-  // marketing-apex containment claim is not absolute. When ENG-773 closes this
-  // gap by touching `config.matcher`, this test should flip to expecting 404.
-  it("does NOT contain /api/* whose last segment has a dot — known gap, see ENG-773", () => {
+  // ENG-773 — THE FLIP. This test used to pin the gap as current behaviour
+  // (`isExcludedPath` true, middleware passing the request through with a 200);
+  // it now pins the fix. Both halves had to change to get here: the `/api`
+  // entry in `config.matcher` gets middleware INVOKED for a dotted API path,
+  // and the `isApiPath()` bail-out in `isExcludedPath()` stops it returning
+  // `next()` on middleware()'s first line. Patching either alone is a no-op —
+  // an earlier attempt patched only the guard and measured 401 -> 401.
+  //
+  // Flipped only AFTER the served behaviour was measured to change on the
+  // built server, never before: a green unit assertion of containment while
+  // production still answered 401 would be the exact disease this ticket cures.
+  //
+  //   Host: stablepass.co, built server, GET /api/trainers/abc.json
+  //     before: 401 {"error":{"code":"unauthorized",...}}  (handler executed)
+  //     after:  404 (0 bytes)                              (middleware refused)
+  it("contains /api/* whose last segment has a dot — ENG-773, was a known gap", () => {
     const paths = ["/api/trainers/abc.json", "/api/horses/abc.json", "/api/me.json"];
     for (const path of paths) {
-      expect(isExcludedPath(path), path).toBe(true);
-      // A 200 here means middleware passed the request through untouched
-      // (NextResponse.next() is always 200) — i.e. it did NOT 404 it, and did
-      // NOT redirect it away from the marketing origin either.
-      expect(run({ host: MARKETING, path }).status, path).toBe(200);
+      // No longer excluded, so middleware actually reaches its verdict.
+      expect(isExcludedPath(path), path).toBe(false);
+      expect(run({ host: MARKETING, path }).status, path).toBe(404);
+    }
+  });
+
+  // The dotted paths are only dangerous where a DYNAMIC segment captures them:
+  // `/api/trainers/[id]` and `/api/horses/[id]` resolve `abc.json` as an id and
+  // used to execute on the apex. Pin the dynamic-route shape explicitly so a
+  // future route added under a `[param]` inherits the containment.
+  it("404s a dotted id on every dynamic /api route on the marketing apex", () => {
+    const paths = [
+      "/api/trainers/abc.json",
+      "/api/horses/abc.json",
+      "/api/trainers/abc.json/feed",
+      "/api/horses/abc.json/feed",
+      "/api/posts/abc.json/playback",
+      "/api/trainers/abc.json/website-click",
+      "/api/feed.json",
+      "/api/auth/signup.json",
+    ];
+    for (const path of paths) {
+      expect(run({ host: MARKETING, path }).status, path).toBe(404);
+    }
+  });
+
+  // Those same dotted paths must still be SERVED on the app host — the fix
+  // contains them on the marketing origin, it does not break the BFF.
+  it("still serves dotted /api/* on the app host", () => {
+    for (const path of ["/api/trainers/abc.json", "/api/horses/abc.json"]) {
+      expect(run({ host: APP, path }).status, path).toBe(200);
     }
   });
 
@@ -426,11 +456,36 @@ describe("robots headers", () => {
 
 describe("the matcher", () => {
   // Built from config.matcher itself so the assertion cannot drift from the
-  // pattern Next actually compiles.
-  const pattern = (config.matcher as string[])[0];
-  const matches = (pathname: string) => new RegExp(`^${pattern}$`).test(pathname);
+  // patterns Next actually compiles.
+  //
+  // ENG-773 made this a MULTI-ELEMENT matcher, and Next invokes middleware if
+  // ANY entry matches — so every check below is a union over all entries, not
+  // `matcher[0]`. This used to read index 0 and would therefore have gone on
+  // passing while silently ignoring the entry that carries the fix; an
+  // assertion that checks only the first of two entries is a guard that has
+  // stopped guarding.
+  const patterns = config.matcher as string[];
+  const matchesAny = (pathname: string) =>
+    patterns.some((pattern) => new RegExp(`^${pattern}$`).test(pathname));
 
-  it("excludes framework assets and marketing imagery", () => {
+  it("is a union — every entry is a compilable regex and all of them are checked", () => {
+    // Guards the helper above rather than the middleware: if someone adds a
+    // third entry in path-to-regexp sugar (`/api/:path*`), `new RegExp` would
+    // read `:path*` as a literal `:pat` + `h*` and quietly match nothing, and
+    // every agreement assertion below would go vacuously green.
+    expect(patterns.length).toBeGreaterThan(1);
+    for (const pattern of patterns) {
+      expect(() => new RegExp(`^${pattern}$`), pattern).not.toThrow();
+      expect(pattern.startsWith("/"), pattern).toBe(true);
+      expect(pattern, pattern).not.toContain(":");
+    }
+  });
+
+  // DECISION 6 (ENG-773): the matcher now admits paths it previously skipped,
+  // so prove the carve-out that the dot rule exists for is still intact. These
+  // must be matched by NEITHER entry — breaking asset bypass to fix /api/*
+  // would be a bad trade.
+  it("still excludes framework assets and marketing imagery — no collateral routing change", () => {
     for (const path of [
       "/_next/static/chunks/main.js",
       "/_next/image",
@@ -439,21 +494,43 @@ describe("the matcher", () => {
       "/favicon.ico",
       "/og.jpg",
       "/robots.txt",
+      "/apple-touch-icon.png",
+      "/sitemap.xml",
     ]) {
-      expect(matches(path), path).toBe(false);
+      expect(matchesAny(path), path).toBe(false);
     }
   });
 
   it("includes the routes middleware has to decide", () => {
     for (const path of ["/", "/explore", "/signin", "/start", "/legal/privacy", "/api/me"]) {
-      expect(matches(path), path).toBe(true);
+      expect(matchesAny(path), path).toBe(true);
     }
+  });
+
+  // The point of the whole ticket: these are matched ONLY by the `/api` entry.
+  it("includes dotted /api/* — the entry ENG-773 added", () => {
+    for (const path of ["/api/trainers/abc.json", "/api/horses/abc.json", "/api/me.json"]) {
+      expect(matchesAny(path), path).toBe(true);
+      // Specifically: entry [0] still rejects them (its dot rule is untouched),
+      // so the union is doing the work and entry [0] was not re-scoped.
+      expect(new RegExp(`^${patterns[0]}$`).test(path), path).toBe(false);
+    }
+  });
+
+  it("does not widen beyond /api — `/apifoo` is not an API path", () => {
+    // `/(api|api/.*)` must mean exactly `isApiPath()`. A sloppier `/api(.*)`
+    // would swallow `/apifoo.json` and break agreement with the guard.
+    expect(matchesAny("/apifoo.json")).toBe(false);
+    expect(matchesAny("/api")).toBe(true);
+    expect(matchesAny("/api/")).toBe(true);
   });
 
   it("agrees with the in-function guard on every path", () => {
     // The exclusion rule is encoded twice — once as the matcher Next compiles,
-    // once as isExcludedPath() for the case the matcher is ever loosened. They
-    // must not drift, so check them against each other over a corpus.
+    // once as isExcludedPath(), which is the first thing middleware() consults.
+    // They must not drift: if the matcher admits a path the guard excludes,
+    // middleware is invoked only to immediately return next(), which is exactly
+    // how the ENG-773 gap survived a "fix" that touched only one of them.
     const corpus = [
       "/",
       "/explore",
@@ -462,8 +539,14 @@ describe("the matcher", () => {
       "/account",
       "/legal",
       "/legal/privacy",
+      "/api",
       "/api/me",
+      "/api/waitlist",
       "/api/subscription/cancel",
+      // ENG-773 — the paths the gap was found on.
+      "/api/trainers/abc.json",
+      "/api/horses/abc.json",
+      "/api/me.json",
       "/auth/callback",
       "/onboarding",
       "/horses/9f1c2b3a-0000-4444-8888-abcdefabcdef",
@@ -474,9 +557,10 @@ describe("the matcher", () => {
       "/og.jpg",
       "/robots.txt",
       "/some.thing",
+      "/apifoo.json",
     ];
     for (const path of corpus) {
-      expect(isExcludedPath(path), path).toBe(!matches(path));
+      expect(isExcludedPath(path), path).toBe(!matchesAny(path));
     }
   });
 });
