@@ -24,6 +24,7 @@ const VIDEO_POST: FeedPost = {
   horseName: "Mahogany",
   trainerName: "Chris Waller",
   postedAgo: "2h ago",
+  label: null,
   body: "Trackwork this morning at Rosehill — feeling sharp ahead of Saturday.",
   media: { type: "video", posterUrl: null, duration: "0:47" },
   watermarked: true,
@@ -39,6 +40,7 @@ const PHOTO_POST: FeedPost = {
   horseName: "Winx",
   trainerName: "Chris Waller",
   postedAgo: "1d ago",
+  label: null,
   body: "Recovery day in the paddock.",
   media: { type: "photo", posterUrl: null },
   watermarked: false,
@@ -62,6 +64,7 @@ const UPDATE_POST: FeedPost = {
   stableName: "Tom Alcott Racing",
   stableLocation: "Sydney",
   postedAgo: "1h ago",
+  label: null,
   title: "Where the team is up to",
   body:
     "Quiet week here and that is exactly how we want it going into Saturday. Cando has come through his gallop well and will have one more piece of work Thursday morning.\n\n" +

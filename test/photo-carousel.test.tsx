@@ -22,6 +22,7 @@ function photoPost(overrides: Partial<FeedPost> = {}): FeedPost {
     horseName: "Winx",
     trainerName: "Chris Waller",
     postedAgo: "1d ago",
+    label: null,
     body: "Recovery day in the paddock.",
     media: { type: "photo", posterUrl: "https://signed/photo-0" },
     watermarked: false,
