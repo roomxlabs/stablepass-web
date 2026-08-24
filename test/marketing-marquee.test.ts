@@ -166,6 +166,33 @@ const routeGroupSources = filesUnder(ROUTE_GROUP)
   .filter((file) => /\.tsx?$/.test(file))
   .map((file) => ({ file: path.relative(REPO, file), body: readFileSync(file, "utf8") }));
 
+/**
+ * The ONE file in this route group sanctioned to hold a form, a submit handler
+ * and a `fetch` — ENG-726, the pre-launch waitlist capture.
+ *
+ * The two guardrails below were written for the v2.6 CONTACT path, whose whole
+ * sin was a form that showed "Thanks, that is on its way." while sending
+ * nothing. `waitlist-form.tsx` is the opposite of that: a real form that really
+ * posts to our own route handler and reports what actually happened. Blanket-
+ * banning `<form` across the route group would forbid it, so it is exempted BY
+ * NAME rather than by loosening the pattern — a loosened regex would silently
+ * re-admit a second fake contact form, which is the exact thing these tests
+ * exist to prevent.
+ *
+ * The exemption is deliberately narrow. It does NOT cover `lib/supabase` (the
+ * marketing origin still may not import Supabase — guardrail #1, and pinned
+ * again in marketing-shell.test.tsx), and it does NOT cover `is-sent`, which
+ * stays banned everywhere including here. Two tests below keep the sanction
+ * honest: one proves the file really does still fetch and submit (so the
+ * exemption is not dead weight left behind after a refactor), and one proves
+ * every fetch in it targets our OWN same-origin route and never an outside
+ * origin.
+ */
+const WAITLIST_FORM = path.join("app", "(marketing)", "waitlist-form.tsx");
+const isWaitlistForm = (file: string) => file === WAITLIST_FORM;
+const waitlistFormSource = () =>
+  routeGroupSources.find(({ file }) => isWaitlistForm(file))?.body ?? "";
+
 describe("marketing guardrails — the contact path really is a mailto", () => {
   /**
    * Guardrail #1, and the no-fictional-integrations rule.
@@ -175,8 +202,44 @@ describe("marketing guardrails — the contact path really is a mailto", () => {
    * to the visitor's own mail client, so there is no request to make.
    */
   it("makes no network call and imports no Supabase client anywhere under app/(marketing)/", () => {
-    const offenders = routeGroupSources.filter(({ body }) => /\bfetch\s*\(|lib\/supabase|@supabase\//.test(body));
+    const offenders = routeGroupSources.filter(
+      ({ file, body }) =>
+        // Supabase is banned in EVERY file here, waitlist form included. Only
+        // the network-call half of this guard is sanctioned, and only for that
+        // one file.
+        /lib\/supabase|@supabase\//.test(body) ||
+        (/\bfetch\s*\(/.test(body) && !isWaitlistForm(file)),
+    );
     expect(offenders.map((o) => o.file)).toEqual([]);
+  });
+
+  it("still finds a fetch and a form in the waitlist form, so the sanction is not dead", () => {
+    // If ENG-726's component is ever refactored into something that no longer
+    // fetches or submits, this fails and the exemption above should be deleted
+    // rather than left as a standing hole in the guardrail.
+    const body = waitlistFormSource();
+    expect(body, "waitlist-form.tsx is missing from the route group").not.toBe("");
+    expect(/\bfetch\s*\(/.test(body)).toBe(true);
+    expect(/<form\b/.test(body)).toBe(true);
+    expect(/onSubmit/.test(body)).toBe(true);
+  });
+
+  it("lets the waitlist form reach only our own same-origin route", () => {
+    // The sanction buys it a fetch, not an arbitrary destination. Every
+    // fetch(...) argument in the file must be the literal "/api/waitlist" — a
+    // leading slash, so same-origin by construction, and never an absolute URL
+    // to some third party. This is the no-fictional-integrations rule surviving
+    // the exemption.
+    const body = waitlistFormSource();
+    const targets = [...body.matchAll(/\bfetch\s*\(\s*("[^"]*"|'[^']*'|`[^`]*`)/g)].map((m) =>
+      m[1].slice(1, -1),
+    );
+    expect(targets.length, "no fetch target found to check").toBeGreaterThan(0);
+    for (const target of targets) {
+      expect(target, `fetch target ${target} is not our own route`).toBe("/api/waitlist");
+    }
+    // And no absolute origin anywhere in the file, however it is spelled.
+    expect(/https?:\/\//.test(body), "waitlist-form.tsx names an absolute origin").toBe(false);
   });
 
   /**
@@ -222,7 +285,13 @@ describe("marketing guardrails — the contact path really is a mailto", () => {
   });
 
   it("keeps no form, no submit handler and no is-sent toggle in the contact path", () => {
-    const offenders = routeGroupSources.filter(({ body }) => /is-sent|onSubmit|<form\b/.test(body));
+    const offenders = routeGroupSources.filter(
+      ({ file, body }) =>
+        // `is-sent` is the v2.6 fake-confirmation toggle and stays banned
+        // outright, in every file including the sanctioned one. Only the
+        // form/submit half is exempted, and only for ENG-726's component.
+        /is-sent/.test(body) || (/onSubmit|<form\b/.test(body) && !isWaitlistForm(file)),
+    );
     expect(offenders.map((o) => o.file)).toEqual([]);
   });
 

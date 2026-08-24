@@ -337,6 +337,58 @@ describe("the BFF belongs to the app host", () => {
   it("serves /api/* on the app host", () => {
     expect(run({ host: APP, path: "/api/me" }).status).toBe(200);
   });
+
+  // ENG-726 — /api/waitlist is the ONE sanctioned exception to the blanket
+  // marketing-apex 404 above: it is anonymous, cookie-free, and lives on the
+  // marketing home, so a cross-origin POST to the app host would be a pointless
+  // CORS preflight for no security benefit. See isSharedPath() in middleware.ts.
+  it("serves /api/waitlist on the marketing apex", () => {
+    const { status, location } = run({ host: MARKETING, path: "/api/waitlist" });
+    expect(status).toBe(200);
+    expect(location).toBeNull();
+  });
+
+  it("still 404s every other /api/* on the marketing apex", () => {
+    const paths = [
+      "/api/me",
+      "/api/feed",
+      "/api/auth/signup",
+      "/api/subscription/checkout",
+      "/api/posts/abc/playback",
+      "/api/trainers/abc",
+      "/api/horses/abc",
+      "/api",
+    ];
+    for (const path of paths) {
+      expect(run({ host: MARKETING, path }).status, path).toBe(404);
+    }
+  });
+
+  // This is a hole deliberately punched in a blanket 404 — EXACT match only.
+  // Widening it to a prefix would put every future /api/waitlist/* endpoint on
+  // the apex without anyone deciding that, the same way /api/waitlist itself
+  // was deliberately decided.
+  it("shares only the exact /api/waitlist path, never a prefix", () => {
+    const paths = ["/api/waitlist/anything", "/api/waitlist/", "/api/waitlistx", "/api/waitlist-admin"];
+    for (const path of paths) {
+      expect(run({ host: MARKETING, path }).status, path).toBe(404);
+    }
+  });
+
+  it("serves /api/waitlist on the app host too", () => {
+    expect(run({ host: APP, path: "/api/waitlist" }).status).toBe(200);
+  });
+
+  // `isSharedPath()` is checked AFTER the `www` -> apex redirect in
+  // middleware(), not before it, so www does not get a shared-path bypass —
+  // it still 308s to the apex first, exactly as /api/me does above. Whatever
+  // arrives at the apex from that redirect is a separate, later request that
+  // isSharedPath() sees for itself.
+  it("does not redirect /api/waitlist from www — it 308s to the apex first, same as any other path", () => {
+    const { status, location } = run({ host: WWW, path: "/api/waitlist" });
+    expect(status).toBe(308);
+    expect(location).toBe(`https://${MARKETING}/api/waitlist`);
+  });
 });
 
 describe("robots headers", () => {
