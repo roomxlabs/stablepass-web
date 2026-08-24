@@ -365,7 +365,7 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
           {isVideo && post.media.duration && <div className="media-duration">{post.media.duration}</div>}
           {/* The photo's answer to the duration chip: same corner, same scrim. */}
           {post.media.type === "photo" && (
-            <div className="media-photo-chip" data-testid="media-photo-chip" aria-label="Photo">
+            <div className="media-photo-chip" data-testid="media-photo-chip" role="img" aria-label="Photo">
               <PhotoGlyph />
             </div>
           )}
