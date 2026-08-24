@@ -721,11 +721,20 @@ column correctly; the screen throws it away one layer later). Do this: for any n
 column, grep `FeedPost\[\]` and edit every hit, and cover it with a RENDER test through the
 real mapper, not only a projection assertion.
 
-## An explicit PostgREST projection is load-bearing in BOTH directions (42703)
-`select("a, b, c")` **hard-fails the whole query with `42703`** if any named column is not
-deployed — unlike `select("*")`, which just omits it. So a projection can break two ways:
-too narrow silently starves the UI (see above), too wide 500s the entire feed against any
-project without the migration. `sb` is untyped, so `tsc` catches neither. Assert the
+## An explicit PostgREST projection is load-bearing in BOTH directions, and BOTH fail SILENTLY
+`select("a, b, c")` **rejects the whole query with `42703` / HTTP 400** if any named column
+is not deployed — unlike `select("*")`, which just omits it. So a projection breaks two
+ways: too narrow silently starves the UI (see above); too wide kills the entire result set
+against any project without the migration. **Neither shows up as a 500.** Measured, not
+assumed: `curl .../rest/v1/post?select=id,nonexistent_col` → `400 {"code":"42703"}`, and
+supabase-js turns that into `{ data: null, error }`. Our routes destructure **only** `data`
+(`const { data: posts } = await sb…`; no route in `app/api/{horses,trainers}/[id]/feed`
+inspects `error`), so `ok(posts ?? [])` returns a cheerful **200 `{"data":[]}`** and the
+screen renders its empty state. The screens' own `setError(true)` path is unreachable for
+this entire error class. Net effect of naming a column too early: a **silent total content
+blackout** that is indistinguishable from an empty stable. Treat "web names a new column"
+as a **deploy-order dependency on that column's migration**, not a cosmetic risk.
+`sb` is untyped, so `tsc` catches neither. Assert the
 **exact** projection string (`.toBe(...)`, not `.toContain(...)`) in the route's test —
 that is the only assertion that pins both directions — and before naming a new column,
 verify it is actually deployed on the base you are targeting, e.g.

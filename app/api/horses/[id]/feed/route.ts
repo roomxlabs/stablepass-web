@@ -21,9 +21,16 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   // columns, so a column omitted here simply never reaches the card and the
   // profile feed silently falls back to the unknown-ratio box. `sb` is untyped,
   // so `tsc` cannot catch that; test/horses-route.test.ts pins the column set.
-  // This projection is load-bearing in BOTH directions: an omitted column
-  // silently never reaches the card (ENG-772: how `label` went missing), and
-  // a named-but-undeployed column raises PostgREST 42703, 500ing the feed.
+  // This projection is load-bearing in BOTH directions, and BOTH failures are
+  // silent (ENG-772). Too narrow: the column simply never reaches the card —
+  // how `label` went missing here. Too wide: naming a column that is not
+  // deployed makes PostgREST reject the WHOLE query with 42703 (HTTP 400) —
+  // unlike `select *`, which would just omit it. That does NOT surface as a
+  // 500: we destructure only `data` below, so `posts` is null, `ok(posts ?? [])`
+  // returns 200 `{"data":[]}`, and both profile screens render "No updates yet"
+  // — a total content blackout that looks exactly like an empty stable. So this
+  // route must never name a column ahead of its migration (`label` needs
+  // ENG-738's 20260819120001_post_label.sql, which is NOT yet on be `main`).
   const { data: posts } = await sb
     .from("post")
     .select("id, type, title, body, label, media_url, poster_url, mux_playback_id, aspect_ratio, watermarked, like_count, published_at, source_trainer_id")
