@@ -252,6 +252,31 @@ describe("no redirect loop within middleware — chain followed to completion", 
     }
   });
 
+  // ENG-773 created exactly one NEW redirect chain: dotted `/api/*` paths
+  // previously entered middleware on no host at all, so `www` + a dotted api
+  // path was served straight off `www`. It now 308s to the apex first (the
+  // same as `/api/me` always did) and 404s there. Chain-follow it so the one
+  // new hop this diff introduces cannot start cycling unnoticed.
+  it("settles www + a dotted /api path at the apex 404", () => {
+    const { chain, status } = follow({ host: WWW, path: "/api/trainers/abc.json" });
+    expect(chain).toEqual([`https://${MARKETING}/api/trainers/abc.json`]);
+    expect(status).toBe(404);
+  });
+
+  it("settles dotted /api paths on every other host", () => {
+    const starts: Call[] = [
+      { host: MARKETING, path: "/api/me.json" },
+      { host: APP, path: "/api/trainers/abc.json" },
+      { host: PREVIEW, path: "/api/me.json" },
+      { host: "localhost:3000", path: "/api/horses/abc.json" },
+    ];
+    for (const start of starts) {
+      const { status } = follow(start);
+      // 404 on the apex (refused), 200 = next() everywhere else.
+      expect([200, 404], `${start.host}${start.path}`).toContain(status);
+    }
+  });
+
   it("never fires the root rule on a path that merely starts with /", () => {
     // The failure mode being guarded: applying the root rule to a prefix turns
     // / -> /explore -> / into an infinite bounce.
@@ -520,9 +545,33 @@ describe("the matcher", () => {
   it("does not widen beyond /api — `/apifoo` is not an API path", () => {
     // `/(api|api/.*)` must mean exactly `isApiPath()`. A sloppier `/api(.*)`
     // would swallow `/apifoo.json` and break agreement with the guard.
+    //
+    // Asserted against the ADDED entry specifically, not the union: `/api` and
+    // `/api/` are dotless, so entry [0] already matches them and a union-level
+    // assertion would stay green even if the entry this ticket added were
+    // deleted outright — proving nothing about the thing under test.
+    const apiEntry = new RegExp(`^${patterns[1]}$`);
+    const isApiPath = (p: string) => p === "/api" || p.startsWith("/api/");
+
+    for (const path of [
+      "/api",
+      "/api/",
+      "/api/trainers/abc.json",
+      "/api/waitlist",
+      "/apifoo",
+      "/apifoo.json",
+      "/apix/y",
+      "/api.json",
+      "/",
+      "/explore",
+      "/favicon.ico",
+    ]) {
+      expect(apiEntry.test(path), path).toBe(isApiPath(path));
+    }
+
+    // And the union must still reject the near-misses.
     expect(matchesAny("/apifoo.json")).toBe(false);
-    expect(matchesAny("/api")).toBe(true);
-    expect(matchesAny("/api/")).toBe(true);
+    expect(matchesAny("/api.json")).toBe(false);
   });
 
   it("agrees with the in-function guard on every path", () => {

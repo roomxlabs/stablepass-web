@@ -266,7 +266,25 @@ export function middleware(request: NextRequest): NextResponse {
     // construction, not just by intent). Nothing else may join it without the
     // same argument.
     //
-    // This 404 IS now total (ENG-773 closed the last gap).
+    // ENG-773 closed the dotted-path gap. State the guarantee precisely — an
+    // unqualified "this is now total" is how the last false invariant got
+    // written down in the first place:
+    //
+    //   For every request whose PUBLIC HOST resolves to the marketing space,
+    //   every `/api/*` except `/api/waitlist` is refused here.
+    //
+    // Two things that guarantee does NOT cover, both deliberately out of scope
+    // and both unchanged by ENG-773:
+    //
+    //   * The host is whatever `requestHost()` derives, and that prefers
+    //     `x-forwarded-host`. Sending `x-forwarded-host: app.stablepass.co` to
+    //     the apex still reaches the handler (401). Vercel overwrites the
+    //     header so this is not live in production, but the containment claim
+    //     is header-dependent, not absolute.
+    //   * Case. `isApiPath()` and both matcher entries are case-sensitive, so
+    //     `/API/trainers/abc.json` never enters this branch. It is contained
+    //     only because Next's router is case-sensitive too and resolves no
+    //     route for it — that containment comes from the framework, not here.
     //
     // It used not to be: both `config.matcher` and `isExcludedPath()` skipped
     // middleware for any path whose last segment contains a dot, so
@@ -281,6 +299,11 @@ export function middleware(request: NextRequest): NextResponse {
     // the `isApiPath()` bail-out in `isExcludedPath()` stops it returning
     // `next()` before it gets here. Measured against the built server rather
     // than asserted: 401 -> 404 for `/api/trainers/abc.json` on the apex.
+    //
+    // A NOTE ON THE COMMENT ABOVE: it is deliberately scoped rather than
+    // absolute. The whole reason this ticket exists is that a stated, tested
+    // invariant was false; replacing one overclaim with another would repeat
+    // the mistake in the other direction.
     if (isApiPath(pathname)) return new NextResponse(null, { status: 404 });
 
     if (pathname === "/") return serve(space);
