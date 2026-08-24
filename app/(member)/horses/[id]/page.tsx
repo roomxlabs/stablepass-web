@@ -16,6 +16,7 @@ import { AccessWall } from "@/components/access-wall";
 import { TrainerCard } from "@/components/trainer-card";
 import { FollowNotify } from "./follow-notify";
 import { HorsePosts } from "./horse-posts";
+import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 
 type TrainerRow = { id: string; name: string; stable_name: string | null; location: string | null };
 type HorseRow = {
@@ -78,7 +79,11 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
   const { id } = await params;
   const sb = await supabaseServer();
   const { data: horse } = await sb.from("horse").select("display_name, racing_name").eq("id", id).maybeSingle();
-  const name = horse ? horse.racing_name || horse.display_name : "Horse";
+  // The tab title is member-facing too, so it takes the same formatting as the
+  // heading below rather than the raw registrar caps (ENG-761 item 6).
+  const name = horse
+    ? displayHorseNameOrEmpty(horse.racing_name) || displayHorseNameOrEmpty(horse.display_name) || "Horse"
+    : "Horse";
   return { title: `${name} · StablePass` };
 }
 
@@ -117,7 +122,9 @@ export default async function HorseProfilePage({ params }: { params: Promise<{ i
 
   const row = horseRow as HorseRow;
   const trainer = one(row.trainer);
-  const displayName = row.racing_name || row.display_name;
+  // Formatted per side of the `||` so a `racing_name` of just "(AUS)" falls
+  // through to the display name (ENG-761 item 6).
+  const displayName = displayHorseNameOrEmpty(row.racing_name) || displayHorseNameOrEmpty(row.display_name);
   const pedigreeLine = pedigree(row.sire, row.dam);
   // `photo_url` holds a bare object path in the PRIVATE `horse-photos` bucket;
   // it must be signed before it can be rendered (see lib/storage/photos.ts).
