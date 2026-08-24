@@ -644,3 +644,49 @@ the shared card changes — it was still previewing the pre-round-5 card.
 their aside/rail. Derive the Follow pill from those rather than adding a query,
 and model the state as `Set<string> | null` where `null` is "not known yet" —
 conflating it with "follows nobody" flashes a pill on every card and retracts it.
+
+## Two buttons named "More" on one card — the caption affordance collides with `⋯` (ENG-761)
+
+The post card's options control is `<button aria-label="More">` (`.post-more-web`).
+Round 6 added a caption "more" affordance to the same card, so a Playwright
+`getByRole("button", { name: "more" })` matched **one per card plus the real one**
+(five where one was meant) — Playwright's `name` is case-insensitive and
+substring-trimmed unless you pass `exact: true`.
+
+- **Symptom:** a locator that looks unambiguous resolves to N+1 elements; the count
+  scales with how many cards are on the page, which reads like a render bug.
+- **Cause:** two controls with the same accessible name in one card. That is also a
+  real a11y defect, not only a test problem — name navigation cannot tell them apart.
+- **Do this:** the caption button carries `aria-label="Expand caption"` while still
+  *showing* the word "more". Locate it by `.post-caption-more`, not by name.
+
+## A line-clamp must go on the TEXT, never on the box that holds the affordance (ENG-761)
+
+The obvious reading of "`.post-body-web` gets `-webkit-line-clamp: 2`" is wrong once
+there is a "more" button: the button is a child of `.post-body-web`, so the clamp
+counts it as part of the clamped flow and hides the very control that undoes the clamp.
+- **Do this:** clamp an inner `.post-caption`; keep the button its sibling.
+- **Measuring "does it overflow":** compare `scrollHeight - clientHeight > 1` after
+  layout, with a 1px tolerance — sub-pixel line heights make an exactly-two-line
+  caption measure a hair over, which shows a "more" that reveals nothing. A character
+  count is always wrong at some viewport.
+
+## The web member app has NO post-detail route (ENG-761)
+
+`app/(member)` is explore, following, saved, horses, horses/[id], trainers,
+trainers/[id], account, checkout. There is no `posts/[id]` page — only
+`app/api/posts/[id]/playback`. Any ticket whose copy says "opens the post detail"
+(ported from mobile, which does have one) has no route to open on web. ENG-761's
+caption "more" expands in place instead. Check before promising navigation.
+
+## The profile feed routes have EXPLICIT post column lists — a new `post` column stops there
+
+`/api/feed` and `/api/feed/following` proxy the be `feed` edge fn (`returns setof
+post`), so a new post column reaches those two screens for free. The **profile** feeds
+do not: `app/api/horses/[id]/feed/route.ts` and `app/api/trainers/[id]/feed/route.ts`
+name their columns one by one, and `saved-feed.tsx` uses `post:post_id(*)`.
+- **Consequence on ENG-761:** `post.label` reaches Explore and Following but NOT the
+  horse/trainer profile feeds, whose selects were on the ticket's do-not-touch list.
+- **Do this:** when a ticket adds a `post` column that the card renders, list all four
+  read paths and say explicitly which ones are in scope. "The feed carries it
+  automatically" is true of exactly two of them.
