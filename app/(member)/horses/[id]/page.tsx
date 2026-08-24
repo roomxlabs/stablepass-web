@@ -191,7 +191,7 @@ export default async function HorseProfilePage({ params }: { params: Promise<{ i
         <div className="profile-body-grid">
           <div>
             <h2 className="section-title-web">Recent updates</h2>
-            <HorsePosts horseId={id} horseName={displayName} trainerName={trainer?.name ?? "Stablepass"} viewerId={userId} />
+            <HorsePosts horseId={id} horseName={displayName} trainerName={trainer?.name ?? "Stablepass"} stableName={trainer?.stable_name ?? null} stableLocation={trainer?.location ?? null} viewerId={userId} />
           </div>
 
           <aside className="feed-aside">

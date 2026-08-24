@@ -331,6 +331,23 @@ describe("GET /api/horses/:id/feed", () => {
 
     expect(subSelectMock).toHaveBeenCalledWith("status,trial_ends_at,current_period_end");
   });
+
+  // ENG-612: `sb` is untyped so `tsc` can never catch a too-narrow `.select()`;
+  // this route names its post columns explicitly (unlike /api/feed, which
+  // proxies the be `feed` fn's `setof post` untouched), so an omitted column
+  // would silently strip the ratio.
+  it("selects aspect_ratio on the post feed", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.post = { data: [] };
+
+    await horseFeedGET(new Request("http://localhost/api/horses/h1/feed"), params("h1"));
+
+    const postCallIndex = fromMock.mock.calls.findIndex((c) => c[0] === "post");
+    expect(postCallIndex).toBeGreaterThanOrEqual(0);
+    const postChain = fromMock.mock.results[postCallIndex].value as { select: ReturnType<typeof vi.fn> };
+    expect(postChain.select.mock.calls[0][0]).toContain("aspect_ratio");
+  });
 });
 
 

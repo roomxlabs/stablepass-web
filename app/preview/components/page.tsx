@@ -48,6 +48,49 @@ const PHOTO_POST: FeedPost = {
   bookmarked: true,
 };
 
+// ENG-613 (round 5). The gallery previewed only the two pre-round-5 cards, so it
+// was stale for the card it exists to review. These two cover the parity rows the
+// live feed screens cannot show locally: the LOCAL Supabase edge runtime serves a
+// `feed` STUB that returns no rows, so Explore and Following render their empty
+// state here and neither can evidence the Follow pill.
+const UPDATE_POST: FeedPost = {
+  id: "post-text-1",
+  horseId: "horse-1",
+  horseName: "Mahogany",
+  trainerName: "Tom Alcott",
+  trainerId: "trainer-2",
+  stableName: "Tom Alcott Racing",
+  stableLocation: "Sydney",
+  postedAgo: "1h ago",
+  title: "Where the team is up to",
+  body:
+    "Quiet week here and that is exactly how we want it going into Saturday. Cando has come through his gallop well and will have one more piece of work Thursday morning.\n\n" +
+    "Banjo's Girl trials Tuesday at Rosehill. She has done everything right at home so we are keen to see how she handles the day.",
+  media: { type: "text", posterUrl: null },
+  watermarked: false,
+  raceBadge: null,
+  count: 64,
+  reacted: "love",
+  bookmarked: true,
+};
+
+// The Follow pill only appears where the viewer does NOT follow the trainer.
+const UNFOLLOWED_POST: FeedPost = {
+  ...PHOTO_POST,
+  id: "post-photo-2",
+  // Watermarked ON PURPOSE. The pill's `z-index: 3` exists only because the
+  // watermark overlay takes `z-index: 2`, so a fixture without the overlay
+  // never exercises the one deviation from the design source.
+  watermarked: true,
+  horseName: "Black Caviar",
+  trainerName: "Peter Moody",
+  trainerId: "trainer-3",
+  postedAgo: "3h ago",
+  body: "Big run from the back of the field — second by a head.",
+  reacted: null,
+  bookmarked: false,
+};
+
 const RACES: RaceDayEntry[] = [
   { horseId: "horse-1", horseName: "Mahogany", info: "Randwick R5 · BM78 · 1400m", when: "Today · 4:35pm · in 6 hours", notify: true },
   { horseId: "horse-3", horseName: "Northern Star", info: "Caulfield R3 · Maiden · 1100m", when: "Today · 2:10pm · in 3 hours" },
@@ -76,6 +119,16 @@ export default function ComponentPreviewPage() {
       <div style={{ maxWidth: 520, marginBottom: 40 }}>
         <PostCard post={VIDEO_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
         <PostCard post={PHOTO_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
+      </div>
+
+      <h2>Stable update card (post.type = text | news)</h2>
+      <div style={{ maxWidth: 520, marginBottom: 40 }}>
+        <PostCard post={UPDATE_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />
+      </div>
+
+      <h2>Follow pill (viewer does not follow this trainer)</h2>
+      <div style={{ maxWidth: 520, marginBottom: 40 }}>
+        <PostCard post={UNFOLLOWED_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} canFollow onFollow={noop} />
       </div>
 
       <h2>Reaction bar (standalone)</h2>

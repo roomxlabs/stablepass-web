@@ -134,7 +134,7 @@ export default async function TrainerProfilePage({ params }: { params: Promise<{
             <StableHorses horses={stableHorses} />
 
             <h2 className="section-title-web">Recent updates</h2>
-            <TrainerPosts trainerId={id} trainerName={displayName} viewerId={userId} />
+            <TrainerPosts trainerId={id} trainerName={displayName} stableName={t.stable_name ?? null} stableLocation={t.location ?? null} viewerId={userId} />
           </div>
 
           <aside className="feed-aside">
