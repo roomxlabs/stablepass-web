@@ -749,3 +749,61 @@ admin API, sign in through `/signin`, assert on the live page (see
 anything card-related. Corollary, and the reason ENG-761's bug shipped: a screenshot of
 `/preview/components#round6` proves nothing about the read path — the gallery builds its
 `PostCard` props by hand and bypasses both the projection and the mapper.
+
+## `post_media` reads go in their OWN query, never in the `post` projection
+**(2026-08-24, ENG-762)** The table is only on be `feature/round6-v1`, not `main`.
+Per the 42703 rule above, naming its columns on the `post` select would blank the
+**entire feed** silently anywhere the migration is not deployed. Isolated in
+`lib/post-media.ts`, the same failure costs only the carousel: `readPostPhotos`
+returns an empty map and every card falls back to `post.media_url`.
+- The be contract requires it anyway: one batched `.in('post_id', …)` ordered
+  read per page, then sign. Never per post.
+- The ordering column is **`sort_order`** (not `sort`), 0-based, `CHECK 0..9`, so
+  ten photos max. It is **not guaranteed contiguous** — `{0,3,7}` is legal — so
+  never infer position from array index.
+- `post.media_url` MIRRORS row 0, so **0 rows and 1 photo are the same rendering
+  case**. Anything that draws dots at `length >= 1` is wrong; the test is `> 1`.
+- Web named the view-model field `photos`, NOT `media` — `FeedPost.media` is
+  already the `PostMedia` view model.
+
+## e2e here is timing-sensitive on a COLD Next dev server — budget for the compile
+**(2026-08-24, ENG-762)** `e2e/eng-772-profile-label-pill.spec.ts` uses default
+5s `expect` budgets. The first hit on `/api/{horses,trainers}/[id]/feed` compiles
+the route in dev, which routinely exceeds that, so the spec fails on a cold
+server and passes once warm — and the failure MOVES between the horse and
+trainer halves, which makes it look like a real regression in whichever file you
+just edited. Verified both ways on ENG-762: red once before the change, red once
+after, then 3/3 green with the change in place AND green with the file reverted.
+- **Do this:** wait for `.post-web` itself with a generous timeout before
+  asserting anything inside it, then assert the innards on the default budget.
+- Do not conclude "my mapper edit broke the profile feed" from one red run.
+
+## Playwright element screenshots STITCH, and duplicate absolutely-positioned children
+**(2026-08-24, ENG-762)** Screenshotting an element taller than the viewport
+composites several scroll positions. Anything `position: absolute` inside it
+(the photo chip, the dots, the Follow pill) is captured **more than once** and
+appears at a bogus offset in the image — it reads exactly like a duplicated-chip
+bug. The DOM is fine; the picture is not.
+- **Do this:** `page.setViewportSize()` taller than the element before capturing,
+  or screenshot the individual card.
+
+## A screenshot proves nothing unless you assert the image DECODED
+**(2026-08-24, ENG-762)** Local Storage intermittently serves a bad response for
+a freshly-uploaded object. The `<img>` still has its `src`, the test still
+passes, and the committed screenshot silently shows a broken-image icon.
+- **Do this:** poll `img.complete && img.naturalWidth > 0` before `.screenshot()`.
+
+## Running the dev server breaks `test/marketing-marquee.test.ts`
+**(2026-08-24, ENG-762)** That spec reads the PRODUCTION build output under
+`.next/server` + `.next/static`. `npm run dev` (including the Playwright
+webServer) leaves `.next` holding only `dev/`, so it finds 0 bundles and fails
+with no relation to your change.
+- **Do this:** run `npm run build` before the final `npm test` after any e2e run.
+
+## Cross-repo parity tickets: read the sibling's `screenshots/<ticket>` branch
+**(2026-08-24, ENG-762)** ENG-757 (mobile) had no PR open, but had pushed
+`screenshots/eng-757` with its carousel captures. Reading them changed the web
+build: a scrim pill behind the dots and a white rim on the active dot were both
+dropped because mobile draws neither. A parity ticket's real reference is the
+sibling's pixels, not its ticket prose — fetch with
+`gh api "repos/<owner>/<repo>/contents/.screenshots/<ticket>/<file>.png?ref=screenshots/<ticket>" -q .content | base64 -d`.

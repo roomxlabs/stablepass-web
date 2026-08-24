@@ -681,6 +681,67 @@ a { color: inherit; text-decoration: none; }
   border-radius: var(--radius-pill);
 }
 .post-media-web .media-photo-chip .ic { width: 15px; height: 15px; }
+/* ROUND 6 / ENG-762 — the SAME chip, carrying the position as well as the type
+   when a post has more than one photo. It stops being square and takes the
+   duration chip's exact type scale, because at that point it is doing the
+   duration chip's job: a number in the corner that says where you are. */
+.post-media-web .media-photo-chip.counted {
+  width: auto; gap: 5px; padding: 4px 9px;
+  font-size: 11.5px; font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ROUND 6 / ENG-762 — the multi-photo carousel (web half of mobile's R16).
+   The track fills the card's existing media box: ONE aspect box per post, so
+   every photo letterboxes into the same frame and the card never changes height
+   between slides. Paging is pure CSS scroll-snap — no library, and the swipe
+   still works with JS off. */
+.post-media-web .photo-track {
+  position: absolute; inset: 0;
+  display: flex;
+  overflow-x: auto; overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  /* The scrollbar is hidden because the dots ARE the position indicator, and a
+     native bar across the bottom of a photo is chrome the design does not draw.
+     Hiding it costs nothing: the track keeps its scrollbar BEHAVIOUR (wheel,
+     drag, arrow keys, swipe momentum) and stays focusable. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.post-media-web .photo-track::-webkit-scrollbar { display: none; }
+.post-media-web .photo-slide {
+  flex: 0 0 100%; height: 100%;
+  scroll-snap-align: center;
+  /* Never skip past a photo on a fast flick — one gesture, one slide. */
+  scroll-snap-stop: always;
+}
+/* A slide whose photo failed to sign shows the media ground, exactly as a
+   poster-less card does. Its siblings still render. */
+.post-media-web .photo-slide-empty { width: 100%; height: 100%; }
+/* Dots: bottom-centre over the media. 6px with a 4px gap fits the contract cap
+   of 10 photos in 96px, comfortably inside the 360px narrow card.
+   MATCHED TO MOBILE'S R16 (ENG-757), read off its shipped screenshots rather
+   than inferred: bare dots with NO scrim pill behind them, a solid grey for
+   inactive and flat brand green for active. An earlier revision here had a
+   dark scrim pill and a white rim on the active dot; both were dropped on
+   sight of mobile's build, because a web-only embellishment is exactly the
+   divergence this parity ticket exists to prevent. See the PR for the one
+   legibility caveat that came out of it. */
+.post-media-web .photo-dots {
+  position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+  z-index: 3;
+  display: flex; align-items: center; gap: 4px;
+}
+.post-media-web .photo-dot {
+  width: 6px; height: 6px; padding: 0;
+  border: none; border-radius: 50%;
+  /* A token, not an eyeballed grey. `--muted-light` is the palette's soft grey
+     and is the closest match to the inactive dot mobile draws; it stays
+     readable on both a dark and a cream frame. */
+  background: var(--muted-light);
+  cursor: pointer;
+}
+.post-media-web .photo-dot.active { background: var(--brand-green); }
 /* ROUND 5 / ENG-613 row 5 — the Follow pill, matching Instagram exactly, and the
    same component and corner as mobile's M3. Transparent fill with a white rim is
    a DRI decision that KNOWINGLY costs contrast on a bright frame: do not add a

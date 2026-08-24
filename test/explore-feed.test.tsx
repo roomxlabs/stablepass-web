@@ -56,6 +56,27 @@ vi.mock("@/lib/supabase/client", () => ({
   supabaseBrowser: () => ({ from: fromMock }),
 }));
 
+// ENG-762 — the multi-photo carousel read. Mocked at the module boundary
+// rather than faked through the PostgREST chain: `readPostPhotos` owns its
+// own query + signing round trip and carries its own unit coverage
+// (lib/post-media.ts), so re-deriving `post_media` rows through `fromMock`
+// here would just be a second, looser copy of that coverage. `photosMock`
+// starts empty (reset below) so every PRE-EXISTING test in this file — none
+// of which touches it — renders exactly as it did before ENG-762: 0 rows is
+// the single-photo path, unchanged.
+import { readPostPhotos } from "@/lib/post-media";
+
+let photosMock = new Map<string, { url: string | null; sort: number }[]>();
+
+vi.mock("@/lib/post-media", () => ({
+  readPostPhotos: vi.fn(() => Promise.resolve(photosMock)),
+}));
+
+beforeEach(() => {
+  photosMock = new Map();
+  vi.mocked(readPostPhotos).mockClear();
+});
+
 function fetchImpl(feedStatus: 200 | 402) {
   return vi.fn((input: string | URL, _init?: RequestInit) => {
     const url = String(input);
@@ -486,5 +507,52 @@ describe("ExploreFeed — ENG-613 view model + Follow pill", () => {
 
     // Once the read says "follows nobody", the pill appears.
     expect(await screen.findByRole("button", { name: "Follow Chris Waller" })).toBeInTheDocument();
+  });
+});
+
+// ===========================================================================
+// ENG-762 — the multi-photo carousel, rendered through ExploreFeed's REAL
+// mapper. Not a hand-built FeedPost/PostCard render: bypassing the mapper is
+// exactly the bug class ENG-772 exists to catch, so `readPostPhotos` (mocked
+// above) is exercised via the screen's own fetch → enrich → map pipeline.
+// ===========================================================================
+describe("ExploreFeed — ENG-762 multi-photo carousel", () => {
+  it("renders the multi-photo carousel (ENG-762)", async () => {
+    photosMock = new Map([
+      [
+        "p1",
+        [
+          { url: "https://signed.test/p1-0.jpg", sort: 0 },
+          { url: "https://signed.test/p1-1.jpg", sort: 1 },
+          { url: "https://signed.test/p1-2.jpg", sort: 2 },
+        ],
+      ],
+    ]);
+    global.fetch = fetchImpl(200) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    expect(screen.getAllByTestId("photo-slide")).toHaveLength(3);
+    expect(screen.getByTestId("photo-dots").querySelectorAll("button")).toHaveLength(3);
+    expect(screen.getByTestId("media-photo-count")).toHaveTextContent("1/3");
+
+    // WHICH IDS the screen actually asked for. Without this the call could be
+    // `readPostPhotos(sb, [])` and every assertion above would still pass — the
+    // mock ignores its arguments — while the carousel died on every real feed.
+    // That is the ENG-772 silent-drop class moved one layer up, and the e2e is
+    // explicitly not the guard for `app/(member)/**` reads (.rx/gotchas.md).
+    expect(vi.mocked(readPostPhotos)).toHaveBeenCalledWith(expect.anything(), ["p1", "p2"]);
+  });
+
+  it("renders no carousel for a single-photo post (ENG-762)", async () => {
+    photosMock = new Map([["p1", [{ url: "https://signed.test/p1-0.jpg", sort: 0 }]]]);
+    global.fetch = fetchImpl(200) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    expect(screen.queryByTestId("photo-dots")).toBeNull();
+    expect(screen.queryByTestId("photo-track")).toBeNull();
   });
 });

@@ -12,6 +12,7 @@ import { PostCard, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { signPhotoMap, POST_MEDIA_BUCKET, signedPosterFor } from "@/lib/storage/photos";
+import { readPostPhotos } from "@/lib/post-media";
 import type { FeedPost, PostMedia, ReactionEmoji } from "@/components/types";
 
 const LIMIT = 10;
@@ -135,7 +136,12 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
       const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
       // `media_url` is a bare path in the PRIVATE `post-media` bucket — sign it
       // or the poster renders as a broken relative URL (absolute URLs pass through).
-      const postMedia = await signPhotoMap(sb, POST_MEDIA_BUCKET, postRows.flatMap((p) => [p.poster_url, p.media_url]));
+      // Concurrent, not sequential: the carousel read is independent of the
+      // poster signing, so it costs no extra latency on the feed.
+      const [postMedia, photosByPost] = await Promise.all([
+        signPhotoMap(sb, POST_MEDIA_BUCKET, postRows.flatMap((p) => [p.poster_url, p.media_url])),
+        readPostPhotos(sb, postRows.map((p) => p.id)),
+      ]);
 
       const mapped: FeedPost[] = postRows.map((r) => {
         const horse = horseById.get(r.horse_id);
@@ -162,6 +168,12 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
             duration: null,
             aspectRatio: typeof r.aspect_ratio === "number" ? r.aspect_ratio : null,
           },
+          // ENG-762. NOTE for whoever picks up ENG-775: this mapper is ALSO the
+          // one that drops `post.label` — the bug that ticket records. The
+          // projection here is `post:post_id(*)`, so the column IS on the row;
+          // it is this object literal that never copies it. Deliberately NOT
+          // fixed here: it is ENG-775's change, not this ticket's surface.
+          photos: photosByPost.get(r.id) ?? [],
           watermarked: r.watermarked,
           count: r.like_count,
           reacted: myReaction.get(r.id) ?? null,
