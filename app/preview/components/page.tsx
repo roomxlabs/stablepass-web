@@ -107,6 +107,47 @@ const HORSES: HorseSummary[] = [
   { id: "horse-3", name: "Black Caviar", trainerName: "Peter Moody" },
 ];
 
+// ROUND 6 / ENG-761 fixtures. The gallery is the only place the shared card can
+// be seen with real styles: the local `feed` edge function is a stub, so
+// /explore and /following render an empty state and cannot evidence a card
+// (.rx/gotchas.md). These four cover the states the ticket names.
+const LABELLED_POST: FeedPost = {
+  ...PHOTO_POST,
+  id: "post-labelled-1",
+  horseName: "Cannonbrook",
+  label: "Trackwork",
+  body: "Sharp gallop on the course proper this morning.",
+};
+
+// Label + a caption long enough to need the clamp: the two must coexist.
+const LABELLED_LONG_POST: FeedPost = {
+  ...PHOTO_POST,
+  id: "post-labelled-2",
+  horseName: "Coastal Breeze (NZ)",
+  label: "Post Race Report",
+  body:
+    "A strong run to the line for third, beaten under a length after being held up for a clear crack at them on the turn. He pulled up well, ate up overnight and has come through it in good order, so we will give him a quiet week and look at the mile at Randwick a fortnight from now rather than backing him up on Saturday.",
+};
+
+// The 2-line-exact edge case: long enough to fill two lines, short enough that
+// nothing is hidden — so NO "more" should appear next to it.
+const TWO_LINE_POST: FeedPost = {
+  ...PHOTO_POST,
+  id: "post-labelled-3",
+  horseName: "Verry Elleegant (NZ)",
+  label: "Race Day · Today",
+  body: "Jumps from barrier four in the fourth at Flemington this afternoon, and the ground has come up a genuine good four.",
+};
+
+// Null label — the pre-round-6 default, and the majority of real posts. Draws
+// no pill at all.
+const UNLABELLED_POST: FeedPost = {
+  ...VIDEO_POST,
+  id: "post-unlabelled-1",
+  label: null,
+  raceBadge: null,
+};
+
 export default function ComponentPreviewPage() {
   return (
     <div className="page-pad">
@@ -119,6 +160,19 @@ export default function ComponentPreviewPage() {
       <div style={{ maxWidth: 520, marginBottom: 40 }}>
         <PostCard post={VIDEO_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
         <PostCard post={PHOTO_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
+      </div>
+
+      <h2 id="round6">Round 6 — label pill, caption clamp, photo chip (ENG-761)</h2>
+      <p style={{ color: "var(--muted)", marginBottom: 16 }}>
+        The pill draws <code>post.label</code> (one of the be&rsquo;s 13 presets) and nothing when it is
+        null. Captions clamp to two lines with a &ldquo;more&rdquo; that expands in place; a caption that
+        already fits gets no &ldquo;more&rdquo;. Photo posts carry the glyph chip in the duration chip&rsquo;s corner.
+      </p>
+      <div style={{ maxWidth: 520, marginBottom: 40 }} data-testid="round6-gallery">
+        <PostCard post={LABELLED_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
+        <PostCard post={LABELLED_LONG_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
+        <PostCard post={TWO_LINE_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
+        <PostCard post={UNLABELLED_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
       </div>
 
       <h2>Stable update card (post.type = text | news)</h2>

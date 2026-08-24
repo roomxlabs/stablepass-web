@@ -329,6 +329,31 @@ describe("ExploreFeed — ENG-613 view model + Follow pill", () => {
     expect(document.querySelector(".post-panel-foot")!.textContent).toContain("Waller Racing · Rosehill");
   });
 
+  // ROUND 6 / ENG-761 item 1 — `post.label` (ENG-738's 13 presets, or null)
+  // read at the DATA LAYER: the row carries it, the mapper puts it on the view
+  // model, and the card draws it as the `.post-badge` pill.
+  it("puts post.label on the view model and renders it as the pill", async () => {
+    mockTables();
+    global.fetch = feedWith([{ id: "p1", horse_id: "h1", type: "photo", title: null, label: "Race Replay", body: "x", media_url: null, poster_url: null, aspect_ratio: null, watermarked: false, like_count: 1, published_at: "2026-07-10T00:00:00.000Z" }]) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    const badge = document.querySelector(".post-badge");
+    expect(badge).not.toBeNull();
+    expect(badge!.textContent).toBe("Race Replay");
+  });
+
+  it("renders no pill when the row's label is null", async () => {
+    mockTables();
+    global.fetch = feedWith([{ id: "p1", horse_id: "h1", type: "photo", title: null, label: null, body: "x", media_url: null, poster_url: null, aspect_ratio: null, watermarked: false, like_count: 1, published_at: "2026-07-10T00:00:00.000Z" }]) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    expect(document.querySelector(".post-badge")).toBeNull();
+  });
+
   it("offers the Follow pill when the viewer follows nobody", async () => {
     mockTables({ follows: [] });
     global.fetch = feedWith([{ id: "p1", horse_id: "h1", type: "photo", title: null, body: "x", media_url: null, poster_url: null, aspect_ratio: null, watermarked: false, like_count: 1, published_at: "2026-07-10T00:00:00.000Z" }]) as unknown as typeof fetch;

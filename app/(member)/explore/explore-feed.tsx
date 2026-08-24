@@ -17,6 +17,7 @@ import { TrainerCard } from "@/components/trainer-card";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { signPhotoMap, POST_MEDIA_BUCKET, signedPosterFor } from "@/lib/storage/photos";
 import type { FeedPost, PostMedia, ReactionEmoji, RaceDayEntry, TrainerSummary } from "@/components/types";
+import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 
 const LIMIT = 10;
 
@@ -26,6 +27,13 @@ type PostRow = {
   horse_id: string;
   type: PostMedia["type"];
   title: string | null;
+  /**
+   * `post.label` — the green pill's copy (ENG-738's 13 presets, or null). The
+   * feed edge function returns `setof post`, so the column arrives on the row
+   * with no change to the request; this type is what stops it being dropped
+   * silently on the way to the card. Pinned by test/explore-feed.test.tsx.
+   */
+  label: string | null;
   body: string | null;
   media_url: string | null;
   poster_url: string | null;
@@ -198,13 +206,16 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
         return {
           id: r.id,
           horseId: r.horse_id,
-          horseName: horse?.display_name ?? "Unknown horse",
+          // Title-cased and (AUS)-stripped for display; the raw value stays on
+          // the row for keys and comparisons (ENG-761 item 6).
+          horseName: displayHorseNameOrEmpty(horse?.display_name) || "Unknown horse",
           trainerName: trainer?.name ?? "Stablepass",
           trainerId: trainer?.id ?? null,
           stableName: trainer?.stable_name ?? null,
           stableLocation: trainer?.location ?? null,
           postedAgo: relativeTime(r.published_at),
           title: r.title,
+          label: r.label,
           body: r.body,
           // `aspectRatio` is RAW here. `resolveAspect` (post-card) owns the clamp,
           // so exactly one place decides what an unusable value becomes. The

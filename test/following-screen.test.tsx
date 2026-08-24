@@ -235,13 +235,40 @@ describe("FollowingScreen — ENG-613 view model + Follow pill", () => {
     expect(document.querySelector(".post-badge")).toBeNull();
   });
 
-  // The feed post's trainer (`G. Waterhouse`) is NOT in TRAINER_FOLLOWS, which
-  // only holds Chris Waller — exactly the followed-horse-unfollowed-trainer case.
-  it("offers the pill for a post whose trainer is not followed", async () => {
+  // ROUND 6 / ENG-761 item 4 — the Following screen offers NO Follow pill,
+  // ever, not even here: a post surfaced via a FOLLOWED horse (Mahogany) whose
+  // trainer (`G. Waterhouse`) is itself unfollowed (only Chris Waller is in
+  // TRAINER_FOLLOWS) — exactly the case row 5's pill used to cover pre-round-6.
+  // `canFollowTrainer()` is now a constant `false` and PostCard is never given
+  // `canFollow`/`onFollow` on this screen, by design (see following-screen.tsx).
+  it("shows no pill even for a post whose trainer is unfollowed — Following never offers Follow", async () => {
     render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
     await screen.findByText("Mahogany");
 
-    expect(await screen.findByRole("button", { name: "Follow G. Waterhouse" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Follow / })).not.toBeInTheDocument();
+  });
+
+  // ROUND 6 / ENG-761 item 1 — `post.label` (ENG-738's 13 presets, or null)
+  // read at the DATA LAYER: the row carries it, the mapper puts it on the view
+  // model, and the card draws it as the `.post-badge` pill.
+  it("puts post.label on the view model and renders it as the pill", async () => {
+    feedPosts = [{ ...FEED_POSTS[0], label: "Race Replay" }];
+
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    const badge = document.querySelector(".post-badge");
+    expect(badge).not.toBeNull();
+    expect(badge!.textContent).toBe("Race Replay");
+  });
+
+  it("renders no pill when the row's label is null", async () => {
+    feedPosts = [{ ...FEED_POSTS[0], label: null }];
+
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    expect(document.querySelector(".post-badge")).toBeNull();
   });
 
   // A walled member is shown no content at all, so an "absent pill" assertion

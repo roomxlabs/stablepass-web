@@ -15,6 +15,7 @@ import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { signPhotoMap, HORSE_PHOTO_BUCKET, TRAINER_PHOTO_BUCKET, POST_MEDIA_BUCKET, signedPosterFor } from "@/lib/storage/photos";
 import type { FeedPost, PostMedia, ReactionEmoji } from "@/components/types";
+import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 
 const LIMIT = 10;
 
@@ -24,6 +25,13 @@ type PostRow = {
   horse_id: string;
   type: PostMedia["type"];
   title: string | null;
+  /**
+   * `post.label` — the green pill's copy (ENG-738's 13 presets, or null). The
+   * feed edge function returns `setof post`, so the column arrives on the row
+   * with no change to the request; this type is what stops it being dropped
+   * silently on the way to the card. Pinned by test/following-screen.test.tsx.
+   */
+  label: string | null;
   body: string | null;
   media_url: string | null;
   poster_url: string | null;
@@ -184,7 +192,10 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
       ]);
 
       const hItems: RailItem[] = followedHorses
-        .map((h) => ({ id: h.id, name: h.racing_name || h.display_name, photoUrl: h.photo_url ? horsePhotos.get(h.photo_url) ?? null : null, href: `/horses/${h.id}` }));
+        // Formatted per side of the `||`, not around it: a `racing_name` that is
+        // nothing but "(AUS)" formats to "" and must then fall through to the
+        // display name rather than rendering a blank row (ENG-761 item 6).
+        .map((h) => ({ id: h.id, name: displayHorseNameOrEmpty(h.racing_name) || displayHorseNameOrEmpty(h.display_name), photoUrl: h.photo_url ? horsePhotos.get(h.photo_url) ?? null : null, href: `/horses/${h.id}` }));
       const tItems: RailItem[] = followedTrainers
         .map((t) => ({ id: t.id, name: t.display_name || t.name, photoUrl: t.photo_url ? trainerPhotos.get(t.photo_url) ?? null : null, href: `/trainers/${t.id}` }));
       setHorses(hItems);
@@ -253,13 +264,16 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
         return {
           id: r.id,
           horseId: r.horse_id,
-          horseName: horse?.display_name ?? "Unknown horse",
+          // Title-cased and (AUS)-stripped for display; the raw value stays on
+          // the row for keys and comparisons (ENG-761 item 6).
+          horseName: displayHorseNameOrEmpty(horse?.display_name) || "Unknown horse",
           trainerName: trainer?.name ?? "Stablepass",
           trainerId: trainer?.id ?? null,
           stableName: trainer?.stable_name ?? null,
           stableLocation: trainer?.location ?? null,
           postedAgo: relativeTime(r.published_at),
           title: r.title,
+          label: r.label,
           body: r.body,
           // `aspectRatio` is RAW here. `resolveAspect` (post-card) owns the clamp,
           // so exactly one place decides what an unusable value becomes. The
@@ -368,10 +382,24 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
     }
   }
 
-  // No pill until the follow read has answered, and none for a trainer already
-  // followed — there is no "Following" variant.
-  function canFollowTrainer(post: FeedPost): boolean {
-    return followedTrainerIds !== null && Boolean(post.trainerId) && !followedTrainerIds.has(post.trainerId!);
+  /**
+   * ROUND 6 / ENG-761 item 4 — the Following screen offers NO Follow pill, ever.
+   *
+   * This is the whole point of the screen: everything in it is here BECAUSE the
+   * viewer already follows it, so a "Follow" pill is either a no-op or, in the
+   * edge cases where an unfollowed trainer's post is surfaced here, an offer
+   * that contradicts the tab it is sitting in. Explore is where you follow
+   * things; Following is where you read them.
+   *
+   * Deliberately still a function returning a constant, and deliberately NOT
+   * unified with the identical-looking helper in `explore-feed.tsx`: the two
+   * screens' pill behaviour is now different BY DESIGN, and the duplication is
+   * what keeps them independently changeable. Merging them into a shared helper
+   * would re-couple exactly what this ticket separated (locked open question,
+   * ENG-761). If a third screen ever needs the Explore behaviour, copy Explore's.
+   */
+  function canFollowTrainer(): boolean {
+    return false;
   }
 
   async function play(postId: string) {
@@ -457,7 +485,11 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
                   }
                   return (
                     <Fragment key={p.id}>
-                      <PostCard post={p} viewerId={viewerId} onReact={(e) => react(p.id, e)} onBookmark={() => bookmark(p.id)} onPlay={() => play(p.id)} canFollow={canFollowTrainer(p)} onFollow={() => p.trainerId && follow(p.trainerId)} />
+                      {/* No `canFollow`/`onFollow`: the pill is gone from this
+                          screen entirely (ENG-761 item 4). `canFollow`
+                          defaults to false on PostCard, so the absence here
+                          IS the decision — see `canFollowTrainer` above. */}
+                      <PostCard post={p} viewerId={viewerId} onReact={(e) => react(p.id, e)} onBookmark={() => bookmark(p.id)} onPlay={() => play(p.id)} />
                       {playError[p.id] && (
                         <p role="alert" style={{ color: "var(--red)", marginTop: -16, marginBottom: 24, fontSize: 13.5 }}>Couldn&rsquo;t load the video.</p>
                       )}
