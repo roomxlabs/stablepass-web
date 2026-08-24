@@ -315,18 +315,63 @@ describe("guardrail — marketing's ONLY Supabase surface", () => {
     expect(files).toEqual(["trainers.ts"]);
   });
 
+  /**
+   * The relation check runs on the RAW source as well as the stripped one, and
+   * that is not belt-and-braces — it closes a hole I put there and then proved.
+   *
+   * `codeOf()` strips `/* ... *\/` pairs. Open one INSIDE A STRING LITERAL and the
+   * stripper runs to the next real comment terminator, taking live code with it:
+   *
+   *     const decoy = "/*";
+   *     await supabase.from("trainer").select("*");
+   *     /* an ordinary comment, which closes the fake one *\/
+   *
+   * strips down to `const decoy = "` — and a `.from("trainer")` that the runtime
+   * would happily execute becomes invisible to a guard that only reads the
+   * stripped text. Measured, not theorised. ENG-600's nav exemption was
+   * defeatable in exactly this shape, so this one gets closed on the way in.
+   *
+   * Raw is the authority for `.from(`, which no comment in this module contains;
+   * stripped stays the authority for the bare word `trainer`, which the module's
+   * own header necessarily discusses.
+   */
+  const rawSource = readFileSync(READ_MODULE, "utf8");
+
   it("names no relation but the view — never `trainer`, never `trainer_contact`", () => {
-    // `.from("...")` is the only way a relation is addressed through the client.
-    const relations = [...source.matchAll(/\.from\(\s*([A-Za-z_"'`][^)]*)\)/g)].map((m) => m[1]!.trim());
+    const relationsIn = (text: string) =>
+      [...text.matchAll(/\.from\(\s*([A-Za-z_"'`][^)]*)\)/g)].map((m) => m[1]!.trim());
+
     // Storage buckets go through the same call shape, so allow the one bucket.
     const allowed = new Set(["PUBLIC_TRAINER_VIEW", "MARKETING_PHOTO_BUCKET"]);
-    for (const relation of relations) {
+    for (const relation of relationsIn(rawSource)) {
       expect(allowed.has(relation), `unexpected .from(${relation})`).toBe(true);
     }
 
+    // Nothing may hide in, or behind, a comment: every `.from(` in the file must
+    // survive stripping. If these ever disagree, something is concealed.
+    expect(relationsIn(rawSource), "a .from( call is hidden from the stripped guard").toEqual(
+      relationsIn(source),
+    );
+
+    expect(rawSource).not.toMatch(/\.from\(\s*["'`]trainer["'`]/);
+    expect(rawSource).not.toMatch(/trainer_contact\s*\(/);
     expect(source).not.toMatch(/["'`]trainer["'`]/);
     expect(source).not.toMatch(/trainer_contact/);
     expect(source).toMatch(/PUBLIC_TRAINER_VIEW = "public_trainer"/);
+  });
+
+  it("cannot be blinded by a block comment opened inside a string", () => {
+    // The attack above, run against the real helper, so the guard's own
+    // weakness stays covered rather than merely documented.
+    const smuggled = ['const decoy = "/*";', 'await supabase.from("trainer").select("*");', "/* closes it */"].join(
+      "\n",
+    );
+
+    const hiddenFromStripped = !/\.from\(\s*"trainer"\s*\)/.test(codeOf(smuggled));
+    const visibleInRaw = /\.from\(\s*"trainer"\s*\)/.test(smuggled);
+
+    expect(hiddenFromStripped, "codeOf no longer hides this — simplify the guard").toBe(true);
+    expect(visibleInRaw, "the raw check is what catches it, and it must").toBe(true);
   });
 
   it("never reaches for a service-role key or a signed URL", () => {
