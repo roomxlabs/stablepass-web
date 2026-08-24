@@ -316,8 +316,19 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
   const mediaBox = mediaBoxProps(post.media.aspectRatio, { video: isVideo });
   // Empty unless this post genuinely has 2+ photos, which is what keeps every
   // pre-round-6 card on exactly the path it took before.
+  //
+  // THIS CARD IS THE ONLY MOUNT. ENG-762's Surface also names
+  // `app/(member)/posts/[id]` as a post-detail mount; NO SUCH ROUTE EXISTS in
+  // this app — `app/(member)` has explore, following, saved, horses, horses/[id],
+  // trainers, trainers/[id], account and checkout, and `app/api/posts/[id]/playback`
+  // is an API route, not a page. ENG-761 recorded the same thing. Building one
+  // would be a new member screen with no confirmed mockup, which `.rx/guardrails.md`
+  // makes `needs-spec`, not part of this ticket. `PhotoCarousel` is shared, so
+  // the day that screen exists it mounts in one line. Flagged on the issue.
   const photos = carouselPhotos(post);
-  const isCarousel = photos.length > 1;
+  // `carouselPhotos` already returns [] below 2, so this is the same condition
+  // read back — kept as the single name the JSX branches on.
+  const isCarousel = photos.length > 0;
 
   return (
     <article className="post-web">

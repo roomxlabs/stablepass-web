@@ -23,6 +23,26 @@ import type { PostPhoto } from "@/components/types";
  *    not landed. Isolated in its own query, the same failure costs only the
  *    carousel: `readPostPhotos` returns an empty map, every card falls back to
  *    `post.media_url`, and the feed renders exactly as it does today.
+ *
+ * WHERE THIS RUNS — stated plainly, because the ticket's prose says otherwise.
+ * ENG-762 describes the BFF signing "server-side per house pattern". It does not:
+ * all five call sites are `"use client"` islands passing `supabaseBrowser()`, so
+ * both the select AND the signing happen in the browser, and the bare object path
+ * (`<postId>/original`) is visible to browser JS in between. That is the EXISTING
+ * house pattern — `lib/storage/photos.ts` is already called exactly this way for
+ * `post.media_url` and `poster_url` on every one of those screens — so this
+ * follows it rather than inventing a second mechanism beside it.
+ *
+ * The boundary is RLS, not secrecy of the path, and it was checked against the
+ * running stack rather than assumed:
+ *   - bucket `post-media` is PRIVATE, so an unsigned path fetches nothing;
+ *   - `post_media_select_sub` requires the parent post be `status = 'published'`
+ *     AND `has_content_access(auth.uid())`;
+ *   - `storage.objects` policy `media gated read` requires
+ *     `has_content_access(auth.uid()) OR is_admin(auth.uid())` to mint a URL.
+ * A lapsed or signed-out viewer can therefore neither read the rows nor sign a
+ * path. What must never happen is a raw path reaching an `<img src>` in place of
+ * a signed URL — that is what the unit tests and the e2e actually assert.
  */
 
 /**

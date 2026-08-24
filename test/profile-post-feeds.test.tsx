@@ -24,6 +24,8 @@ vi.mock("@/lib/supabase/client", () => ({ supabaseBrowser: () => ({ from: fromMo
 // (lib/post-media.ts). `photosMock` starts empty (reset in the beforeEach
 // below) so every PRE-EXISTING test in this file — none of which touches it
 // — renders exactly as it did before ENG-762.
+import { readPostPhotos } from "@/lib/post-media";
+
 let photosMock = new Map<string, { url: string | null; sort: number }[]>();
 
 vi.mock("@/lib/post-media", () => ({
@@ -61,6 +63,7 @@ const TEXT_ROW = {
 beforeEach(() => {
   feedRows = [TEXT_ROW];
   photosMock = new Map();
+  vi.mocked(readPostPhotos).mockClear();
   fromMock.mockReset();
   fromMock.mockImplementation(() => chainable({ data: [], error: null }));
   global.fetch = vi.fn((input: string | URL) => {
@@ -150,6 +153,13 @@ describe("HorsePosts — ENG-613 parity on the horse profile", () => {
     expect(screen.getAllByTestId("photo-slide")).toHaveLength(3);
     expect(screen.getByTestId("photo-dots").querySelectorAll("button")).toHaveLength(3);
     expect(screen.getByTestId("media-photo-count")).toHaveTextContent("1/3");
+
+    // WHICH IDS the screen actually asked for. Without this the call could be
+    // `readPostPhotos(sb, [])` and every assertion above would still pass — the
+    // mock ignores its arguments — while the carousel died on every real feed.
+    // That is the ENG-772 silent-drop class moved one layer up, and the e2e is
+    // explicitly not the guard for `app/(member)/**` reads (.rx/gotchas.md).
+    expect(vi.mocked(readPostPhotos)).toHaveBeenCalledWith(expect.anything(), ["p1"]);
   });
 
   it("renders no carousel for a single-photo post (ENG-762)", async () => {
@@ -230,6 +240,13 @@ describe("TrainerPosts — ENG-613 parity on the trainer profile", () => {
     expect(screen.getAllByTestId("photo-slide")).toHaveLength(3);
     expect(screen.getByTestId("photo-dots").querySelectorAll("button")).toHaveLength(3);
     expect(screen.getByTestId("media-photo-count")).toHaveTextContent("1/3");
+
+    // WHICH IDS the screen actually asked for. Without this the call could be
+    // `readPostPhotos(sb, [])` and every assertion above would still pass — the
+    // mock ignores its arguments — while the carousel died on every real feed.
+    // That is the ENG-772 silent-drop class moved one layer up, and the e2e is
+    // explicitly not the guard for `app/(member)/**` reads (.rx/gotchas.md).
+    expect(vi.mocked(readPostPhotos)).toHaveBeenCalledWith(expect.anything(), ["p1"]);
   });
 
   it("renders no carousel for a single-photo post (ENG-762)", async () => {

@@ -62,8 +62,15 @@ async function uploadSlide(uploader: BucketUploader, path: string, svg: string):
 const SLIDES = [
   { bg: "#1A1A1A", fg: "#FAF7F2" },
   { bg: "#F1ECE3", fg: "#1A1A1A" },
-  // Brand green: the hostile ground for a brand-green active dot, which is why
-  // the active dot carries a white rim. Worth having in the evidence.
+  // Brand green — deliberately the WORST case, and it is here to document a
+  // known limitation rather than a fix. `--brand-green` is #285D50, so on this
+  // frame the brand-green active dot is invisible and the member sees only the
+  // grey inactive dots. An earlier revision put a white rim on the active dot
+  // to solve exactly this; it was REMOVED to match mobile's R16, which draws a
+  // flat green dot. Both tickets specify brand green, so fixing it on web alone
+  // would be the cross-platform divergence this parity ticket exists to
+  // prevent. Raised on ENG-762 and ENG-757 instead. The screenshot this fixture
+  // produces (eng-762-03-card-last.png) IS the evidence for that.
   { bg: "#285D50", fg: "#FAF7F2" },
 ];
 
@@ -111,7 +118,12 @@ test("ENG-762 a 3-photo post renders dots + an n/m count on the horse profile fe
       body: "Three from the course proper this morning.",
       label: "Trackwork",
       published_at: new Date().toISOString(),
-      watermarked: false,
+      // WATERMARKED ON PURPOSE. `.post-overlay` is a full-bleed `inset: 0`
+      // layer sitting between the finger and the scroll track, so it is the one
+      // thing that could swallow the swipe or paint over the dots. It should
+      // not (it is `pointer-events: none` at `z-index: 2`, and the dots take
+      // `z-index: 3`) — but that is CSS reasoning, and this makes it evidence.
+      watermarked: true,
       like_count: 4,
     })
     .select("id")

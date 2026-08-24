@@ -64,6 +64,8 @@ vi.mock("@/lib/supabase/client", () => ({
 // starts empty (reset below) so every PRE-EXISTING test in this file — none
 // of which touches it — renders exactly as it did before ENG-762: 0 rows is
 // the single-photo path, unchanged.
+import { readPostPhotos } from "@/lib/post-media";
+
 let photosMock = new Map<string, { url: string | null; sort: number }[]>();
 
 vi.mock("@/lib/post-media", () => ({
@@ -72,6 +74,7 @@ vi.mock("@/lib/post-media", () => ({
 
 beforeEach(() => {
   photosMock = new Map();
+  vi.mocked(readPostPhotos).mockClear();
 });
 
 function fetchImpl(feedStatus: 200 | 402) {
@@ -533,6 +536,13 @@ describe("ExploreFeed — ENG-762 multi-photo carousel", () => {
     expect(screen.getAllByTestId("photo-slide")).toHaveLength(3);
     expect(screen.getByTestId("photo-dots").querySelectorAll("button")).toHaveLength(3);
     expect(screen.getByTestId("media-photo-count")).toHaveTextContent("1/3");
+
+    // WHICH IDS the screen actually asked for. Without this the call could be
+    // `readPostPhotos(sb, [])` and every assertion above would still pass — the
+    // mock ignores its arguments — while the carousel died on every real feed.
+    // That is the ENG-772 silent-drop class moved one layer up, and the e2e is
+    // explicitly not the guard for `app/(member)/**` reads (.rx/gotchas.md).
+    expect(vi.mocked(readPostPhotos)).toHaveBeenCalledWith(expect.anything(), ["p1", "p2"]);
   });
 
   it("renders no carousel for a single-photo post (ENG-762)", async () => {

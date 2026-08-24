@@ -251,9 +251,11 @@ describe("readPostPhotos — the mapping is genuinely exercised", () => {
     const out = await readPostPhotos(sb, ["p1"]);
     const url = out.get("p1")?.[0]?.url;
     expect(url).toBe("https://signed/p1?token=abc");
-    // A storage PATH leaking to the browser instead of a signed URL is the
-    // guardrail failure, so it gets its own assertion rather than riding on the
-    // equality above.
+    // Precisely what this proves: the value handed to the CARD is the signed
+    // URL, never the object path. It does NOT prove "no path reaches the
+    // browser" — the read is a client island, so the path is visible to browser
+    // JS one step earlier by design (see the header of lib/post-media.ts). The
+    // failure being guarded here is a path ending up in an `<img src>`.
     expect(url).not.toBe("posts/p1.jpg");
     expect(url).toContain("token=");
   });

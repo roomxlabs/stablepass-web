@@ -3,13 +3,20 @@
 // photo-carousel — the multi-photo media layer for a post (round 6 / ENG-762),
 // the web half of mobile's R16 (ENG-757). It fills the card's EXISTING
 // `.post-media-web` box rather than drawing its own: one aspect box per post, so
-// every photo letterboxes into the same frame and nothing jumps between slides.
+// the card never changes height between slides. Note the slides are `object-fit:
+// cover` (the stylesheet's rule for any image in that box), so a photo whose
+// ratio differs from the post's is CROPPED to fill, not letterboxed.
 //
 // NO LIBRARY, by decision on the ticket. Paging is CSS `scroll-snap`, which
 // means the core affordance — swipe on touch, drag/scroll on trackpad, the
-// native scrollbar, and arrow keys once the track has focus — costs zero JS and
-// survives a hydration failure. JS adds exactly two things on top: the dots as
-// clickable shortcuts, and the `n/m` counter tracking which slide you are on.
+// native scrollbar, and arrow keys once the track has focus — costs zero JS.
+// JS adds the dots as clickable shortcuts and the `n/m` counter.
+//
+// Without JS the photos are still all reachable by scrolling, but the indicator
+// does not follow: the dots render as inert buttons and the chip stays on "1/n".
+// So no-JS degrades to a WRONG indicator, not to no indicator. Acceptable here
+// because this is the authenticated member app, which needs JS regardless; it
+// is the marketing site that has the JS-blocked requirement.
 import { useCallback, useRef, useState } from "react";
 import type { PostPhoto } from "./types";
 
