@@ -56,7 +56,11 @@ test.describe("marketing shell", () => {
 
     await expect(page.locator("nav.nav")).toBeVisible();
     await expect(page.locator("footer")).toBeVisible();
-    await expect(page.getByRole("link", { name: "Join stablepass." })).toBeVisible();
+    // ENG-729: the nav's leading action is mode-driven. Pre-launch the visible
+    // one is "Join waitlist"; "Join stablepass." is still in the DOM behind
+    // `data-cta-mode`, which the funnel spec asserts. Named rather than matched
+    // by class so this fails loudly if the button ever ships unlabelled.
+    await expect(page.getByRole("link", { name: "Join waitlist" })).toBeVisible();
     await expect(page.locator(".foot-col h4")).toHaveText(["Explore", "Support", "Legal"]);
   });
 

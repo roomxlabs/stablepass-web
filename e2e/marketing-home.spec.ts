@@ -90,14 +90,41 @@ test.describe("marketing home", () => {
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("The racing experience made simple.");
   });
 
-  test("every nav anchor scrolls to a real target", async ({ page }) => {
+  test("every nav anchor a visitor can click scrolls to a real, visible target", async ({ page }) => {
     await page.goto("/");
 
-    for (const hash of ["#how", "#app", "#subscription", "#trainers", "#faq", "#top"]) {
+    // ENG-729: derived from what is actually CLICKABLE rather than a fixed list.
+    // In waitlist mode the Subscription entry and the section it targets are
+    // both hidden, and a hardcoded list would either fail on a dead anchor or
+    // have to special-case it by name and stop testing the real invariant —
+    // which is that a link a visitor can see always leads somewhere they can
+    // see. That holds in every mode, so this needs no revisit at switch-back.
+    const hashes = await page
+      .locator('nav.nav a[href^="#"]')
+      .evaluateAll((els) =>
+        els
+          .filter((el) => (el as HTMLElement).offsetParent !== null)
+          .map((el) => el.getAttribute("href")!),
+      );
+
+    expect(hashes.length, "no clickable in-page nav anchors at all").toBeGreaterThan(0);
+    for (const hash of [...new Set(hashes)]) {
       const target = page.locator(hash);
       await expect(target, `${hash} has no target`).toHaveCount(1);
-      await expect(target).toBeVisible();
+      await expect(target, `${hash} is offered but its target is hidden`).toBeVisible();
     }
+  });
+
+  test("hides the Subscription anchor and the section it points at together", async ({ page }) => {
+    // The other half of the test above: pre-launch neither may be reachable, and
+    // both must still EXIST so the launch switch-back stays a one-line change.
+    await page.goto("/");
+
+    const anchor = page.locator('nav.nav a[href="#subscription"]');
+    await expect(anchor).toHaveCount(1);
+    await expect(anchor).toBeHidden();
+    await expect(page.locator("#subscription")).toHaveCount(1);
+    await expect(page.locator("#subscription")).toBeHidden();
   });
 
   test("shows all nineteen trainer cards with their photographs", async ({ page }) => {
