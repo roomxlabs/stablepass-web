@@ -8,10 +8,15 @@ import { useId, useState, useSyncExternalStore } from "react";
  * Lives OUTSIDE `sections/` on the `app-screens-carousel.tsx` precedent: it is a
  * client component the sections mount, not a section itself. W3 (ENG-729) mounts
  * it into the hero and the CTA band and sanctions whatever CSS it needs; this
- * ticket ships the component and its behaviour only. Every class name below is
- * either one that already exists in `marketing.css` (`btn`, `btn-green`) or a
- * `wl-*` hook W3 will style — no rule is added to that stylesheet here, because
- * it is diffed rule-for-rule against the mockup.
+ * ticket ships the component and its behaviour only.
+ *
+ * It adds NO rule to `marketing.css` (that file is diffed rule-for-rule against
+ * the mockup, so a new rule fails a test until W3 sanctions it). Instead it
+ * reuses `.field` / `.field label` / `.field input`, which are already in the
+ * sheet and already sanctioned — ported with the mockup's contact form and left
+ * unused when that form was removed. So this renders correctly today with zero
+ * CSS changes. The `wl-*` classes carry no rules; they exist purely as hooks for
+ * W3.
  *
  * ── PROGRESSIVE ENHANCEMENT IS THE POINT ─────────────────────────────────────
  * This renders a REAL `<form method="post" action="/api/waitlist">`. With
@@ -51,20 +56,44 @@ const MESSAGES = {
 type Status = "idle" | "submitting" | "success" | "error";
 
 /**
- * Off-screen but still announced. Inline rather than a class because
- * `marketing.css` is diffed rule-for-rule against the mockup and this ticket may
- * not add a rule to it; the same reason the honeypot is hidden this way.
+ * The honeypot's name. NOT `company`, which is what the ticket and the epic spec
+ * suggested.
+ *
+ * `name="company"` next to a `Company` label is Chrome Autofill's canonical
+ * COMPANY_NAME shape, and Chrome deliberately ignores `autocomplete="off"` for
+ * address-profile autofill — so accepting a suggestion in the email field
+ * (same profile section) can fill the decoy too. That would silently discard a
+ * REAL signup: the route drops the submission and still answers "You're on the
+ * list", with nothing logged and a retry reproducing it. For a feature whose
+ * entire value is capturing the address, an undetectable silent-drop path is a
+ * worse failure than letting a bot through.
+ *
+ * A neutral name with no autofill semantics avoids the classification entirely.
+ * The route still honours `company` as well, so the ticket's stated contract
+ * remains true for any caller built against it.
  */
-const VISUALLY_HIDDEN = {
+const HONEYPOT_FIELD = "hp_ref";
+
+/**
+ * Off-screen, applied to the INPUT itself rather than a wrapper.
+ *
+ * A wrapper that merely clips still leaves the input with a normal bounding box,
+ * which is exactly what autofill's visibility heuristic looks at. Positioning
+ * the field itself far off-screen is the classic honeypot placement and is
+ * skipped by autofill while still being present for a naive bot that fills
+ * every input it parses.
+ *
+ * Inline rather than a class because `marketing.css` is diffed rule-for-rule
+ * against the mockup and this ticket may not add a rule to it.
+ */
+const OFFSCREEN = {
   position: "absolute",
+  left: -9999,
+  top: "auto",
   width: 1,
   height: 1,
-  margin: -1,
-  padding: 0,
+  opacity: 0,
   overflow: "hidden",
-  clip: "rect(0 0 0 0)",
-  whiteSpace: "nowrap",
-  border: 0,
 } as const;
 
 export type WaitlistFormProps = {
@@ -98,15 +127,12 @@ function stateFromQuery(
  * server snapshot is `null`, so the first client render matches the server HTML
  * byte for byte and there is no hydration mismatch — this route group has
  * already been bitten by one (see the `.js` flag note in `.rx/gotchas.md`).
- * React then re-renders with the client snapshot. Doing it with an effect works
- * too, but it is a cascading render that `react-hooks/set-state-in-effect`
- * rightly flags, and the derived-value form below is simply the honest shape of
- * this: the state is DERIVED from the URL, never owned.
+ * React then re-renders with the client snapshot.
  *
  * `subscribe` is a no-op returning a no-op: this reads the LANDING url, which
- * cannot change under us without a navigation that remounts the component.
- * The snapshot returns a string or null — a primitive — so React's
- * "getSnapshot should be cached" check is satisfied by value equality.
+ * cannot change under us without a navigation that remounts the component. The
+ * snapshot returns a string or null — a primitive — so React's "getSnapshot
+ * should be cached" check is satisfied by value equality.
  */
 const NEVER_CHANGES = () => () => {};
 const SERVER_SNAPSHOT = () => null;
@@ -120,15 +146,13 @@ function useQueryParam(name: string): string | null {
 }
 
 export default function WaitlistForm({ initialJoined, initialReason }: WaitlistFormProps = {}) {
-  const [email, setEmail] = useState("");
   const emailId = useId();
 
   /**
    * What THIS submission did, once the visitor has submitted in-page. `null`
    * until then, which is what lets the URL-derived state below show through
    * after a native round-trip — and what stops it clobbering an inline result
-   * afterwards. One nullable piece of state instead of two that must be kept
-   * consistent with each other.
+   * afterwards.
    */
   const [submitted, setSubmitted] = useState<{ status: Status; message: string } | null>(null);
 
@@ -142,16 +166,32 @@ export default function WaitlistForm({ initialJoined, initialReason }: WaitlistF
 
   const { status, message } = submitted ?? fromQuery ?? { status: "idle" as Status, message: "" };
 
+  const submitting = status === "submitting";
+
+  /**
+   * Replace the fields with the confirmation ONLY for an inline submit.
+   *
+   * Deliberately not for the URL-derived success. `?joined=1` persists across a
+   * reload, a back-navigation and a shared link, so keying the swap off it would
+   * leave `stablepass.co/?joined=1` showing a form with no input and no submit
+   * button — permanently, to anyone who opened that link, whether or not they
+   * ever joined. The inline case has no such persistence: it is scoped to this
+   * page view, where hiding an armed submit button genuinely does prevent a
+   * second identical POST.
+   */
+  const joinedInline = submitted?.status === "success";
+  const succeeded = status === "success";
+
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (status === "submitting") return;
+    if (submitting) return;
 
     // Read the fields off the form itself, not off React state — see the note
     // about the honeypot at the top of this file.
     const data = new FormData(event.currentTarget);
     const payload = {
       email: String(data.get("email") ?? ""),
-      company: String(data.get("company") ?? ""),
+      [HONEYPOT_FIELD]: String(data.get(HONEYPOT_FIELD) ?? ""),
     };
 
     setSubmitted({ status: "submitting", message: "" });
@@ -182,9 +222,6 @@ export default function WaitlistForm({ initialJoined, initialReason }: WaitlistF
     }
   }
 
-  const submitting = status === "submitting";
-  const joined = status === "success";
-
   return (
     <form
       className="wl-form"
@@ -193,43 +230,48 @@ export default function WaitlistForm({ initialJoined, initialReason }: WaitlistF
       onSubmit={onSubmit}
       aria-describedby={`${emailId}-status`}
     >
-      {/* The success state replaces the fields: there is nothing left to do, and
-          leaving an armed submit button invites a second identical POST. */}
-      {!joined && (
+      {!joinedInline && (
         <>
-          <label htmlFor={emailId} style={VISUALLY_HIDDEN}>
-            Email address
-          </label>
-          <input
-            id={emailId}
-            className="wl-input"
-            type="email"
-            name="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            placeholder="you@example.com"
-            autoComplete="email"
-            maxLength={254}
-            required
-            disabled={submitting}
-            aria-invalid={status === "error" || undefined}
-          />
-
-          {/* The honeypot. Hidden from sight and from assistive tech, skipped by
-              the tab order, and never autofilled — so no human fills it, and a
-              submission that does is a bot. The route answers those with the
-              ordinary success body and writes nothing. This is the ONLY abuse
-              control in v1 (rate limiting was scoped out), so it is not
-              decoration. `company` because form-filling bots reach for it. */}
-          <div style={VISUALLY_HIDDEN} aria-hidden="true">
-            <label htmlFor={`${emailId}-company`}>Company</label>
+          {/* `.field` is an existing, already-sanctioned marketing rule — see
+              the note at the top. No new CSS ships with this ticket. */}
+          <div className="field wl-field">
+            <label htmlFor={emailId}>Email address</label>
+            {/* UNCONTROLLED on purpose. The submit path reads FormData, so React
+                state would be a second copy of the value that nothing consumes —
+                and a controlled input clobbers anything typed before hydration
+                with its own empty `value`, which on a slow phone is a real way to
+                lose a keystroke. Leaving the DOM to own it also means the typed
+                address survives an error render for free. */}
             <input
-              id={`${emailId}-company`}
+              id={emailId}
+              className="wl-input"
+              type="email"
+              name="email"
+              placeholder="you@example.com"
+              autoComplete="email"
+              maxLength={254}
+              required
+              disabled={submitting}
+              aria-invalid={status === "error" || undefined}
+            />
+          </div>
+
+          {/* The honeypot. No label and a semantically neutral name, so browser
+              autofill never classifies it; positioned off-screen on the input
+              itself, so autofill's visibility check skips it; out of the tab
+              order. A submission that fills it is a bot, and the route answers
+              those with the ordinary success body and writes nothing. This is
+              the ONLY abuse control in v1 (rate limiting was scoped out), so it
+              is not decoration. */}
+          <div aria-hidden="true">
+            <input
+              id={`${emailId}-hp`}
               type="text"
-              name="company"
+              name={HONEYPOT_FIELD}
               defaultValue=""
               tabIndex={-1}
               autoComplete="off"
+              style={OFFSCREEN}
             />
           </div>
 
@@ -244,7 +286,7 @@ export default function WaitlistForm({ initialJoined, initialReason }: WaitlistF
           screen readers watch a region they already know about. */}
       <p
         id={`${emailId}-status`}
-        className={message ? `wl-msg wl-msg-${joined ? "success" : "error"}` : "wl-msg"}
+        className={message ? `wl-msg wl-msg-${succeeded ? "success" : "error"}` : "wl-msg"}
         role="status"
         aria-live="polite"
       >

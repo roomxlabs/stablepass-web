@@ -238,8 +238,35 @@ describe("marketing guardrails — the contact path really is a mailto", () => {
     for (const target of targets) {
       expect(target, `fetch target ${target} is not our own route`).toBe("/api/waitlist");
     }
-    // And no absolute origin anywhere in the file, however it is spelled.
-    expect(/https?:\/\//.test(body), "waitlist-form.tsx names an absolute origin").toBe(false);
+
+    // The literal-string regex above only inspects fetch(...) calls whose
+    // FIRST argument is a quoted string literal — fetch(SOME_IDENT) would
+    // silently escape it, since a bare identifier never matches
+    // `"[^"]*"|'[^']*'|`[^`]*``. Pin that every `fetch(` in the file is
+    // immediately followed by a quote character, so a non-literal target
+    // (which the loop above cannot see at all) fails this guard instead of
+    // passing it by omission.
+    const fetchCalls = [...body.matchAll(/\bfetch\s*\(\s*(\S)/g)].map((m) => m[1]);
+    expect(fetchCalls.length, "no fetch( call found to check").toBeGreaterThan(0);
+    for (const firstChar of fetchCalls) {
+      expect(['"', "'", "`"], `fetch( call not opened with a string literal: ${firstChar}`).toContain(
+        firstChar,
+      );
+    }
+
+    // And no absolute origin anywhere in the file, however it is spelled —
+    // but stripped of comments first. The bare check bans "http://" or
+    // "https://" ANYWHERE in the source, including inside a doc comment that
+    // merely explains the rule (e.g. this very file's own comments quote
+    // "http://" while describing what is banned) — a landmine that fails the
+    // guard for a reason that has nothing to do with the shipped behaviour it
+    // is meant to police.
+    const withoutComments = body
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+    expect(/https?:\/\//.test(withoutComments), "waitlist-form.tsx names an absolute origin").toBe(
+      false,
+    );
   });
 
   /**

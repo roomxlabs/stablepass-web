@@ -13,10 +13,15 @@ Grilled 24 Aug 2026. Base branch for all web slices: `feature/waitlist-v1` (seed
 6. Copy: "Join the waitlist to enable your 30-day free trial" / header button "Join waitlist".
 
 ## W2 — /api/waitlist + WaitlistForm (ENG-726)
-- `app/api/waitlist/route.ts` (new), modelled on `app/api/auth/signup/route.ts`: anon `supabaseServer()` client, envelope via `lib/api/envelope.ts`. Accepts JSON AND form-encoded. 201 joined (insert, duplicate, honeypot), 400 validation_failed (incl. DB 23514), 500 waitlist_failed, 303 branches for native form posts. Normalise `email.trim().toLowerCase()` before upsert (`onConflict: "email"`, `ignoreDuplicates: true`, no `.select()`).
+- `app/api/waitlist/route.ts` (new). **CORRECTED 24 Aug after ENG-723 landed — the three values below superseded what this spec originally said.** The authoritative contract is `stablepass-be docs/specs/api-contract.md` § Waitlist ("What the route must implement (ENG-726)"):
+  - **Idiom: a bare `.insert({ email })`.** NOT `.upsert(...)` (originally specified here). ENG-723 measured that a targeted `ON CONFLICT` arbiter needs SELECT visibility `anon` must never have on this table, so the upsert `42501`s on EVERY insert, not just duplicates; `onConflict: "email"` additionally `42P10`s because the unique index is an expression index on `lower(email)`. Never `.select()` either — it compiles to `INSERT … RETURNING` and hits the same wall. Duplicates arrive as `23505` and the route maps them to the success response.
+  - **Success is `200 {data:{ok:true}}`**, not `201 {data:{joined:true}}`.
+  - **Validation error code is `invalid_email`**, not `validation_failed`. The DB CHECK (`23514`) returns the byte-identical body, so neither becomes an enumeration oracle.
+  - Cookie-free anon client (`createServerClient` with a no-op cookie adapter), NOT `supabaseServer()` — the route must run as `anon`, and must never write auth cookies on the marketing origin. Same shape as W4's trainer read. Envelope via `lib/api/envelope.ts`. Accepts JSON AND form-encoded. 500 `waitlist_failed`; 303 branches for native form posts. Normalise `email` (NFKC, strip zero-width, trim, lowercase) before insert.
 - `middleware.ts`: add `/api/waitlist` to `isSharedPath()` (marketing host 404s all other `/api/*`; pinned test extended, not removed). Local dev does no host routing, so the middleware TEST is the proof, not localhost.
 - `app/(marketing)/waitlist-form.tsx` (new, client component OUTSIDE sections/, the app-screens-carousel precedent): real `<form method="post" action="/api/waitlist">`, hidden honeypot, JS-enhanced inline states, reads `?joined=` after native round-trips.
-- Surface adds: `test/waitlist-route.test.ts`, `test/waitlist-form.test.tsx`, `test/middleware.test.ts` (extend).
+- Surface adds: `test/waitlist-route.test.ts`, `test/waitlist-form.test.tsx`, `test/middleware.test.ts` (extend), `test/marketing-marquee.test.ts` (extend — its "no `fetch(`/no `<form>` under app/(marketing)/" guards were written for the v2.6 fake contact form and must sanction the real waitlist form by name).
+- Honeypot renders as `hp_ref`, not `company`: `name="company"` beside a `Company` label is Chrome Autofill's COMPANY_NAME shape and Chrome ignores `autocomplete="off"` for address profiles, so an autofilled decoy would silently discard a real signup. The route honours BOTH names.
 - Guardrails: no Supabase import under app/(marketing) (existing shell test); no service role anywhere.
 
 ## W3 — waitlist CTA mode (ENG-729, shared-surface: marketing.css)

@@ -348,7 +348,7 @@ describe("the BFF belongs to the app host", () => {
     expect(location).toBeNull();
   });
 
-  it("still 404s every other /api/* on the marketing apex", () => {
+  it("404s every other DOTLESS /api/* on the marketing apex", () => {
     const paths = [
       "/api/me",
       "/api/feed",
@@ -361,6 +361,28 @@ describe("the BFF belongs to the app host", () => {
     ];
     for (const path of paths) {
       expect(run({ host: MARKETING, path }).status, path).toBe(404);
+    }
+  });
+
+  // KNOWN GAP, not a desired property — see the "HONEST CAVEAT" block in
+  // middleware.ts and ENG-773. `isExcludedPath()` (and `config.matcher`) skip
+  // middleware entirely for any path whose last segment contains a dot, so
+  // these never reach the 404 above. `/api/me.json` is harmless (App Router
+  // has no `app/api/me.json/route.ts` to resolve to), but
+  // `/api/trainers/[id]/route.ts` and `/api/horses/[id]/route.ts` happily
+  // capture `abc.json` as `[id]`, so those handlers actually EXECUTE on the
+  // marketing origin — answering 401 rather than 404. That leaks nothing
+  // (cookies are host-only, so the apex carries no session to check), but the
+  // marketing-apex containment claim is not absolute. When ENG-773 closes this
+  // gap by touching `config.matcher`, this test should flip to expecting 404.
+  it("does NOT contain /api/* whose last segment has a dot — known gap, see ENG-773", () => {
+    const paths = ["/api/trainers/abc.json", "/api/horses/abc.json", "/api/me.json"];
+    for (const path of paths) {
+      expect(isExcludedPath(path), path).toBe(true);
+      // A 200 here means middleware passed the request through untouched
+      // (NextResponse.next() is always 200) — i.e. it did NOT 404 it, and did
+      // NOT redirect it away from the marketing origin either.
+      expect(run({ host: MARKETING, path }).status, path).toBe(200);
     }
   });
 

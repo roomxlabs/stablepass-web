@@ -44,25 +44,45 @@ describe("WaitlistForm", () => {
     expect(form!.getAttribute("action")).toBe("/api/waitlist");
   });
 
-  it("renders a required email input named 'email' of type 'email'", () => {
+  it("renders a required email input named 'email' of type 'email', labelled and associated", () => {
     render(<WaitlistForm />);
     const email = emailInput();
 
     expect(email).toHaveAttribute("type", "email");
     expect(email).toHaveAttribute("name", "email");
     expect(email).toBeRequired();
+
+    // The email input now sits inside a visible <label>Email address</label>,
+    // associated via htmlFor/id rather than merely being nearby in the DOM.
+    const label = screen.getByText("Email address");
+    expect(label.tagName).toBe("LABEL");
+    expect(label).toHaveAttribute("for", email.id);
+    expect(label.getAttribute("for")).toBe(email.getAttribute("id"));
   });
 
   it("hides the honeypot from sight, from assistive tech, and from the tab order", async () => {
     const user = userEvent.setup();
     const { container } = render(<WaitlistForm />);
 
-    const honeypot = container.querySelector('input[name="company"]') as HTMLInputElement;
+    // Named hp_ref, NOT company — see HONEYPOT_FIELD in the component. A
+    // `name="company"` next to a `Company` label is Chrome Autofill's
+    // canonical COMPANY_NAME shape, and Chrome ignores `autocomplete="off"`
+    // for address-profile autofill: an autofilled decoy would silently drop a
+    // real signup with no trace. A neutral, unlabelled name sidesteps the
+    // classification entirely.
+    const honeypot = container.querySelector('input[name="hp_ref"]') as HTMLInputElement;
     expect(honeypot).toBeTruthy();
+    expect(container.querySelector('input[name="company"]')).toBeNull();
+    expect(screen.queryByText("Company")).not.toBeInTheDocument();
 
-    const wrapper = honeypot.closest("div");
-    expect(wrapper).toHaveAttribute("aria-hidden", "true");
+    // Off-screen styling is on the INPUT itself, not a wrapper — a wrapper
+    // that merely clips still leaves the input with a normal bounding box,
+    // which is exactly what autofill's visibility heuristic looks at.
+    expect(honeypot.style.position).toBe("absolute");
+    expect(parseInt(honeypot.style.left, 10)).toBeLessThan(-1000);
+
     expect(honeypot.tabIndex).toBe(-1);
+    expect(honeypot).toHaveAttribute("autocomplete", "off");
 
     // Not focusable in the tab order: from the email input, Tab must land on
     // the submit button, never on the honeypot in between.
@@ -80,7 +100,7 @@ describe("WaitlistForm", () => {
     expect(button).toHaveAttribute("type", "submit");
   });
 
-  it("shows the success message and removes the email input and submit button after a successful submit", async () => {
+  it("shows the success message and removes the email input and submit button after an INLINE submit", async () => {
     mockFetch({ ok: true, json: async () => ({ data: { ok: true } }) });
     render(<WaitlistForm />);
 
@@ -131,6 +151,8 @@ describe("WaitlistForm", () => {
     fireEvent.click(submitButton());
 
     expect(await screen.findByText(EMAIL_MESSAGE)).toBeInTheDocument();
+    // The email input is uncontrolled (no value/onChange), so the DOM simply
+    // keeps what was typed — there is nothing in the component to clear it.
     expect(emailInput()).toHaveValue("a@b");
     expect(screen.getByLabelText("Email address")).toBeInTheDocument();
   });
@@ -177,7 +199,8 @@ describe("WaitlistForm", () => {
     // The route negotiates the dialect on this header (route.ts's wantsJson()):
     // without it the request would fall through to the 303 form-dialect branch.
     expect((init?.headers as Record<string, string>).accept).toBe("application/json");
-    expect(JSON.parse(init?.body as string)).toEqual({ email: "a@b.co", company: "" });
+    // hp_ref, not company — the payload key follows the honeypot's new name.
+    expect(JSON.parse(init?.body as string)).toEqual({ email: "a@b.co", hp_ref: "" });
   });
 
   it("reads the honeypot from the DOM, not from React state, so a bot that skips React's events is still caught", async () => {
@@ -190,7 +213,7 @@ describe("WaitlistForm", () => {
     // this is exactly the shape of a bot that writes into a field without
     // dispatching the events React listens for. FormData(form) still picks it
     // up because it reads the live DOM, not React state.
-    const honeypot = container.querySelector('input[name="company"]') as HTMLInputElement;
+    const honeypot = container.querySelector('input[name="hp_ref"]') as HTMLInputElement;
     honeypot.value = "Acme Corp";
 
     fireEvent.click(submitButton());
@@ -198,7 +221,7 @@ describe("WaitlistForm", () => {
     await screen.findByText(SUCCESS_MESSAGE);
 
     const [, init] = fetchMock.mock.calls[0];
-    expect(JSON.parse(init?.body as string)).toEqual({ email: "a@b.co", company: "Acme Corp" });
+    expect(JSON.parse(init?.body as string)).toEqual({ email: "a@b.co", hp_ref: "Acme Corp" });
   });
 
   describe("recovers the outcome of a native round-trip from the URL", () => {
@@ -208,7 +231,13 @@ describe("WaitlistForm", () => {
       window.history.replaceState({}, "", originalUrl);
     });
 
-    it("shows success for ?joined=1 with no fetch call at all", async () => {
+    // URL-derived success is NOT sticky in the same way an inline submit is:
+    // `?joined=1` persists across a reload, a back-navigation and a shared
+    // link, so hiding the input/submit button on it would leave
+    // `stablepass.co/?joined=1` permanently unusable — a form with no way to
+    // join — for anyone who ever opens that URL. The success MESSAGE shows,
+    // but the fields stay.
+    it("shows the success message for ?joined=1, but keeps the form fields in the DOM", async () => {
       window.history.replaceState({}, "", "/?joined=1");
       const fetchMock = vi.fn();
       global.fetch = fetchMock as unknown as typeof fetch;
@@ -217,6 +246,8 @@ describe("WaitlistForm", () => {
 
       expect(await screen.findByText(SUCCESS_MESSAGE)).toBeInTheDocument();
       expect(fetchMock).not.toHaveBeenCalled();
+      expect(screen.getByLabelText("Email address")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Join the waitlist" })).toBeInTheDocument();
     });
 
     it("shows the email-validation message for ?joined=0&reason=email", async () => {
@@ -241,7 +272,7 @@ describe("WaitlistForm", () => {
   // Whoever mounts this from a server component that reads `searchParams` can
   // instead pass the answer straight through as a prop, and it must win on the
   // very first render — before any effect could matter — with no fetch calls.
-  it("renders success on the very first render when initialJoined='1' is passed, with no fetch call", () => {
+  it("renders success (message only, fields remain) on the very first render when initialJoined='1' is passed, with no fetch call", () => {
     const fetchMock = vi.fn();
     global.fetch = fetchMock as unknown as typeof fetch;
 
@@ -249,6 +280,11 @@ describe("WaitlistForm", () => {
 
     expect(screen.getByText(SUCCESS_MESSAGE)).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
+    // Same "not sticky" rule as the URL-derived case above — this prop-driven
+    // path exists precisely so a scripting-off visitor's reload of
+    // `/?joined=1` lands here, and it must not permanently strand them.
+    expect(screen.getByLabelText("Email address")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Join the waitlist" })).toBeInTheDocument();
   });
 
   it("always renders a role=status live region, even when there is no message", () => {

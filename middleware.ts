@@ -121,8 +121,7 @@ function isSharedPath(pathname: string): boolean {
     //
     // EXACT match, never a prefix: this is a hole punched in a deliberate
     // blanket 404, and `/api/waitlist/*` must not widen it. Pinned by
-    // test/middleware.test.ts — `/api/waitlist` 200s on the apex and every
-    // OTHER `/api/*` still 404s there.
+    // test/middleware.test.ts.
     pathname === "/api/waitlist"
   );
 }
@@ -244,8 +243,23 @@ export function middleware(request: NextRequest): NextResponse {
     // cross-origin just fails later and more confusingly.
     //
     // `/api/waitlist` is the single sanctioned exception and has already been
-    // let through by `isSharedPath()` above — it is anonymous and cookie-free.
-    // Nothing else may join it without the same argument.
+    // let through by `isSharedPath()` above — it is anonymous and cookie-free
+    // (its route builds a client with no cookie adapter, so that is true by
+    // construction, not just by intent). Nothing else may join it without the
+    // same argument.
+    //
+    // HONEST CAVEAT — this 404 is NOT total, and the gap predates ENG-726.
+    // `isExcludedPath()` below (and `config.matcher`) skip middleware entirely
+    // for any path whose last segment contains a dot. `/api/me.json` is
+    // harmless because App Router will not resolve it to `app/api/me/route.ts`
+    // — but `/api/trainers/abc.json` DOES resolve, because `[id]` happily
+    // captures `abc.json`, so that handler executes on the marketing origin and
+    // answers 401 rather than 404. It leaks no data (the apex carries no
+    // session — cookies are host-only, which is the whole reason for the
+    // two-domain split), but the containment claim is not absolute. Pinned as
+    // current behaviour in test/middleware.test.ts and raised as follow-up
+    // ENG-773; closing it means touching `config.matcher`, which is the highest
+    // blast radius change in this repo and does not belong in a feature slice.
     if (isApiPath(pathname)) return new NextResponse(null, { status: 404 });
 
     if (pathname === "/") return serve(space);
