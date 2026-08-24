@@ -380,8 +380,14 @@ describe("the .js / .rv reveal contract", () => {
 describe("extracted marketing assets", () => {
   const assets = readdirSync(ASSET_DIR).filter((name) => statSync(path.join(ASSET_DIR, name)).isFile());
 
-  it("holds the 40 unique images the mockup inlined", () => {
-    expect(assets).toHaveLength(40);
+  // ENG-730 moved trainer photographs to the public `marketing-photos` Supabase
+  // bucket, so the 19 placeholder trainer JPGs the mockup extraction produced
+  // became orphaned and were deleted, leaving the 21 non-trainer assets the
+  // mockup inlined. The md5-naming pin below and the both-directions
+  // "referenced === assets" equality further down are unchanged and still
+  // enforced.
+  it("holds the 21 non-trainer images the mockup inlined", () => {
+    expect(assets).toHaveLength(21);
   });
 
   // Every file is named for the md5 of its own bytes, which is what makes
@@ -415,15 +421,83 @@ describe("extracted marketing assets", () => {
   // The md5-8 naming makes the set internally consistent, but internal
   // consistency is all it proves — re-extracting from a NEWER mockup would
   // rename every file and still pass. Only the mockup itself can settle it.
-  it.skipIf(!MOCKUP)("still matches the mockup byte for byte", () => {
-    const result = execFileSync(
-      "python3",
-      [path.join(REPO, "scripts", "extract-marketing-assets.py"), "--check", "--source", MOCKUP!],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    );
-    // --check exits non-zero on any drift, so reaching here is the assertion;
-    // the count guards against a mockup that silently lost images.
-    expect(result.split("\n").filter((line) => line.includes(" ok")).length).toBe(40);
+  /**
+   * ENG-730 — the extraction check, now that nineteen of the mockup's images are
+   * deliberately no longer served.
+   *
+   * `--check` re-decodes all 40 images the mockup inlines and compares each with
+   * `public/marketing/`, exiting non-zero on ANY drift. It used to be enough to
+   * let it exit 0. The trainer photographs now come from the `marketing-photos`
+   * bucket, so their nineteen files were deleted and `--check` reports them
+   * MISSING — a genuine, intended deviation, and exactly the wrong thing to
+   * "fix" by deleting the test.
+   *
+   * So the exit code is no longer the assertion; the report is. This keeps the
+   * whole guarantee and adds one:
+   *
+   *   - every file still on disk is byte-identical to the mockup (zero DIFFERS),
+   *     which is the fidelity claim the check exists for;
+   *   - the missing set is EXACTLY the nineteen trainer photographs, pinned by
+   *     name. A twentieth going missing fails here, and so does one of these
+   *     coming back without the roster coming back with it;
+   *   - nothing strays into the directory that the mockup did not produce.
+   */
+  const REMOVED_BY_ENG730 = [
+    "0660c8a4.jpg",
+    "18df1298.jpg",
+    "1915f688.jpg",
+    "20c2765e.jpg",
+    "24639b61.jpg",
+    "343b9735.jpg",
+    "36035a12.jpg",
+    "3e4a5059.jpg",
+    "5cb95e93.jpg",
+    "633cd55c.jpg",
+    "739bbb9a.jpg",
+    "769aca9c.jpg",
+    "87d29a43.jpg",
+    "990b2787.jpg",
+    "a8e18374.jpg",
+    "b3ef1083.jpg",
+    "bea4d294.jpg",
+    "cc058213.jpg",
+    "d5b44861.jpg",
+  ];
+
+  it.skipIf(!MOCKUP)("still matches the mockup byte for byte, minus ENG-730's removals", () => {
+    let report: string;
+    try {
+      report = execFileSync(
+        "python3",
+        [path.join(REPO, "scripts", "extract-marketing-assets.py"), "--check", "--source", MOCKUP!],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      );
+    } catch (thrown) {
+      // Expected: MISSING files make --check exit 1. The stdout report is still
+      // what we assert against, so read it off the error rather than rethrowing.
+      const failure = thrown as { stdout?: string };
+      report = failure.stdout ?? "";
+      expect(report, "extract-marketing-assets.py produced no report").not.toBe("");
+    }
+
+    const lines = report.split("\n").filter(Boolean);
+    const named = (state: string) =>
+      lines.filter((line) => line.trimEnd().endsWith(` ${state}`)).map((line) => line.trim().split(/\s+/)[1]!);
+
+    // The fidelity claim: nothing on disk has drifted from the mockup's bytes.
+    expect(named("DIFFERS"), "an extracted asset no longer matches the mockup").toEqual([]);
+
+    // The deviation, pinned exactly.
+    expect(named("MISSING").sort()).toEqual([...REMOVED_BY_ENG730].sort());
+    expect(named("ok")).toHaveLength(40 - REMOVED_BY_ENG730.length);
+  });
+
+  it("removed exactly the trainer photographs, and they are really gone", () => {
+    expect(REMOVED_BY_ENG730).toHaveLength(19);
+    expect(new Set(REMOVED_BY_ENG730).size).toBe(19);
+    for (const name of REMOVED_BY_ENG730) {
+      expect(assets, `${name} came back without the roster coming back`).not.toContain(name);
+    }
   });
 });
 

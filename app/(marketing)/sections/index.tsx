@@ -59,11 +59,12 @@ import Why from "./why";
  *
  * ENG-730: `trainers` is the LIVE roster, read from `public_trainer` in
  * `page.tsx` and passed straight through. It is a plain prop, and the read
- * deliberately does NOT happen here: `test/marketing-home.test.tsx` bans both
- * `lib/supabase` and a bare `fetch(` in every file directly under `sections/`,
- * and this file staying a pure composition is what keeps that guard honest.
- * Making it async would also break the copy-fidelity tests, which render it
- * synchronously.
+ * deliberately does NOT happen here: the guardrail sweep in
+ * `test/marketing-home.test.tsx` bans every backend-client import, and any
+ * direct network call, from all files directly under `sections/`. This file
+ * staying a pure composition is what keeps that guard honest rather than
+ * exempted. Making it async would also break the copy-fidelity tests, which
+ * render it synchronously.
  *
  * It defaults to EMPTY, which renders no strip at all. That is the deliberate
  * failure direction — `trainer.marketing_visible` defaults to false, so an empty

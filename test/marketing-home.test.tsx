@@ -6,7 +6,7 @@ import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import HomeSections from "@/app/(marketing)/sections";
-import { TRAINERS } from "@/app/(marketing)/sections/trainers.data";
+import { RETIRED_PLACEHOLDER_STRINGS, TRAINER_FIXTURE } from "@/test/fixtures/trainers";
 
 const REPO = process.cwd();
 const SECTION_DIR = path.join(REPO, "app", "(marketing)", "sections");
@@ -125,8 +125,13 @@ function blocksOf(root: ParentNode, scope: string) {
 }
 
 describe("marketing home — composition", () => {
+  // ENG-730: these assert the page's SHAPE, and the shape is only complete with
+  // a published roster — an empty one legitimately drops the trainer section
+  // (asserted separately under "marketing home — trainers"). So they render a
+  // fixture roster; what they pin is the thirteen blocks and their order, never
+  // which trainers are in them.
   it("renders the twelve sections in the mockup's document order", () => {
-    const { container } = render(<HomeSections />);
+    const { container } = render(<HomeSections trainers={TRAINER_FIXTURE} />);
     const blocks = blocksOf(container, "main");
 
     // 12 sections + the hero's keyword ribbon, which is a sibling of the header.
@@ -149,7 +154,7 @@ describe("marketing home — composition", () => {
   });
 
   it("gives every nav and footer anchor a real target", () => {
-    const { container } = render(<HomeSections />);
+    const { container } = render(<HomeSections trainers={TRAINER_FIXTURE} />);
     for (const id of NAV_ANCHORS) {
       expect(container.querySelector(`#${id}`), `#${id} has no target`).not.toBeNull();
     }
@@ -186,42 +191,89 @@ describe("marketing home — the frozen disclaimer (guardrail #8)", () => {
   });
 });
 
+/**
+ * ENG-730 — THE TRAINER CARVE-OUT, STATED PLAINLY.
+ *
+ * These assertions used to pin the roster itself: nineteen cards, in
+ * `trainers.data.ts` order, each with its hardcoded name, location and
+ * photograph. That was correct while the data lived in the repo. The roster now
+ * comes from the `public_trainer` view, so what appears here is a property of
+ * the DATABASE, and re-pinning it would only pin a fixture to itself.
+ *
+ * What changed is the SOURCE of the roster, not the CONTRACT for rendering one.
+ * So the contract is still asserted, exactly as hard, against a roster this test
+ * supplies: the count, the order, the per-card fields, the initials disc, the
+ * marquee wiring, the empty state. What is deliberately NO LONGER asserted is
+ * WHICH trainers exist and HOW MANY — `test/marketing-trainers.test.tsx` covers
+ * the read that produces them, and the e2e specs went count-agnostic in step.
+ */
 describe("marketing home — trainers", () => {
-  it("renders all nineteen cards from trainers.data.ts, in order", () => {
-    const { container } = render(<HomeSections />);
+  const renderHome = () => render(<HomeSections trainers={TRAINER_FIXTURE} />);
+
+  it("renders one card per trainer it is given, in order", () => {
+    const { container } = renderHome();
     const cards = [...container.querySelectorAll(".tr-card")];
 
-    expect(TRAINERS).toHaveLength(19);
-    expect(cards).toHaveLength(19);
-    expect(cards.map((c) => c.querySelector(".tr-nm")?.textContent)).toEqual(TRAINERS.map((t) => t.name));
+    expect(cards).toHaveLength(TRAINER_FIXTURE.length);
+    expect(cards.map((c) => c.querySelector(".tr-nm")?.textContent)).toEqual(TRAINER_FIXTURE.map((t) => t.name));
   });
 
   it("gives each card the right name, location and photograph", () => {
-    const { container } = render(<HomeSections />);
+    const { container } = renderHome();
     const cards = [...container.querySelectorAll(".tr-card")];
 
     cards.forEach((card, i) => {
-      const trainer = TRAINERS[i];
+      const trainer = TRAINER_FIXTURE[i]!;
       expect(card.querySelector(".tr-nm")?.textContent).toBe(trainer.name);
       expect(card.getAttribute("data-loc")).toBe(trainer.location);
-      expect(card.querySelector(".tr-over .loc")?.textContent).toBe(trainer.location);
 
       const img = card.querySelector("img");
-      expect(img?.getAttribute("src")).toBe(trainer.photo);
-      expect(img?.getAttribute("alt")).toBe(`${trainer.name}, ${trainer.location}`);
+      if (trainer.photo) {
+        expect(img?.getAttribute("src")).toBe(trainer.photo);
+        expect(img?.getAttribute("alt")).toBe(`${trainer.name}, ${trainer.location}`);
+      } else {
+        // The launch-common case: `marketing_photo_path` is null until an admin
+        // copies a photo across, so there is no <img> at all and the initials
+        // disc sitting behind it is simply what shows.
+        expect(img).toBeNull();
+      }
+
+      // A live row may carry none of these, and an empty element still draws its
+      // own spacing, so each is omitted rather than rendered blank.
+      expect(card.querySelector(".tr-over .loc")?.textContent ?? "").toBe(trainer.location);
+      expect(card.querySelector(".tr-over .hz")?.textContent ?? "").toBe(trainer.horses);
+      expect(card.querySelector(".tr-over .bio")?.textContent ?? "").toBe(trainer.bio);
     });
   });
 
-  it("keeps the initials fallback disc behind every photograph", () => {
-    const { container } = render(<HomeSections />);
+  it("keeps the initials fallback disc behind every card", () => {
+    const { container } = renderHome();
     const initials = [...container.querySelectorAll(".tr-card .tr-init")].map((el) => el.textContent);
 
-    expect(initials).toEqual(TRAINERS.map((t) => t.initials));
+    expect(initials).toEqual(TRAINER_FIXTURE.map((t) => t.initials));
   });
 
-  it("declares the trainer count on the section, for W3's marquee", () => {
+  it("declares the REAL count on the section, whatever it is", () => {
+    const { container } = renderHome();
+    expect(container.querySelector("#stable-trainers")?.getAttribute("data-trainer-count")).toBe(
+      String(TRAINER_FIXTURE.length),
+    );
+  });
+
+  it("drops the whole section when nothing is published", () => {
+    // Not hypothetical: `trainer.marketing_visible` defaults to false, so this
+    // is the page every visitor gets until an admin opts stables in (W8).
     const { container } = render(<HomeSections />);
-    expect(container.querySelector("#stable-trainers")?.getAttribute("data-trainer-count")).toBe("19");
+
+    expect(container.querySelector("#stable-trainers")).toBeNull();
+    expect(container.querySelector("#tr-modal")).toBeNull();
+  });
+
+  it("renders none of the retired placeholder copy", () => {
+    const { container } = renderHome();
+    for (const retired of RETIRED_PLACEHOLDER_STRINGS) {
+      expect(container.textContent).not.toContain(retired);
+    }
   });
 
   /**
@@ -231,11 +283,11 @@ describe("marketing home — trainers", () => {
    * `.is-static` is still asserted, and it is the important half: it is what the
    * SERVER renders, and jsdom has no layout, so the marquee measures zero-width
    * cards, declines to clone and leaves the static row exactly as a visitor with
-   * scripting off would receive it. All nineteen cards visible is the client's
+   * scripting off would receive it. Every published card visible is the client's
    * review condition.
    */
   it("adds W3's arrows and modal without disturbing the no-JS static row", () => {
-    const { container } = render(<HomeSections />);
+    const { container } = renderHome();
     const strip = container.querySelector("#stable-trainers")!;
 
     expect(strip.querySelectorAll(".tr-ctrl [data-tr]")).toHaveLength(2);
@@ -311,9 +363,20 @@ describe("marketing home — guardrails", () => {
     }
   });
 
-  it("exposes nothing but name, location and photograph per trainer (guardrail #2)", () => {
-    for (const trainer of TRAINERS) {
-      expect(Object.keys(trainer).sort()).toEqual(["initials", "location", "name", "photo"]);
+  it("exposes nothing but the marketing-safe fields per trainer (guardrail #2)", () => {
+    // ENG-730 widened `Trainer` with `bio` + `horses`, which come from the
+    // marketing-safe view ONLY, and `id`, which is a React key and is never
+    // rendered. The list is still CLOSED: a field added here is a field
+    // published on an anonymous page, so it has to fail this first.
+    for (const trainer of TRAINER_FIXTURE) {
+      expect(Object.keys(trainer).sort()).toEqual(["bio", "horses", "id", "initials", "location", "name", "photo"]);
+    }
+  });
+
+  it("never renders the trainer id, which exists only as a React key", () => {
+    const { container } = render(<HomeSections trainers={TRAINER_FIXTURE} />);
+    for (const trainer of TRAINER_FIXTURE) {
+      expect(container.innerHTML).not.toContain(trainer.id);
     }
   });
 
@@ -392,9 +455,49 @@ describe("marketing home — copy matches the frozen fixture", () => {
     readFileSync(path.join(REPO, "test", "fixtures", "marketing-copy.json"), "utf8"),
   ) as { blocks: { signature: string; runs: string[]; images: (string | null)[] }[] };
 
+  /**
+   * ENG-730 — THE TRAINER BLOCK LEAVES THE COPY FREEZE. Documented, bounded, and
+   * subtracted rather than deleted.
+   *
+   * The fixture froze 136 text runs for `section#stable-trainers.sec tr-sec` —
+   * nineteen names, nineteen locations, and nineteen copies of the placeholder
+   * bio and horse line. Every one of those was repo data. They are now rows in
+   * `public_trainer`, chosen by an admin, so there is no longer any string this
+   * block is REQUIRED to render, and a frozen comparison against live content
+   * cannot mean anything.
+   *
+   * So this ONE block is exempted from the run comparison. What replaces it:
+   *
+   *   - the exemption is exactly one block, pinned by signature below, and the
+   *     other TWELVE stay frozen byte for byte, additions and all;
+   *   - the block must still EXIST, in its fixture position — the exemption
+   *     covers its text, never its presence or its order;
+   *   - the anti-vacuity count is re-pinned to the remaining blocks, so the
+   *     freeze cannot be hollowed out by exempting more later;
+   *   - the block's own rendering contract did not go unasserted, it MOVED: see
+   *     "marketing home — trainers" above and test/marketing-trainers.test.tsx.
+   *
+   * The strip is rendered from TRAINER_FIXTURE here, not from an empty roster,
+   * because an empty roster drops the section entirely and the block-order
+   * assertion below is worth keeping honest.
+   */
+  const LIVE_DATA_BLOCK = "section#stable-trainers.sec tr-sec";
+  const renderFrozen = () => render(<HomeSections trainers={TRAINER_FIXTURE} />);
+
   it("renders the same blocks, in the same order", () => {
-    const { container } = render(<HomeSections />);
+    const { container } = renderFrozen();
     expect(blocksOf(container, "main").map(signatureOf)).toEqual(fixture.blocks.map((b) => b.signature));
+  });
+
+  it("still carries the live block, in its frozen position", () => {
+    // The subtraction below is about TEXT. The block itself must not quietly
+    // vanish or move, which is the failure the exemption could otherwise hide.
+    expect(fixture.blocks.map((b) => b.signature).filter((sig) => sig === LIVE_DATA_BLOCK)).toEqual([LIVE_DATA_BLOCK]);
+
+    const { container } = renderFrozen();
+    expect(blocksOf(container, "main").map(signatureOf).indexOf(LIVE_DATA_BLOCK)).toBe(
+      fixture.blocks.findIndex((b) => b.signature === LIVE_DATA_BLOCK),
+    );
   });
 
   /**
@@ -436,9 +539,12 @@ describe("marketing home — copy matches the frozen fixture", () => {
   };
 
   it("renders every string verbatim, plus only ENG-729's pinned waitlist copy", () => {
-    const { container } = render(<HomeSections />);
+    const { container } = renderFrozen();
     blocksOf(container, "main").forEach((block, i) => {
       const { signature, runs: want } = fixture.blocks[i];
+
+      // ENG-730's one documented subtraction — see LIVE_DATA_BLOCK above.
+      if (signature === LIVE_DATA_BLOCK) return;
 
       // Subtracted one occurrence at a time, not with a set: "Join the waitlist"
       // is both the button label and part of the line above it in the hero, and
@@ -466,15 +572,28 @@ describe("marketing home — copy matches the frozen fixture", () => {
   });
 
   it("points at the same extracted asset in the same place", () => {
-    const { container } = render(<HomeSections />);
+    const { container } = renderFrozen();
     blocksOf(container, "main").forEach((block, i) => {
+      // Same subtraction, same reason: the trainer photographs are no longer
+      // extracted assets under /marketing/ but public-bucket URLs chosen by an
+      // admin. `test/marketing-shell.test.tsx` still pins the extracted asset
+      // set, and this ticket deleted the nineteen that went orphaned with them.
+      if (fixture.blocks[i].signature === LIVE_DATA_BLOCK) return;
       expect(imagesOf(block), `asset drift in ${fixture.blocks[i].signature}`).toEqual(fixture.blocks[i].images);
     });
   });
 
   it("covers the whole page, so none of the above can pass vacuously", () => {
     expect(fixture.blocks).toHaveLength(13);
-    expect(fixture.blocks.reduce((n, b) => n + b.runs.length, 0)).toBeGreaterThan(250);
+
+    // ENG-730 re-pins this to the blocks that are STILL FROZEN. The page-wide
+    // total was >250; the trainer block alone carried 136 of those runs, so
+    // leaving the old threshold in place would have made this pass on the
+    // remaining twelve by luck rather than by coverage. Exactly one block is
+    // exempt, and this is what makes exempting a second one fail here.
+    const frozen = fixture.blocks.filter((b) => b.signature !== LIVE_DATA_BLOCK);
+    expect(frozen).toHaveLength(12);
+    expect(frozen.reduce((n, b) => n + b.runs.length, 0)).toBeGreaterThan(170);
   });
 });
 

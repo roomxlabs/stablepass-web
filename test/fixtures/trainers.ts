@@ -78,3 +78,40 @@ export const RETIRED_PLACEHOLDER_STRINGS = [
   "Horses to be confirmed",
   "Trainer bio to come from the stable. The full profile will cover the story of the stable, the team behind the horses, and the horses nominated for stablepass. subscribers to follow.",
 ];
+
+/**
+ * A roster of `count` synthetic trainers, for the suites that assert MARQUEE
+ * behaviour rather than content — cloning, the duplicate set, the minimum-card
+ * threshold, the tab order.
+ *
+ * Those tests used to render the nineteen real stables. What they were ever
+ * actually asserting is "given N cards, does the marquee do the right thing",
+ * so N is now a parameter and the names are obviously synthetic. That makes the
+ * threshold tests read as the threshold tests they are, instead of depending on
+ * how many stables happened to be hardcoded that week.
+ *
+ * Every row is fully populated: these suites are not the place to exercise the
+ * null-photo or sparse shapes, which `TRAINER_FIXTURE` above covers deliberately.
+ */
+export function makeTrainerRoster(count: number): Trainer[] {
+  return Array.from({ length: count }, (_, i) => {
+    const first = `Fixture${String(i + 1).padStart(2, "0")}`;
+    const last = `Stable${String(i + 1).padStart(2, "0")}`;
+    return {
+      id: `fixture-${String(i + 1).padStart(2, "0")}`,
+      name: `${first} ${last}`,
+      location: `Town ${i + 1}, Victoria`,
+      photo: `https://stub.supabase.test/storage/v1/object/public/marketing-photos/fixture-${i + 1}.jpg`,
+      initials: `${first[0]!}${last[0]!}`.toUpperCase(),
+      bio: `Fixture bio for stable ${i + 1}.`,
+      horses: `Fixture Horse ${i + 1}`,
+    } satisfies Trainer;
+  });
+}
+
+/**
+ * The default roster for the marquee suites. Nineteen because that is what they
+ * were written against, so their clone/threshold arithmetic is unchanged — but
+ * it is now the TEST's nineteen, not the product's.
+ */
+export const TRAINER_ROSTER = makeTrainerRoster(19);
