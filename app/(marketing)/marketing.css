@@ -777,3 +777,77 @@
     .marketing .nav-signin{border-color:transparent;padding:9px 2px}
     .marketing .nav-actions .nav-cta{padding:9px 12px}
   }
+
+
+  /* ────────────────────────────────────────────────────────────────────────
+     ENG-729 — NOT part of the v2.7 port. The waitlist CTA mode (ENG-721).
+
+     Kept at the very end, after the ported rules AND after ENG-600's block, on
+     the same reasoning: test/marketing-shell.test.tsx compares the port against
+     the mockup as an ORDERED list, so anything interleaved would shift every
+     index after it. These rules are lifted out of that diff by an explicit
+     predicate and pinned, selector for selector, by their own sub-describe.
+
+     Every selector below carries `[data-cta-mode="waitlist"]`, `.cta-waitlist`,
+     `.launch-only` or a `.wl-` component class. That is not cosmetic: it is
+     exactly the predicate the test uses to lift them out, so a rule that does
+     not match one of those four cannot be added here without failing the
+     ordered diff. None of the four appears anywhere in the mockup, so the lift
+     provably removes nothing from the comparison.
+
+     Why the mode mechanism needed generalising: the mockup shipped ONE rule for
+     two modes (`[data-cta-mode="trial"] .cta-join,[data-cta-mode="join"]
+     .cta-trial`). It stays byte for byte — a third mode is additive, so trial
+     and join keep behaving exactly as they do today, and the launch switch-back
+     is a one-line change in layout.tsx with no CSS to unwind.
+     ──────────────────────────────────────────────────────────────────────── */
+
+  /* The two halves of the three-mode switch. Together with the mockup's own
+     rule above they make each mode show exactly its own .cta-* elements. */
+  .marketing[data-cta-mode="trial"] .cta-waitlist,.marketing[data-cta-mode="join"] .cta-waitlist{display:none}
+  .marketing[data-cta-mode="waitlist"] .cta-trial,.marketing[data-cta-mode="waitlist"] .cta-join{display:none}
+
+  /* The surfaces that only make sense once the product is live. `.launch-only`
+     tags them in the markup (nav Sign in, nav "Join stablepass.", and the two
+     #subscription anchors in the nav and the footer); `.price-sec` is hidden by
+     the section's OWN existing class, so sections/pricing.tsx is not touched at
+     all and its DOM shape survives verbatim for the frozen copy fixture and for
+     the switch-back. Hiding is display:none, not visibility/opacity — a hidden
+     link must not be tabbable, announced, or a route out to /start pre-launch. */
+  .marketing[data-cta-mode="waitlist"] .launch-only,.marketing[data-cta-mode="waitlist"] .price-sec{display:none}
+
+  /* ── the capture form (ENG-726's component; this ticket styles it) ────────
+     ENG-726 deliberately shipped it with NO rules of its own, reusing the
+     mockup's already-sanctioned `.field` chrome for the input, so the only new
+     visual decision left here is arrangement. There is no new visual language:
+     the input is the mockup's form control and the button is its `.btn-green`
+     pill, both untouched. */
+
+  /* One width for both mounts. The hero column is `align-items:flex-start` and
+     the band's `.cta-in` is `align-items:center`, so an explicit width is what
+     makes the same form left-aligned in one and centred in the other without a
+     per-mount rule. */
+  .marketing .wl-mount{width:min(460px,100%)}
+  /* Field and button on one row, wrapping to two when the field cannot hold its
+     200px basis — which is what keeps it usable at 320px with no media query.
+     flex-end aligns the button to the input's baseline, not the label's. */
+  .marketing .wl-form{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px}
+  .marketing .wl-form .wl-field{margin-top:0;flex:1 1 200px}
+  /* The status line always occupies its own row (it is a live region that is
+     always in the DOM, empty or not — removing it would stop screen readers
+     announcing it). Never display:none: that would drop it from the
+     accessibility tree and defeat the point of keeping it mounted. */
+  .marketing .wl-msg{flex:1 0 100%;margin:0;font-size:13px;color:var(--mut)}
+  .marketing .wl-msg-success{color:var(--brand);font-weight:600}
+  .marketing .wl-msg-error{color:#A8412C}
+
+  /* The band sits on a dark photograph. The mockup's own answer to a control on
+     that ground is `.btn-cream` (paper fill, brand text) and the same inversion
+     `.price-card .btn` already uses, so the button is re-skinned by context
+     rather than by adding a variant class the component cannot emit. The label
+     needs the same treatment: `.field label` is #3D4E46, near-invisible there.
+     The status line needs nothing — `.cta-in p` already lightens it and is the
+     more specific selector. */
+  .marketing .cta-in .wl-field label{color:rgba(255,255,255,.85)}
+  .marketing .cta-in .wl-submit{background:var(--paper);color:var(--brand)}
+  .marketing .cta-in .wl-submit:hover{background:#fff}

@@ -397,11 +397,72 @@ describe("marketing home — copy matches the frozen fixture", () => {
     expect(blocksOf(container, "main").map(signatureOf)).toEqual(fixture.blocks.map((b) => b.signature));
   });
 
-  it("renders every string verbatim", () => {
+  /**
+   * ENG-729 — the waitlist cutover's copy, layered OVER the frozen fixture.
+   *
+   * The fixture is distilled from the signed-off mockup, which predates the
+   * waitlist entirely and therefore contains none of this copy. Regenerating it
+   * was the obvious move and is the wrong one: the fixture's whole job is to be
+   * the thing the page is checked against, so rebuilding it from the page makes
+   * the check circular and freezes whatever drifted in alongside. Instead the
+   * additions are pinned here, per block, and subtracted before the comparison.
+   *
+   * That keeps both halves of the guarantee, and this is the part worth reading:
+   *
+   *   - nothing may be REMOVED or REORDERED. After the subtraction the runs must
+   *     equal the fixture exactly, so hiding a mockup line in waitlist mode
+   *     would fail here even though CSS `display:none` leaves the DOM untouched
+   *     — which is precisely why every hide in this ticket is CSS-only.
+   *   - nothing may be ADDED except these strings. An unpinned run survives the
+   *     subtraction and breaks the same equality.
+   *   - the allow-list cannot go stale. Every pinned string must actually
+   *     render, or `remaining` is non-empty and this fails — so when the mode
+   *     flips back to "trial" on launch day, this test tells you to delete the
+   *     list rather than leaving a permanent hole in the copy freeze.
+   *
+   * Keys are fixture block signatures. `section#.` is the CTA band, the one
+   * section the mockup gives neither an id nor a class.
+   */
+  const WAITLIST_ADDITIONS: Record<string, string[]> = {
+    "header#top.hero": [
+      // The locked pre-launch line and fine print (ENG-721 decisions 5 and 6).
+      "Join the waitlist to enable your 30-day free trial",
+      "$19 a month after your free trial",
+      // ENG-726's form: its field label and its submit button.
+      "Email address",
+      "Join the waitlist",
+    ],
+    "section#.": ["Email address", "Join the waitlist"],
+  };
+
+  it("renders every string verbatim, plus only ENG-729's pinned waitlist copy", () => {
     const { container } = render(<HomeSections />);
     blocksOf(container, "main").forEach((block, i) => {
-      expect(textRuns(block), `copy drift in ${fixture.blocks[i].signature}`).toEqual(fixture.blocks[i].runs);
+      const { signature, runs: want } = fixture.blocks[i];
+
+      // Subtracted one occurrence at a time, not with a set: "Join the waitlist"
+      // is both the button label and part of the line above it in the hero, and
+      // a set-based filter would strip every copy of a string the mockup might
+      // legitimately repeat.
+      const remaining = [...(WAITLIST_ADDITIONS[signature] ?? [])];
+      const withoutAdditions = textRuns(block).filter((run) => {
+        const at = remaining.indexOf(run);
+        if (at === -1) return true;
+        remaining.splice(at, 1);
+        return false;
+      });
+
+      expect(remaining, `pinned waitlist copy never rendered in ${signature}`).toEqual([]);
+      expect(withoutAdditions, `copy drift in ${signature}`).toEqual(want);
     });
+  });
+
+  it("confines the waitlist copy to the two conversion blocks", () => {
+    // The cutover adds a capture form in the hero and in the CTA band, and
+    // nowhere else. If a third block ever needs an entry, that is a scope
+    // change to argue on the ticket, not a line to add here quietly.
+    expect(Object.keys(WAITLIST_ADDITIONS).sort()).toEqual(["header#top.hero", "section#."]);
+    expect(fixture.blocks.map((b) => b.signature)).toEqual(expect.arrayContaining(Object.keys(WAITLIST_ADDITIONS)));
   });
 
   it("points at the same extracted asset in the same place", () => {
