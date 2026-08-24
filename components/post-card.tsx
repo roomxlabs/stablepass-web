@@ -204,12 +204,31 @@ export function PostCaption({ body }: { body: string }) {
 
   useEffect(() => {
     measure();
+
+    // RE-MEASURE WHEN THE WEBFONT LANDS. This is the one path that could lose
+    // content: the first measurement runs against the fallback face, and if the
+    // real face is wider a caption that fitted in two lines becomes three. The
+    // ResizeObserver below would NOT catch it — the clamped box stays exactly
+    // two lines tall, so its border box never changes and RO never fires, while
+    // `scrollHeight` quietly grows past it. The result would be a truncated
+    // caption with no "more" to open it. `document.fonts` is absent in jsdom
+    // and in older browsers, hence the guard.
+    let cancelled = false;
+    if (typeof document !== "undefined" && document.fonts?.ready) {
+      document.fonts.ready.then(() => {
+        if (!cancelled) measure();
+      });
+    }
+
     // The column is fluid, so a resize can turn a two-line caption into three.
     // Guarded because jsdom (the unit suite) has no ResizeObserver.
-    if (typeof ResizeObserver === "undefined") return;
+    if (typeof ResizeObserver === "undefined") return () => { cancelled = true; };
     const ro = new ResizeObserver(measure);
     if (ref.current) ro.observe(ref.current);
-    return () => ro.disconnect();
+    return () => {
+      cancelled = true;
+      ro.disconnect();
+    };
   }, [measure, body]);
 
   return (
