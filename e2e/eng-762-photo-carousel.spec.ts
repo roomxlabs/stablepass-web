@@ -177,6 +177,23 @@ test("ENG-762 a 3-photo post renders dots + an n/m count on the horse profile fe
       expect(src.startsWith(`${post.id}/`)).toBe(false);
     }
 
+    // Every slide must have actually DECODED, not merely been given a src.
+    // Local Storage occasionally serves a bad response for a freshly-uploaded
+    // object, and without this the screenshots below silently capture broken
+    // image icons — evidence that looks fine in a list and proves nothing.
+    await expect
+      .poll(
+        async () =>
+          card.getByTestId("photo-slide").locator("img").evaluateAll((els) =>
+            els.every((e) => {
+              const img = e as HTMLImageElement;
+              return img.complete && img.naturalWidth > 0;
+            }),
+          ),
+        { timeout: 30_000 },
+      )
+      .toBe(true);
+
     // --- FIRST ---------------------------------------------------------
     await expect(count).toHaveText("1/3");
     await expect(dots.nth(0)).toHaveAttribute("aria-current", "true");

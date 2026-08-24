@@ -718,32 +718,30 @@ a { color: inherit; text-decoration: none; }
 /* A slide whose photo failed to sign shows the media ground, exactly as a
    poster-less card does. Its siblings still render. */
 .post-media-web .photo-slide-empty { width: 100%; height: 100%; }
-/* Dots: bottom-centre over the media, on the same scrim family as the chips in
-   the two bottom corners. 6px with a 4px gap fits the contract cap of 10 photos
-   in 96px, comfortably inside the 360px narrow card. */
+/* Dots: bottom-centre over the media. 6px with a 4px gap fits the contract cap
+   of 10 photos in 96px, comfortably inside the 360px narrow card.
+   MATCHED TO MOBILE'S R16 (ENG-757), read off its shipped screenshots rather
+   than inferred: bare dots with NO scrim pill behind them, a solid grey for
+   inactive and flat brand green for active. An earlier revision here had a
+   dark scrim pill and a white rim on the active dot; both were dropped on
+   sight of mobile's build, because a web-only embellishment is exactly the
+   divergence this parity ticket exists to prevent. See the PR for the one
+   legibility caveat that came out of it. */
 .post-media-web .photo-dots {
   position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
   z-index: 3;
   display: flex; align-items: center; gap: 4px;
-  padding: 5px 8px; border-radius: var(--radius-pill);
-  background: rgba(0,0,0,0.35);
 }
 .post-media-web .photo-dot {
   width: 6px; height: 6px; padding: 0;
   border: none; border-radius: 50%;
-  background: rgba(255,255,255,0.55);
+  /* A token, not an eyeballed grey. `--muted-light` is the palette's soft grey
+     and is the closest match to the inactive dot mobile draws; it stays
+     readable on both a dark and a cream frame. */
+  background: var(--muted-light);
   cursor: pointer;
 }
-/* Brand green is the specified active colour on BOTH this ticket and mobile's
-   R16. The white rim is the one addition: brand green is a DARK green, and on a
-   dark photo the active dot would otherwise read as less prominent than the
-   translucent-white inactive ones — inverting the whole affordance. The rim
-   keeps the emphasis on the active dot against any frame without changing the
-   colour the design asked for. */
-.post-media-web .photo-dot.active {
-  background: var(--brand-green);
-  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.9);
-}
+.post-media-web .photo-dot.active { background: var(--brand-green); }
 /* ROUND 5 / ENG-613 row 5 — the Follow pill, matching Instagram exactly, and the
    same component and corner as mobile's M3. Transparent fill with a white rim is
    a DRI decision that KNOWINGLY costs contrast on a bright frame: do not add a
