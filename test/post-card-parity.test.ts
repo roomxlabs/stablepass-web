@@ -152,6 +152,40 @@ describe("ENG-613 row 6 — the STABLE UPDATE card", () => {
   });
 });
 
+// ===========================================================================
+// ROUND 6 / ENG-761 — the caption clamp, the photo chip and the nowrap fix on
+// the profile stat labels. Same rationale as the ENG-613 block above: jsdom
+// applies no real stylesheet, so these read the CSS SOURCE directly.
+// ===========================================================================
+describe("ENG-761 item 2 — the caption clamps to two lines", () => {
+  it("clamps .post-caption.clamped to a 2-line -webkit-box", () => {
+    const clamp = rule(".post-body-web .post-caption.clamped");
+    expect(clamp).toContain("-webkit-line-clamp: 2");
+    expect(clamp).toContain("-webkit-box-orient: vertical");
+  });
+});
+
+describe("ENG-761 item 3 — the photo chip mirrors the video duration chip", () => {
+  it("sits in the same corner as the duration chip", () => {
+    const chip = rule(".post-media-web .media-photo-chip");
+    expect(chip).toContain("bottom: 14px");
+    expect(chip).toContain("left: 14px");
+  });
+
+  it("shares the exact same scrim as .media-duration, pinning the 'mirrors' claim", () => {
+    const chip = rule(".post-media-web .media-photo-chip");
+    const duration = rule(".post-media-web .media-duration");
+    expect(chip).toContain("rgba(0,0,0,0.6)");
+    expect(duration).toContain("rgba(0,0,0,0.6)");
+  });
+});
+
+describe("ENG-761 item 5 — the profile stat label never wraps", () => {
+  it("sets white-space: nowrap on .profile-stats-web .stat-label", () => {
+    expect(rule(".profile-stats-web .stat-label")).toContain("white-space: nowrap");
+  });
+});
+
 // Guardrail. `marketing.css` is a separate, deliberately different design system
 // diffed rule-for-rule by test/marketing-shell.test.tsx, and `.btn`/`.btn-ghost`
 // exist in BOTH sheets — so a globals.css addition leaking across is a real and

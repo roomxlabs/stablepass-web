@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   PostCard,
+  PostCaption,
   resolveAspect,
   aspectBucket,
   mediaBoxProps,
@@ -589,5 +590,141 @@ describe("PostCard — the reel card", () => {
     expect(mediaBoxProps(0.5625, { video: true }).className).toBe("post-media-web reel");
     expect(mediaBoxProps(0.5625).className).toBe("post-media-web tall");
     expect(mediaBoxProps(1.7778, { video: true }).className).toBe("post-media-web");
+  });
+});
+
+// ===========================================================================
+// ROUND 6 / ENG-761 — the `.post-badge` pill returns as DATA (`post.label`),
+// the photo chip mirrors the video duration chip, and the caption clamps to
+// two lines with a "more" affordance.
+// ===========================================================================
+
+describe("PostCard — the label pill (ENG-761 item 1)", () => {
+  it("renders the pill with the label's own text when post.label is set", () => {
+    render(
+      <PostCard post={{ ...BASE, label: "Trackwork" }} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />,
+    );
+
+    const badge = document.querySelector(".post-badge");
+    expect(badge).not.toBeNull();
+    expect(badge!.textContent).toBe("Trackwork");
+  });
+
+  it("renders no pill when post.label is null", () => {
+    render(<PostCard post={{ ...BASE, label: null }} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />);
+    expect(document.querySelector(".post-badge")).toBeNull();
+  });
+
+  it("renders no pill when post.label is absent entirely", () => {
+    render(<PostCard post={BASE} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />);
+    expect(document.querySelector(".post-badge")).toBeNull();
+  });
+
+  // The pill is COPY chosen at compose time; it is independent of the caption,
+  // which is its own affordance underneath the reaction bar.
+  it("shows the pill alongside a long caption at the same time — the two are independent", () => {
+    const longBody =
+      "This caption runs on for quite a while, well past what two lines of the clamped column could ever hold, so it stands in for a genuinely long post body.";
+    render(
+      <PostCard
+        post={{ ...BASE, label: "Race Replay", body: longBody }}
+        viewerId={VIEWER_ID}
+        onReact={noop}
+        onBookmark={noop}
+      />,
+    );
+
+    const badge = document.querySelector(".post-badge");
+    expect(badge).not.toBeNull();
+    expect(badge!.textContent).toBe("Race Replay");
+    expect(screen.getByTestId("post-caption")).toBeInTheDocument();
+  });
+});
+
+describe("PostCard — the photo chip mirrors the video duration chip (ENG-761 item 3)", () => {
+  it("shows the photo chip, and no duration chip, on a photo post", () => {
+    render(
+      <PostCard
+        post={{ ...BASE, media: { type: "photo", posterUrl: null } }}
+        viewerId={VIEWER_ID}
+        onReact={noop}
+        onBookmark={noop}
+      />,
+    );
+
+    expect(screen.getByTestId("media-photo-chip")).toBeInTheDocument();
+    expect(document.querySelector(".media-duration")).toBeNull();
+  });
+
+  it("shows the duration chip, and no photo chip, on a video post", () => {
+    render(
+      <PostCard
+        post={{ ...BASE, media: { type: "video", posterUrl: null, duration: "0:47" } }}
+        viewerId={VIEWER_ID}
+        onReact={noop}
+        onBookmark={noop}
+        onPlay={vi.fn()}
+      />,
+    );
+
+    expect(document.querySelector(".media-duration")).not.toBeNull();
+    expect(screen.queryByTestId("media-photo-chip")).not.toBeInTheDocument();
+  });
+});
+
+describe("PostCaption (ENG-761 item 2)", () => {
+  it("carries the clamped class by default", () => {
+    render(<PostCaption body="Trackwork this morning." />);
+    const caption = screen.getByTestId("post-caption");
+    expect(caption).toHaveClass("post-caption");
+    expect(caption).toHaveClass("clamped");
+  });
+
+  // An update card's body IS the panel, so it is never also a caption.
+  it("renders no caption at all for an update-type (STABLE UPDATE) card", () => {
+    render(<PostCard post={TEXT_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />);
+    expect(screen.queryByTestId("post-caption")).not.toBeInTheDocument();
+  });
+
+  // jsdom lays out nothing, so `scrollHeight`/`clientHeight` both report 0 and
+  // the "more" affordance can never appear naturally — the measurement itself
+  // has to be stubbed to exercise either branch.
+  describe("the scrollHeight/clientHeight measurement, stubbed", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('offers "more" when the full text overflows the clamp, and expands in place on click', async () => {
+      vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(100);
+      vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(40);
+
+      const user = userEvent.setup();
+      render(<PostCaption body="A caption long enough to overflow the two-line clamp." />);
+
+      // The visible word is "more", but its accessible name is "Expand caption"
+      // (post-card.tsx) — disambiguated from the card's own "More" (⋯) options
+      // button, which is also visible in a full PostCard render.
+      const more = screen.getByRole("button", { name: "Expand caption" });
+      expect(more).toHaveTextContent("more");
+      expect(screen.getByTestId("post-caption")).toHaveClass("clamped");
+
+      await user.click(more);
+
+      expect(screen.queryByRole("button", { name: "Expand caption" })).not.toBeInTheDocument();
+      expect(screen.getByTestId("post-caption")).not.toHaveClass("clamped");
+      expect(screen.getByTestId("post-caption")).toHaveClass("post-caption");
+    });
+
+    // The ticket's named edge case: a caption landing on EXACTLY two lines
+    // measures equal, not over, and must get no affordance at all.
+    it('offers no "more" when the caption lands on exactly two lines (scrollHeight === clientHeight)', () => {
+      vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(40);
+      vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(40);
+
+      render(<PostCaption body="A caption that lands on exactly two lines, no more, no less." />);
+
+      expect(screen.queryByRole("button", { name: "Expand caption" })).not.toBeInTheDocument();
+      expect(screen.getByTestId("post-caption")).toHaveClass("clamped");
+    });
   });
 });
