@@ -50,10 +50,22 @@ import Why from "./why";
  * The alternative (moving the reveal script) lives in layout.tsx, which is W1's
  * file and ENG-591's live surface. This fix stays inside this ticket's own files.
  */
-export default function HomeSections() {
+/**
+ * ENG-729: `joined`/`reason` are the marketing home's `searchParams`, threaded
+ * to the two `WaitlistForm` mounts. Both are optional, so `<HomeSections />`
+ * with no props still renders — which is how the copy-fidelity tests mount it.
+ * See page.tsx for why they are read server-side at all.
+ */
+export default function HomeSections({
+  joined,
+  reason,
+}: {
+  joined?: string | null;
+  reason?: string | null;
+} = {}) {
   return (
     <main>
-      <Hero />
+      <Hero joined={joined} reason={reason} />
       <WhatIs />
       <HowItWorks />
       <TheApp />
@@ -61,7 +73,7 @@ export default function HomeSections() {
       <Pricing />
       <Why />
       <TrainersStrip />
-      <CtaBand />
+      <CtaBand joined={joined} reason={reason} />
       <Faq />
       <ForTrainers />
       <ImportantNote />

@@ -85,7 +85,21 @@ describe("marketing nav", () => {
     // returning visitors. They are root-relative on purpose: middleware already
     // 307s a non-shared apex path onto the app host, and an absolute URL would
     // send local dev at production.
-    expect(hrefs).toEqual(["#top", "#how", "#app", "#subscription", "#trainers", "#faq", "/signin", "/start"]);
+    // ENG-729 appends a ninth: the pre-launch "Join waitlist" button, which
+    // scrolls to the hero capture form rather than leaving for a route. All
+    // eight originals stay in the DOM — waitlist mode hides four of them with
+    // CSS, so the launch switch-back needs no markup back.
+    expect(hrefs).toEqual([
+      "#top",
+      "#how",
+      "#app",
+      "#subscription",
+      "#trainers",
+      "#faq",
+      "/signin",
+      "/start",
+      "#top",
+    ]);
   });
 
   it("keeps the two product destinations reachable and relative", () => {
@@ -208,7 +222,11 @@ describe("marketing layout", () => {
     const { container } = render(<MarketingLayout>{<p>page body</p>}</MarketingLayout>);
     const root = container.querySelector(".marketing");
     expect(root).toBeInTheDocument();
-    expect(root).toHaveAttribute("data-cta-mode", "trial");
+    // ENG-729 flipped this to the pre-launch mode (ENG-721). It is pinned
+    // rather than merely present because the value IS the cutover: flipping it
+    // back to "trial" on launch day is the whole switch-back, so a silent
+    // change to it would ship the wrong site with every other test green.
+    expect(root).toHaveAttribute("data-cta-mode", "waitlist");
   });
 
   it("marks the shell script-capable before first paint, for the .js/.rv contract", () => {
@@ -472,12 +490,33 @@ if (MOCKUP) {
     const isEmptyMediaMarker = (r: { selector: string; decls: string }) =>
       r.selector.startsWith("@media") && r.decls.trim() === "";
 
+    // ── ENG-729: the waitlist CTA mode ───────────────────────────────────────
+    // Same problem the nav has, same shape of answer. The ordered diff fails on
+    // ANY addition — an appended rule has no counterpart at its index and is
+    // reported as ADDED — so the pre-launch mode's rules are lifted out here and
+    // pinned, selector for selector, by their own sub-describe below.
+    //
+    // The predicate is the narrowest thing that identifies them: the mode
+    // attribute itself, the new `.cta-waitlist` / `.launch-only` markup hooks,
+    // and the `.wl-` component classes ENG-726's form emits. A test below
+    // asserts the mockup contains NONE of these, which is what makes the lift
+    // provably subtractive-free — it cannot hide a deletion or a restyle of a
+    // ported rule, only genuinely new ones.
+    const isWaitlistRule = (selector: string) =>
+      /\.cta-waitlist|\[data-cta-mode="waitlist"\]|\.wl-|\.launch-only/.test(selector);
+
     const wantRules = expected.filter(
       (r) => !EXCEPTIONS.has(r.selector) && !isNavRule(r.selector) && !isEmptyMediaMarker(r),
     );
     const gotRules = cssRules(MARKETING_CSS)
       .map((r) => ({ selector: unscope(r.selector), decls: r.decls }))
-      .filter((r) => !isException(r.selector) && !isNavRule(r.selector) && !isEmptyMediaMarker(r));
+      .filter(
+        (r) =>
+          !isException(r.selector) &&
+          !isNavRule(r.selector) &&
+          !isWaitlistRule(r.selector) &&
+          !isEmptyMediaMarker(r),
+      );
 
     it("carries every rule of the mockup, in order, with identical declarations", () => {
       const drifted: string[] = [];
@@ -549,6 +588,101 @@ if (MOCKUP) {
         // snapshot of the desktop layout would catch.
         expect(got).toContain(".nav-actions{margin-left:auto}");
         expect(got).toContain(".nav-links{display:none}");
+      });
+    });
+
+    /**
+     * ENG-729 — the pinned counterpart to the lift above, on the ENG-600 nav
+     * precedent: the ordered diff gives up coverage of these rules, so this
+     * takes it back rule by rule instead of by position.
+     *
+     * What it has to guarantee, given the lift is a blanket filter:
+     *
+     *   1. the lift is ADDITIVE ONLY — it cannot be hiding a deleted or
+     *      restyled mockup rule, because the mockup contains no selector the
+     *      predicate matches (first test);
+     *   2. only the documented selectors were added, in the documented order,
+     *      so a fourteenth rule cannot ride in behind the exemption (second);
+     *   3. the mechanism the rules exist to implement actually works — all
+     *      three modes, all six directions (fourth). That is the assertion with
+     *      teeth: an allow-list alone would happily pass on rules that hide
+     *      nothing.
+     *
+     * Deliberately NOT done: widening the blanket EXCEPTIONS set. That set is
+     * the port's whole guarantee, and a waitlist entry in it would exempt every
+     * future rule that happens to mention the same selectors.
+     */
+    describe("the waitlist mode adds exactly the rules ENG-729 documents", () => {
+      const all = cssRules(MARKETING_CSS).map((r) => ({ selector: unscope(r.selector), decls: r.decls }));
+      const added = all.filter((r) => isWaitlistRule(r.selector));
+
+      it("matches nothing in the mockup, so the lift cannot conceal a deletion", () => {
+        // If this ever fails, the predicate has started overlapping the port and
+        // the ordered diff above has a hole in it.
+        expect(expected.filter((r) => isWaitlistRule(r.selector)).map((r) => r.selector)).toEqual([]);
+      });
+
+      it("adds exactly these selectors, in this order, and nothing else", () => {
+        // Pinned in source order. Every entry is justified in a comment beside
+        // the rule in marketing.css; the three-part ones are the mode switches,
+        // the `.wl-` ones style ENG-726's form (which ships with no CSS of its
+        // own), and the `.cta-in` pair re-skins it for the dark photo band.
+        const ALLOWED = [
+          '[data-cta-mode="trial"] .cta-waitlist,[data-cta-mode="join"] .cta-waitlist',
+          '[data-cta-mode="waitlist"] .cta-trial,[data-cta-mode="waitlist"] .cta-join',
+          '[data-cta-mode="waitlist"] .launch-only,[data-cta-mode="waitlist"] .price-sec',
+          ".wl-mount",
+          ".wl-form",
+          ".wl-form .wl-field",
+          ".wl-msg",
+          ".wl-msg-success",
+          ".wl-msg-error",
+          ".cta-in .wl-field label",
+          ".cta-in .wl-submit",
+          ".cta-in .wl-submit:hover",
+        ];
+        expect(added.map((r) => r.selector)).toEqual(ALLOWED);
+      });
+
+      it("leaves the mockup's own two-mode rule byte for byte", () => {
+        // The third mode is additive. If this rule were rewritten instead, trial
+        // and join would change behaviour too and the launch switch-back would
+        // stop being a one-line change.
+        expect(all.map((r) => `${r.selector}{${r.decls}}`)).toContain(
+          '[data-cta-mode="trial"] .cta-join,[data-cta-mode="join"] .cta-trial{display:none}',
+        );
+      });
+
+      it("switches all three modes in all six directions", () => {
+        // The invariant the rules exist for: in every mode, the other two modes'
+        // CTAs are hidden. Derived from the sheet rather than restated, so it
+        // holds however the rules are grouped into selector lists.
+        const hidden = new Set(
+          all
+            .filter((r) => r.decls === "display:none")
+            .flatMap((r) => r.selector.split(","))
+            .map((part) => part.trim()),
+        );
+        const MODES = ["trial", "join", "waitlist"];
+        for (const mode of MODES) {
+          for (const other of MODES) {
+            if (mode === other) continue;
+            expect(hidden, `mode ${mode} does not hide .cta-${other}`).toContain(
+              `[data-cta-mode="${mode}"] .cta-${other}`,
+            );
+          }
+        }
+      });
+
+      it("hides the pre-launch surfaces outright, never merely visually", () => {
+        // A route to /start that is only transparent is still tabbable, still
+        // announced, and still followable — which is the acceptance criterion
+        // this would silently break. Assert the declaration, not just presence.
+        const hides = all.filter(
+          (r) => isWaitlistRule(r.selector) && /\.launch-only|\.price-sec/.test(r.selector),
+        );
+        expect(hides.length).toBeGreaterThan(0);
+        for (const rule of hides) expect(rule.decls).toBe("display:none");
       });
     });
 

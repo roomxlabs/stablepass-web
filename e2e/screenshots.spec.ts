@@ -942,3 +942,79 @@ test("ENG-613 both profile feeds show the same card anatomy", async ({ page }) =
     }
   }
 });
+
+/**
+ * ENG-729 — the waitlist CTA mode (ENG-721 W3).
+ *
+ * Public marketing page: no Supabase, no seeding, no sign-in. That is the whole
+ * point of the route group, so these are the cheapest screenshots in the file.
+ *
+ * Captured in BOTH scripting states deliberately. The client reviews this site
+ * on a phone with JavaScript blocked, so a screenshot taken only with scripting
+ * on would be evidence for a page he will never see — and the reveal-on-scroll
+ * contract means the two really can differ.
+ */
+test.describe("ENG-729 waitlist mode", () => {
+  const shoot = async (page: import("@playwright/test").Page, label: string) => {
+    // Sections reveal on scroll; walk past the band and back so the observer has
+    // fired before capturing, rather than catching it mid-transition.
+    //
+    // scrollIntoViewIfNeeded, NOT page.evaluate(window.scrollTo): this helper
+    // also runs in the scripting-off describe below, where evaluate() is inert
+    // and would throw. Playwright drives this over CDP, so it works in both
+    // modes — and with scripting off there is nothing to settle anyway, because
+    // the reveal never arms and every section is simply visible.
+    await page.locator(".wrap.cta").scrollIntoViewIfNeeded();
+    await page.waitForTimeout(900);
+    await page.locator("header.hero").scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+
+    await page.locator("header.hero").screenshot({ path: `.rx/review/eng-729-hero-${label}.png` });
+    await page.locator(".wrap.cta").screenshot({ path: `.rx/review/eng-729-cta-band-${label}.png` });
+    await page.screenshot({ path: `.rx/review/eng-729-full-${label}.png`, fullPage: true });
+  };
+
+  test("hero and CTA band, scripting ON", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    await expect(page.locator("header.hero form.wl-form")).toBeVisible();
+    await shoot(page, "js-desktop");
+  });
+
+  test("hero and CTA band, phone, scripting ON", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    await expect(page.locator("header.hero form.wl-form")).toBeVisible();
+    await shoot(page, "js-phone");
+  });
+
+  test.describe("scripting OFF — the client's actual browsing mode", () => {
+    test.use({ javaScriptEnabled: false });
+
+    test("hero and CTA band render with no JavaScript", async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto("/");
+      await expect(page.locator("header.hero form.wl-form")).toBeVisible();
+      await shoot(page, "nojs-desktop");
+    });
+
+    test("hero and CTA band render with no JavaScript, on a phone", async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto("/");
+      await expect(page.locator("header.hero form.wl-form")).toBeVisible();
+      await shoot(page, "nojs-phone");
+    });
+
+    test("the confirmation the native POST redirects back to", async ({ page }) => {
+      // The state that only exists because this ticket made `/` read
+      // searchParams. With scripting off there is nothing else that could have
+      // rendered this text, which is what makes the screenshot evidence.
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto("/?joined=1");
+      const message = page.locator("header.hero p.wl-msg");
+      await expect(message).toBeVisible();
+      await expect(message).toContainText(/on the list/i);
+      await page.locator("header.hero").screenshot({ path: ".rx/review/eng-729-hero-nojs-joined.png" });
+    });
+  });
+});

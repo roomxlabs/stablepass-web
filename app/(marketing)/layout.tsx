@@ -128,11 +128,18 @@ export default function MarketingLayout({
   children: React.ReactNode;
 }>) {
   return (
-    // data-cta-mode drives which call to action leads — "trial" leads with the
-    // free 30 days, "join" leads with the subscription. It sat on <body> in the
-    // mockup; the root layout owns <body> here, so it rides the wrapper instead.
-    // W5 makes it a setting; until then it keeps the mockup's chosen value.
-    <div className="marketing" data-cta-mode="trial" suppressHydrationWarning>
+    // data-cta-mode drives which call to action leads. The mockup shipped two
+    // modes — "trial" leads with the free 30 days, "join" leads with the
+    // subscription — and ENG-729 adds a third, "waitlist", for the pre-launch
+    // cutover (ENG-721): the inline capture form leads, and pricing, sign in and
+    // every route to /start are hidden by mode-scoped CSS rather than removed
+    // from the DOM.
+    //
+    // It stays a LITERAL on purpose. Flipping it back to "trial" on launch day
+    // is then a one-line PR that restores the current page exactly, which is
+    // also why none of the trial/join markup was deleted. It sat on <body> in
+    // the mockup; the root layout owns <body> here, so it rides the wrapper.
+    <div className="marketing" data-cta-mode="waitlist" suppressHydrationWarning>
       <script dangerouslySetInnerHTML={{ __html: MARK_JS_CAPABLE }} />
       <MarketingNav />
       {children}

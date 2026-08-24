@@ -368,10 +368,26 @@ test.describe("the footer's links", () => {
       /subject=Trainer%20partnerships$/,
     );
 
-    // The fake send is gone: no form, no confirmation, nowhere on the page.
+    // The fake send is gone: no contact sheet, no confirmation of a delivery that
+    // never happened, nowhere on the page.
     await expect(page.locator("#sheet-contact")).toHaveCount(0);
-    await expect(page.locator("form")).toHaveCount(0);
     expect(await page.content()).not.toContain("on its way");
+
+    // ENG-729: this used to read `expect(page.locator("form")).toHaveCount(0)`.
+    // That was the right guard when the only form this site had ever had was
+    // v2.6's fake contact form — but "no form anywhere" was always a proxy for
+    // what actually matters, which is "nothing here pretends to send". The
+    // waitlist capture forms are the opposite of that: they post to a real
+    // endpoint that really writes.
+    //
+    // So the guard is TIGHTENED rather than dropped. Every form on the page must
+    // be a waitlist capture aimed at the real route — which still fails on a
+    // re-introduced contact form, on a form with no action, and on anything
+    // pointed somewhere else.
+    const actions = await page
+      .locator("form")
+      .evaluateAll((forms) => forms.map((f) => `${f.className}|${f.getAttribute("action")}`));
+    expect(actions).toEqual(["wl-form|/api/waitlist", "wl-form|/api/waitlist"]);
   });
 
   test("the trainer CTAs still reach the mail client through the delegate", async ({ page }) => {

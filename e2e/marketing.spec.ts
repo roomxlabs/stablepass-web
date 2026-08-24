@@ -56,7 +56,11 @@ test.describe("marketing shell", () => {
 
     await expect(page.locator("nav.nav")).toBeVisible();
     await expect(page.locator("footer")).toBeVisible();
-    await expect(page.getByRole("link", { name: "Join stablepass." })).toBeVisible();
+    // ENG-729: the nav's leading action is mode-driven. Pre-launch the visible
+    // one is "Join waitlist"; "Join stablepass." is still in the DOM behind
+    // `data-cta-mode`, which the funnel spec asserts. Named rather than matched
+    // by class so this fails loudly if the button ever ships unlabelled.
+    await expect(page.getByRole("link", { name: "Join waitlist" })).toBeVisible();
     await expect(page.locator(".foot-col h4")).toHaveText(["Explore", "Support", "Legal"]);
   });
 
@@ -196,10 +200,25 @@ test.describe("with JavaScript disabled", () => {
         [...document.querySelectorAll<HTMLElement>(".marketing *")]
           .filter((el) => getComputedStyle(el).opacity === "0")
           .filter((el) => !affordances.some((cls) => el.classList.contains(cls)))
+          // ENG-729: the two waitlist honeypots. They are the one thing on this
+          // page that is SUPPOSED to be invisible to a human — ENG-726 parks each
+          // off-screen at opacity 0 so browser autofill's visibility heuristic
+          // skips it, which is load-bearing: an autofilled decoy would make the
+          // route silently discard a real signup. Excluded by exact identity
+          // rather than by class, because it deliberately carries no class (a
+          // class is a selector a bot can learn), and counted below so the
+          // carve-out cannot quietly widen.
+          .filter((el) => !(el.tagName === "INPUT" && el.getAttribute("name") === "hp_ref" && el.closest("form.wl-form")))
           .map((el) => el.tagName + "." + el.className),
       HOVER_AFFORDANCES,
     );
     expect(invisible).toEqual([]);
+
+    // Exactly one honeypot per mounted form, and no stray invisible input.
+    const honeypots = await page.evaluate(
+      () => document.querySelectorAll('form.wl-form input[name="hp_ref"]').length,
+    );
+    expect(honeypots, "one honeypot per waitlist form, no more").toBe(2);
 
     // ...and the exclusion cannot quietly grow: it is by exact class name, and the
     // excluded set must be precisely the overlays the mockup defines — one per

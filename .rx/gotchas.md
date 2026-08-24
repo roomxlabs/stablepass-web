@@ -645,6 +645,19 @@ their aside/rail. Derive the Follow pill from those rather than adding a query,
 and model the state as `Set<string> | null` where `null` is "not known yet" —
 conflating it with "follows nobody" flashes a pill on every card and retracts it.
 
+## `app/(marketing)/**` is swept by FOUR guard sweeps, not one
+(This heading said TWO; ENG-729 found two more, both in e2e.)
+  3. `e2e/marketing-interactive.spec.ts` asserted `expect(page.locator("form"))
+     .toHaveCount(0)` — "no form anywhere", written as a proxy for "nothing here
+     pretends to send" when the only form was v2.6's fake contact form. ANY real
+     form fails it. Tighten it (assert every form is the expected one) rather
+     than deleting it.
+  4. `e2e/marketing.spec.ts`'s "nothing stuck at opacity 0" sweep flags any
+     element at `opacity:0`, and the exclusion list is BY CLASS. A honeypot input
+     is invisible by design and deliberately carries no class, so exclude it by
+     exact identity (`input[name="hp_ref"]` inside `form.wl-form`) and assert the
+     count so the carve-out cannot widen.
+
 ## `app/(marketing)/**` is swept by TWO guard files, not one
 Tickets keep naming only `test/marketing-shell.test.tsx`. There is a second,
 independent sweep in `test/marketing-marquee.test.ts` (`describe("marketing
@@ -663,13 +676,19 @@ removed. Because `marketing.css` is diffed rule-for-rule, a NEW class costs a
 sanctioned test delta while `.field` costs nothing. Reach for it before inventing
 `wl-input`-style hooks for any marketing form field.
 
-## `/` is statically prerendered — a query string cannot be read server-side
-The same HTML is served for `/` and `/?joined=1`, so `?foo=` state on the
-marketing home is only recoverable client-side. Any "land back on the page and
-show a result" flow therefore does NOT work with scripting off unless the page is
-deliberately opted into dynamic rendering (reading `searchParams` in the server
-component does that). Decide that explicitly; do not assume a redirect back to
-`/?x=1` is visible to a no-JS visitor. ENG-726 left it as a prop seam for W3.
+## `/` is DYNAMICALLY rendered as of ENG-729 (this entry used to say the opposite)
+It was statically prerendered, and the same HTML was served for `/` and
+`/?joined=1`. ENG-729 made `app/(marketing)/page.tsx` read `searchParams`, which
+opts the route into a per-request render — the build output now shows `/` as `ƒ`,
+not `○`. That was required: with scripting off the waitlist form posts natively,
+`/api/waitlist` answers `303 -> /?joined=1`, and a static page cannot vary on a
+query string, so the visitor landed on an unchanged page that looked like it had
+failed. Consequences to remember:
+  * **route-level ISR on `/` no longer works.** `export const revalidate = N`
+    and a request-varying page are mutually exclusive. Cache the DATA instead —
+    `unstable_cache(fn, keys, { revalidate: N })` or `fetch(..., { next: {
+    revalidate: N } })`. ENG-730's trainer read has to do this.
+  * `/legal/[slug]` is unaffected and still SSG (`●`).
 
 ## `react-hooks/set-state-in-effect` is an eslint ERROR here
 Not a warning. The read-a-browser-value-on-mount pattern (`useEffect` →
@@ -697,3 +716,33 @@ pattern match. (`middleware.test.ts` avoids it by being a node-environment file.
 Writing a wildcard Accept header (`star slash star`) literally inside a block
 comment in a route handler closes the comment early and produces a confusing
 parse error several lines later. Spell it out in prose instead.
+
+## Running the marketing e2e REWRITES other tickets' committed screenshots
+`e2e/marketing.spec.ts` and `e2e/marketing-interactive.spec.ts` shoot screenshots
+as a side effect of running, into the same `.rx/review/` other tickets' evidence
+lives in. Run the marketing suite and ~10 tracked PNGs from ENG-587/588/589 come
+back modified — including `eng588-mockup-*.png`, which are the DESIGN REFERENCE
+baselines the port is diffed against. A `git add -A` then sweeps ~24MB of
+unrelated binary churn into the branch and silently moves the reference.
+→ On any marketing ticket, add screenshots by explicit path
+(`git add -f .rx/review/<ticket>-*.png`), never `git add -A`, and check
+`git diff --name-only <base> HEAD -- '.rx/review/*.png'` before pushing. Nothing
+fails when this happens, so only looking catches it.
+
+## `marketing.css`'s ordered diff fails on ANY addition — lift, then pin
+The guard compares rule-for-rule BY POSITION, so an appended rule has no
+counterpart at its index and is reported as `ADDED`. The sanctioned pattern (nav:
+ENG-600; waitlist: ENG-729) is: append the new rules at the very END of the
+sheet, give every one of them a selector matching a NARROW predicate, filter that
+predicate out of the ordered diff, and pin them back in their own sub-describe
+with an exact ALLOWED list. Also assert the mockup matches NONE of the predicate
+— that is what proves the lift is additive-only and cannot conceal a deletion or
+a restyle. Never widen the blanket `EXCEPTIONS` set, and never inline styles to
+dodge the guard.
+
+## `page.evaluate()` is inert under `javaScriptEnabled: false`
+A screenshot/scroll helper shared between a scripting-on and a scripting-off
+describe will throw in the second one. Use Playwright actions that go over CDP
+instead — `locator.scrollIntoViewIfNeeded()`, `locator.fill()`, `locator.click()`
+all work with page scripting disabled; anything evaluating in page context does
+not.
