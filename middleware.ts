@@ -110,7 +110,19 @@ function isSharedPath(pathname: string): boolean {
     // be answerable ON the apex. The apex is still fronted by Wix until the DNS
     // cutover, so a certificate issuance during that migration would otherwise
     // be permanently redirected away from the host being validated.
-    pathname.startsWith("/.well-known/")
+    pathname.startsWith("/.well-known/") ||
+    // The ONE exception to "the BFF belongs to the app host" (ENG-726).
+    //
+    // The waitlist form lives on the marketing home, and a cross-origin POST to
+    // the app host would be a pointless CORS preflight on the one endpoint the
+    // apex genuinely owns. The 404 below exists to keep COOKIE-AUTHENTICATED
+    // endpoints off a second origin; `/api/waitlist` is anonymous and reads no
+    // cookie, so serving it here gives up nothing that rule protects.
+    //
+    // EXACT match, never a prefix: this is a hole punched in a deliberate
+    // blanket 404, and `/api/waitlist/*` must not widen it. Pinned by
+    // test/middleware.test.ts.
+    pathname === "/api/waitlist"
   );
 }
 
@@ -219,8 +231,9 @@ export function middleware(request: NextRequest): NextResponse {
 
   const space = spaceForHost(host);
 
-  // `/legal/*` is the one URL space both hosts share. Checked before anything
-  // else so neither host's rules can bounce it.
+  // The URL spaces both hosts share — `/legal/*`, ACME, and `/api/waitlist`.
+  // Checked before anything else so neither host's rules can bounce them, and
+  // in particular before the marketing `/api/*` 404 below.
   if (isSharedPath(pathname)) return serve(space);
 
   if (space === "marketing") {
@@ -228,6 +241,25 @@ export function middleware(request: NextRequest): NextResponse {
     // would put cookie-authenticated endpoints on a second origin for no
     // reason; 404 rather than redirect, because redirecting an API call
     // cross-origin just fails later and more confusingly.
+    //
+    // `/api/waitlist` is the single sanctioned exception and has already been
+    // let through by `isSharedPath()` above — it is anonymous and cookie-free
+    // (its route builds a client with no cookie adapter, so that is true by
+    // construction, not just by intent). Nothing else may join it without the
+    // same argument.
+    //
+    // HONEST CAVEAT — this 404 is NOT total, and the gap predates ENG-726.
+    // `isExcludedPath()` below (and `config.matcher`) skip middleware entirely
+    // for any path whose last segment contains a dot. `/api/me.json` is
+    // harmless because App Router will not resolve it to `app/api/me/route.ts`
+    // — but `/api/trainers/abc.json` DOES resolve, because `[id]` happily
+    // captures `abc.json`, so that handler executes on the marketing origin and
+    // answers 401 rather than 404. It leaks no data (the apex carries no
+    // session — cookies are host-only, which is the whole reason for the
+    // two-domain split), but the containment claim is not absolute. Pinned as
+    // current behaviour in test/middleware.test.ts and raised as follow-up
+    // ENG-773; closing it means touching `config.matcher`, which is the highest
+    // blast radius change in this repo and does not belong in a feature slice.
     if (isApiPath(pathname)) return new NextResponse(null, { status: 404 });
 
     if (pathname === "/") return serve(space);

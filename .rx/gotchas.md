@@ -644,3 +644,56 @@ the shared card changes — it was still previewing the pre-round-5 card.
 their aside/rail. Derive the Follow pill from those rather than adding a query,
 and model the state as `Set<string> | null` where `null` is "not known yet" —
 conflating it with "follows nobody" flashes a pill on every card and retracts it.
+
+## `app/(marketing)/**` is swept by TWO guard files, not one
+Tickets keep naming only `test/marketing-shell.test.tsx`. There is a second,
+independent sweep in `test/marketing-marquee.test.ts` (`describe("marketing
+guardrails — the contact path really is a mailto")`) that bans `fetch(`,
+`<form`, `onSubmit` and `is-sent` across every `.ts`/`.tsx` file under the route
+group. It was written for the v2.6 fake contact form, so ANY new interactive
+component in that directory fails it by construction — ENG-726's waitlist form
+did. Sanction the new file by EXACT path (`file === "app/(marketing)/x.tsx"`),
+never by loosening the regex, and add a test proving the exemption is not dead.
+Budget for this whenever a marketing ticket ships anything that submits.
+
+## `.marketing .field` already exists, is sanctioned, and is unused
+`marketing.css:720-725` carries `.field` / `.field label` / `.field input` /
+`textarea`, ported with the mockup's contact form and orphaned when that form was
+removed. Because `marketing.css` is diffed rule-for-rule, a NEW class costs a
+sanctioned test delta while `.field` costs nothing. Reach for it before inventing
+`wl-input`-style hooks for any marketing form field.
+
+## `/` is statically prerendered — a query string cannot be read server-side
+The same HTML is served for `/` and `/?joined=1`, so `?foo=` state on the
+marketing home is only recoverable client-side. Any "land back on the page and
+show a result" flow therefore does NOT work with scripting off unless the page is
+deliberately opted into dynamic rendering (reading `searchParams` in the server
+component does that). Decide that explicitly; do not assume a redirect back to
+`/?x=1` is visible to a no-JS visitor. ENG-726 left it as a prop seam for W3.
+
+## `react-hooks/set-state-in-effect` is an eslint ERROR here
+Not a warning. The read-a-browser-value-on-mount pattern (`useEffect` →
+`setState` from `window.location`) fails the scoped lint. Use
+`useSyncExternalStore(subscribe, getClientSnapshot, getServerSnapshot)` with a
+`null` server snapshot instead: same behaviour, no hydration mismatch, no
+cascading render, and the value stays derived rather than copied into state.
+
+## `npm test` alone SKIPS two assertions — run `build` first
+`test/legal-routes.test.ts` guards its prerender-manifest assertions with
+`existsSync(.next/prerender-manifest.json)`. A bare `npm test` reports
+`766 passed | 2 skipped`; the documented gate order (`typecheck && build && test`)
+reports `768 passed`. If the skip count is not 0, you have not actually run the
+gate.
+
+## `readFileSync(new URL("x", import.meta.url))` breaks under the jsdom default
+Vite statically special-cases the literal expression `new URL("…",
+import.meta.url)` for browser asset bundling and rewrites the base to an `http:`
+URL, so `readFileSync` throws `TypeError: The URL must be of scheme file`. Only
+bites in test files WITHOUT the `// @vitest-environment node` pragma. Assign
+`const moduleUrl = import.meta.url;` first and pass that — it breaks Vite's
+pattern match. (`middleware.test.ts` avoids it by being a node-environment file.)
+
+## A `*/` inside a doc comment silently truncates it
+Writing a wildcard Accept header (`star slash star`) literally inside a block
+comment in a route handler closes the comment early and produces a confusing
+parse error several lines later. Spell it out in prose instead.
