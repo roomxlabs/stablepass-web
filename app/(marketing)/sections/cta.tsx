@@ -18,11 +18,21 @@ import WaitlistForm from "../waitlist-form";
  * stay in the DOM and are hidden by mode, so the launch switch-back is one line
  * in layout.tsx.
  *
- * `.cta-trial-line` deliberately keeps its copy. It is the band's hover-reveal
- * line and it promises the same 30-day trial the waitlist line promises; the
- * ticket scopes trial-mentioning prose (the FAQ, this line) as OUT, since the
- * waitlist enables that trial rather than replacing it. What it must NOT do is
- * offer a route to /start, and it does not — it is prose, not a link.
+ * `.cta-trial-line` is `.launch-only`. An earlier pass left it visible, reasoning
+ * that trial-mentioning prose is scoped OUT of this ticket and that this line is
+ * prose rather than a link. Both are true and the conclusion was still wrong,
+ * because the reasoning was done without looking at the rendered state:
+ * marketing.css opens `@media (hover:none)` and un-collapses this line outright
+ * (`max-height:4em;opacity:1`) — the band's hover reveal never fires on a touch
+ * device, so the line is simply ON. Every phone therefore read
+ * "Join stablepass. Enjoy your free 30 day trial." directly above a form whose
+ * entire premise is that you cannot join yet, under a heading that already says
+ * "Join stablepass. and follow the stories…". Two invitations to join, on the
+ * page that exists because joining is not open.
+ *
+ * `.launch-only` rather than `.cta-trial`: it hides the line in waitlist mode
+ * ONLY, so trial and join modes keep rendering it exactly as they do today and
+ * the switch-back stays byte-identical. It also costs no new CSS rule.
  */
 export default function CtaBand({ joined, reason }: { joined?: string | null; reason?: string | null }) {
   return (
@@ -36,7 +46,7 @@ export default function CtaBand({ joined, reason }: { joined?: string | null; re
           <p>
             Join stablepass. and follow the stories, stables, horses, and race day moments that make racing exciting.
           </p>
-          <p className="cta-trial-line">Join stablepass. Enjoy your free 30 day trial.</p>
+          <p className="cta-trial-line launch-only">Join stablepass. Enjoy your free 30 day trial.</p>
           <a className="btn btn-cream cta-trial" href="/start">
             Start your free 30 day trial
           </a>

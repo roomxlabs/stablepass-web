@@ -76,7 +76,10 @@ test.describe("marketing funnel (ENG-600, waitlist mode per ENG-729)", () => {
       els
         .filter((el) => {
           const href = el.getAttribute("href") ?? "";
-          if (!/^\/(start|signin)(\?|#|$)/.test(href)) return false;
+          // Root-relative AND absolute: middleware only rewrites the apex, so a
+          // section could re-introduce `https://app.stablepass.co/start` and a
+          // root-relative-only check would wave it through.
+          if (!/^(https?:\/\/[^/]+)?\/(start|signin)(\?|#|$)/.test(href)) return false;
           // offsetParent is null for a display:none subtree; the rect check
           // covers the position:fixed case offsetParent misses.
           const rect = el.getBoundingClientRect();
@@ -239,5 +242,46 @@ test.describe("the waitlist capture with JavaScript disabled", () => {
     // assertion that would catch someone "fixing" a hide with a script.
     await expect(page.locator("#subscription")).toBeHidden();
     await expect(page.locator("a.nav-signin")).toBeHidden();
+  });
+});
+
+/**
+ * ENG-729 — the page as a TOUCH device renders it.
+ *
+ * marketing.css closes with an `@media (hover:none)` block that materially
+ * changes what is on screen: hover-only affordances are shown outright, because
+ * hover never fires. A desktop run cannot see any of it, and a narrow desktop
+ * viewport still reports `hover: hover`, so this needs a real touch profile.
+ *
+ * This exists because a content bug shipped through exactly that gap: the CTA
+ * band's `.cta-trial-line` is un-collapsed here, so every phone read
+ * "Join stablepass. Enjoy your free 30 day trial." directly above the waitlist
+ * form. It was reasoned about ("prose, not a link") without the state ever being
+ * rendered. The client reviews this site on a phone, so this is his view.
+ */
+test.describe("waitlist mode on a touch device", () => {
+  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
+  test("makes no invitation to join a product that is not open", async ({ page }) => {
+    await page.goto("/");
+
+    // The regression this describe was created for.
+    await expect(page.locator(".cta-trial-line")).toBeHidden();
+
+    // And nothing else offers to sign you up either. Checked against VISIBLE
+    // rendered text, which is the only surface the client actually experiences.
+    const bandText = await page.locator(".wrap.cta").innerText();
+    expect(bandText, "the CTA band invites a join that cannot happen").not.toMatch(/free 30 day trial/i);
+
+    // The capture form is still the band's call to action.
+    await expect(page.locator(".cta-in form.wl-form")).toBeVisible();
+  });
+
+  test("keeps every hide honest where hover never fires", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator("#subscription")).toBeHidden();
+    await expect(page.locator("a.nav-signin")).toBeHidden();
+    await expect(page.locator("a.nav-cta.launch-only")).toBeHidden();
+    await expect(page.getByRole("link", { name: "Join waitlist" })).toBeVisible();
   });
 });

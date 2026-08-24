@@ -637,6 +637,7 @@ if (MOCKUP) {
           ".wl-msg",
           ".wl-msg-success",
           ".wl-msg-error",
+          ".cta-in .wl-form",
           ".cta-in .wl-field label",
           ".cta-in .wl-submit",
           ".cta-in .wl-submit:hover",
@@ -671,6 +672,49 @@ if (MOCKUP) {
               `[data-cta-mode="${mode}"] .cta-${other}`,
             );
           }
+        }
+      });
+
+      /**
+       * Closes a hole this ticket inherited and made load-bearing.
+       *
+       * ENG-600's `isNavRule` lifts EVERY `.nav-*` rule out of the ordered diff,
+       * and its own pin allows any selector merely starting with `.nav-actions`
+       * / `.nav-signin` / `.nav-in`. ENG-729 hangs the pre-launch hide of both
+       * product routes off `.nav-signin` and `.nav-cta` (via `.launch-only`),
+       * which puts that hide squarely inside the nav exemption.
+       *
+       * The consequence, verified rather than theorised: appending
+       *
+       *   .marketing .nav-actions .nav-signin{display:inline-flex !important}
+       *
+       * restores a visible, clickable /signin link in waitlist mode and the
+       * ENTIRE vitest suite stays green. This repo has no CI, so Playwright is
+       * the only other thing that would catch it, and only if someone runs it.
+       *
+       * `!important` on `display` is the whole attack — it beats the mode hide
+       * regardless of specificity or source order. The sheet uses `!important`
+       * three times today (animation, transition, transform, colour) and never
+       * on `display`, so banning that one pairing costs nothing and is checkable
+       * without a browser.
+       */
+      it("lets no rule force a hidden surface back on with !important", () => {
+        const forced = cssRules(MARKETING_CSS)
+          .map((r) => ({ selector: unscope(r.selector), decls: r.decls }))
+          .filter((r) => /display\s*:[^;]*!important/i.test(r.decls))
+          .map((r) => `${r.selector}{${r.decls}}`);
+        expect(forced, "an !important display can override the pre-launch hide").toEqual([]);
+      });
+
+      it("declares display on the pre-launch hooks in exactly one place", () => {
+        // `.launch-only` and `.price-sec` exist ONLY to be hidden. If anything
+        // else in the sheet gives either a display value, the last one wins and
+        // the hide is silently dead.
+        for (const hook of [".launch-only", ".price-sec"]) {
+          const declaring = cssRules(MARKETING_CSS)
+            .map((r) => ({ selector: unscope(r.selector), decls: r.decls }))
+            .filter((r) => r.selector.includes(hook) && /(^|;)\s*display\s*:/.test(r.decls));
+          expect(declaring.map((r) => r.decls), `${hook} display declarations`).toEqual(["display:none"]);
         }
       });
 

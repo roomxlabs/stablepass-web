@@ -11,9 +11,16 @@ import { CANONICAL_ORIGIN, MARKETING_IS_INDEXABLE, canonicalFor } from "@/lib/se
  * routes W4 adds next. The member app keeps its own root layout — this one adds
  * the marketing wrapper inside it, which is what carries the scoped tokens.
  *
- * No Supabase import belongs anywhere in this route group. Marketing is static,
- * cacheable and off the auth-cookie path; that separation is the whole reason
- * the marketing site moved onto its own host.
+ * No Supabase import belongs anywhere in this route group, and marketing stays
+ * off the auth-cookie path — that separation is the whole reason the marketing
+ * site moved onto its own host.
+ *
+ * It is no longer STATIC, though. ENG-729 made `/` read `searchParams` (see
+ * page.tsx for why: it is what lets the no-JS form post land on a visible
+ * confirmation), so the home route is server-rendered per request and is not
+ * CDN-cacheable by default. The legal routes are untouched and still prerender.
+ * Recovering the cache is a follow-up — `/` has no personalisation, so a
+ * `public, s-maxage=…` header for that one path gets it back.
  */
 
 /**
