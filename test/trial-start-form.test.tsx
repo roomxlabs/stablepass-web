@@ -217,17 +217,80 @@ describe("TrialStartForm", () => {
     expect(typeof body.postcode).toBe("string");
   });
 
-  it("renders the duplicate-email copy on 409", async () => {
-    mockFetch(409, { error: { code: "email_taken", message: "That email is already registered." } });
-    render(<TrialStartForm />);
+  // ---- the repeat-signup wall (ENG-763) -------------------------------------
+  // The 409 that used to be `email_taken` is now `trial_already_used` and both
+  // the phone hit and the email hit render this same wall.
+  describe("repeat-signup wall", () => {
+    const WALLED = {
+      error: {
+        code: "trial_already_used",
+        message: "Looks like you've already had your free trial. Sign in to join stablepass.",
+      },
+    };
 
-    fill();
-    submit();
+    async function submitWalled() {
+      mockFetch(409, WALLED);
+      render(<TrialStartForm />);
+      fill();
+      submit();
+      return screen.findByRole("heading", {
+        name: /already had your free trial/i,
+      });
+    }
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "That email is already registered. Try signing in instead.",
-    );
-    expect(pushMock).not.toHaveBeenCalled();
+    it("renders the friendly headline on 409 trial_already_used", async () => {
+      const heading = await submitWalled();
+
+      expect(heading).toBeInTheDocument();
+      expect(pushMock).not.toHaveBeenCalled();
+    });
+
+    it("gives a real next step: the join prompt and a CTA that reaches sign-in", async () => {
+      await submitWalled();
+
+      // The acceptance criterion is that the CTA REACHES sign-in, so the href is
+      // asserted rather than just the label.
+      const cta = screen.getByRole("link", { name: "Sign in to join" });
+      expect(cta).toHaveAttribute("href", "/signin");
+      expect(screen.getByText(/\$19 per month/)).toBeInTheDocument();
+    });
+
+    it("replaces the form outright — no fields left to resubmit", async () => {
+      await submitWalled();
+
+      expect(screen.queryByRole("button", { name: "Start free trial" })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Phone")).not.toBeInTheDocument();
+      // ...but there is still a way back for someone who simply mistyped.
+      expect(screen.getByRole("link", { name: "Start over" })).toHaveAttribute("href", "/start");
+    });
+
+    it("never names WHICH credential matched", async () => {
+      await submitWalled();
+
+      // One generic message, per the ticket's resolved open question. The
+      // member's own email and number were on the form they just submitted;
+      // repeating either here would turn the wall into a confirmation oracle.
+      const text = document.body.textContent ?? "";
+      expect(text).not.toContain("jo@example.com");
+      expect(text).not.toContain("400 000 000");
+      expect(text.toLowerCase()).not.toContain("that email is already registered");
+    });
+
+    it("does NOT wall on a 409 that is not trial_already_used", async () => {
+      // Branching on the status alone would swallow any future 409 whole.
+      mockFetch(409, { error: { code: "something_else", message: "Nope." } });
+      render(<TrialStartForm />);
+
+      fill();
+      submit();
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "That email is already registered. Try signing in instead.",
+      );
+      expect(
+        screen.queryByRole("heading", { name: /already had your free trial/i }),
+      ).not.toBeInTheDocument();
+    });
   });
 
   it("renders the rate-limit copy on 429", async () => {

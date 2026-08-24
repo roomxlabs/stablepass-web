@@ -2,6 +2,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const signUpMock = vi.fn();
 const maybeSingleMock = vi.fn();
+// ENG-763's pre-signup wall calls the `phone_in_use` RPC before auth.signUp.
+// It is mocked at the client, not stubbed per test, because EVERY test in this
+// file now reaches it: a route calling `sb.rpc(...)` against a client without
+// one throws before it reaches the behaviour under test.
+const rpcMock = vi.fn();
 
 const chain: { select: ReturnType<typeof vi.fn>; eq: ReturnType<typeof vi.fn>; maybeSingle: ReturnType<typeof vi.fn> } = {
   select: vi.fn(),
@@ -19,6 +24,7 @@ vi.mock("@/lib/supabase/server", () => ({
   supabaseServer: vi.fn(async () => ({
     auth: { signUp: signUpMock },
     from: fromMock,
+    rpc: rpcMock,
   })),
 }));
 
@@ -57,6 +63,10 @@ describe("POST /api/auth/signup", () => {
   beforeEach(() => {
     signUpMock.mockReset();
     maybeSingleMock.mockReset();
+    rpcMock.mockReset();
+    // Default: this number has NOT had a trial, so every pre-existing test
+    // reaches the behaviour it was written for. The wall's own tests override.
+    rpcMock.mockResolvedValue({ data: false, error: null });
     fromMock.mockClear();
     chain.select.mockClear();
     chain.eq.mockClear();
@@ -73,24 +83,149 @@ describe("POST /api/auth/signup", () => {
     expect(body.data.subscription.trialEndsAt).toBe("2026-08-12T00:00:00.000Z");
   });
 
-  it("returns 409 email_taken when signUp succeeds but identities is empty (duplicate)", async () => {
+  // ENG-763 renamed this code from `email_taken`: a repeat email IS "already had
+  // your trial" for this product, and it renders the identical wall as a repeat
+  // phone so the response cannot be used to tell the two apart.
+  it("returns 409 trial_already_used when signUp succeeds but identities is empty (duplicate)", async () => {
     signUpMock.mockResolvedValue({ data: { user: { id: "u1", identities: [] } }, error: null });
 
     const res = await POST(req(VALID_BODY));
     const body = await res.json();
 
     expect(res.status).toBe(409);
-    expect(body.error.code).toBe("email_taken");
+    expect(body.error.code).toBe("trial_already_used");
   });
 
-  it("returns 409 email_taken when signUp errors with 'already registered'", async () => {
+  it("returns 409 trial_already_used when signUp errors with 'already registered'", async () => {
     signUpMock.mockResolvedValue({ data: {}, error: { message: "User already registered", status: 422 } });
 
     const res = await POST(req(VALID_BODY));
     const body = await res.json();
 
     expect(res.status).toBe(409);
-    expect(body.error.code).toBe("email_taken");
+    expect(body.error.code).toBe("trial_already_used");
+  });
+
+  // ---- the repeat-signup wall (ENG-763) -------------------------------------
+  describe("repeat-signup wall — the phone pre-check", () => {
+    it("walls a phone that already has an account, and creates NO account", async () => {
+      rpcMock.mockResolvedValue({ data: true, error: null });
+
+      const res = await POST(req(VALID_BODY));
+      const body = await res.json();
+
+      expect(res.status).toBe(409);
+      expect(body.error.code).toBe("trial_already_used");
+      // The acceptance criterion is "no account is created", so assert the
+      // absence of the creation call, not just the status code.
+      expect(signUpMock).not.toHaveBeenCalled();
+    });
+
+    it("walls a DIFFERENT format of the same number (the whole point of the rule)", async () => {
+      rpcMock.mockResolvedValue({ data: true, error: null });
+
+      const res = await POST(req({ ...VALID_BODY, phone: "0400 000 000" }));
+
+      expect(res.status).toBe(409);
+      expect(signUpMock).not.toHaveBeenCalled();
+    });
+
+    it("sends the number AS TYPED — the RPC normalises in its own body", async () => {
+      // Pinning the wire shape: normalising here instead would compare against
+      // a rule the database did not apply. `p_phone` is the parameter name in
+      // ENG-742's migration; getting it wrong returns 404 PGRST202, which this
+      // route deliberately fails open on, so nothing else would catch it.
+      mockSuccess();
+      await POST(req({ ...VALID_BODY, phone: "(0400) 111-222" }));
+
+      expect(rpcMock).toHaveBeenCalledWith("phone_in_use", { p_phone: "(0400) 111-222" });
+    });
+
+    it("does not call the RPC at all for a phone with no digits", async () => {
+      // normalizePhone() is null, and the RPC's documented answer for that input
+      // is false, so the round trip is skipped rather than guessed at.
+      mockSuccess();
+      await POST(req({ ...VALID_BODY, phone: "abc" }));
+
+      expect(rpcMock).not.toHaveBeenCalled();
+      expect(signUpMock).toHaveBeenCalled();
+    });
+
+    it("FAILS OPEN when the RPC is missing (deploy skew), still creating the account", async () => {
+      // Web ahead of the migration: phone_in_use does not exist yet. Walling
+      // every signup here would take the whole funnel down; the DB backstop
+      // still degrades a duplicate phone to NULL.
+      rpcMock.mockResolvedValue({ data: null, error: { code: "PGRST202", message: "not found" } });
+      mockSuccess();
+
+      const res = await POST(req(VALID_BODY));
+
+      expect(res.status).toBe(201);
+      expect(signUpMock).toHaveBeenCalled();
+    });
+
+    it("does NOT wall on a non-boolean RPC result", async () => {
+      // `sb` is untyped, so nothing upstream guarantees the shape. Only an
+      // explicit `true` may close this door — a truthy object here would lock a
+      // legitimate member out of signing up with no way to act on it.
+      rpcMock.mockResolvedValue({ data: null, error: null });
+      mockSuccess();
+
+      const res = await POST(req(VALID_BODY));
+
+      expect(res.status).toBe(201);
+    });
+
+    it("shows the wall, not a stack trace, if the DB ever surfaces the phone unique violation", async () => {
+      // Unreachable on the current schema (ENG-742's trigger catches this and
+      // retries with a NULL phone), so this pins the fallback rather than
+      // current behaviour: the index name is a documented rename hazard, and
+      // the failure mode without this branch is a raw 500 on signup.
+      signUpMock.mockResolvedValue({
+        data: {},
+        error: {
+          code: "23505",
+          message: 'duplicate key value violates unique constraint "idx_app_user_phone"',
+        },
+      });
+
+      const res = await POST(req(VALID_BODY));
+      const body = await res.json();
+
+      expect(res.status).toBe(409);
+      expect(body.error.code).toBe("trial_already_used");
+    });
+
+    it("never echoes the database DETAIL, which carries the member's number", async () => {
+      // PostgREST forwards Postgres DETAIL verbatim and it contains the
+      // normalised phone number. Nothing may reflect it back to the caller.
+      signUpMock.mockResolvedValue({
+        data: {},
+        error: {
+          code: "23505",
+          message: "Key (normalize_phone(phone))=(61400111222) already exists.",
+        },
+      });
+
+      const res = await POST(req(VALID_BODY));
+      const raw = JSON.stringify(await res.json());
+
+      expect(res.status).toBe(409);
+      expect(raw).not.toContain("61400111222");
+      expect(raw).not.toContain("normalize_phone");
+    });
+
+    it("uses ONE message for both the phone hit and the email hit (no enumeration)", async () => {
+      // The resolved open question: never reveal WHICH credential matched.
+      rpcMock.mockResolvedValue({ data: true, error: null });
+      const phoneHit = await (await POST(req(VALID_BODY))).json();
+
+      rpcMock.mockResolvedValue({ data: false, error: null });
+      signUpMock.mockResolvedValue({ data: { user: { id: "u1", identities: [] } }, error: null });
+      const emailHit = await (await POST(req(VALID_BODY))).json();
+
+      expect(phoneHit).toEqual(emailHit);
+    });
   });
 
   it("returns 400 validation_failed and never calls signUp when password is missing", async () => {
