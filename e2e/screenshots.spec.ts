@@ -956,11 +956,17 @@ test("ENG-613 both profile feeds show the same card anatomy", async ({ page }) =
  */
 test.describe("ENG-729 waitlist mode", () => {
   const shoot = async (page: import("@playwright/test").Page, label: string) => {
-    // Sections reveal on scroll; settle them before capturing so the band is not
-    // caught mid-transition.
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    // Sections reveal on scroll; walk past the band and back so the observer has
+    // fired before capturing, rather than catching it mid-transition.
+    //
+    // scrollIntoViewIfNeeded, NOT page.evaluate(window.scrollTo): this helper
+    // also runs in the scripting-off describe below, where evaluate() is inert
+    // and would throw. Playwright drives this over CDP, so it works in both
+    // modes — and with scripting off there is nothing to settle anyway, because
+    // the reveal never arms and every section is simply visible.
+    await page.locator(".wrap.cta").scrollIntoViewIfNeeded();
     await page.waitForTimeout(900);
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.locator("header.hero").scrollIntoViewIfNeeded();
     await page.waitForTimeout(400);
 
     await page.locator("header.hero").screenshot({ path: `.rx/review/eng-729-hero-${label}.png` });
