@@ -936,3 +936,69 @@ docker exec supabase_db_stablepass psql -U postgres -d postgres \
 Empty output means the migration is missing: re-apply the be migrations, then re-run. These
 specs passed when ENG-772 and ENG-775 shipped, so a green PR does not mean they stay green
 locally. Always baseline the same specs on the merge-base before treating a red as yours.
+
+## Three member e2e specs are RED on `feature/round6-v1` — they die in their own SEED (ENG-794)
+
+`e2e/eng-772-profile-label-pill`, `e2e/eng-775-saved-label-pill` and
+`e2e/reaction-save` fail on the round-6 tip. Measured at `4dbefe7` and again on
+ENG-794's branch: **3 failed / 2 passed** across those three files (5 tests), and
+**9 failed / 105 passed** across the whole Playwright suite — identical on both,
+so they are not anyone's regression.
+
+**They fail in their service-role seed, before any page is loaded.** The error is:
+
+```
+{ code: 'PGRST204', message: "Could not find the 'label' column of 'post' in the schema cache" }
+```
+
+The specs INSERT a post with `label: "Trackwork"`, and the local `post` table has
+no `label` column — `information_schema` lists 19 and `label` is not one. The
+migration `20260819120001_post_label.sql` (ENG-738) exists only on unmerged
+`stablepass-be` worktrees, never on be `main`. A transient
+`42501 permission denied for table trainer` has also been seen from the same seed
+when the local stack was in a half-restarted state.
+
+**Do NOT conflate this with the 42703 projection trap.** That trap is real and
+documented above, but it applies to a `.select()` naming an undeployed column,
+where PostgREST rejects the query and the ROUTE turns it into a silent empty
+list. These specs never get that far — they cannot even write their fixture. If
+you go looking for a blank feed you will waste the afternoon.
+
+**The consequence worth knowing:** while this holds, the three specs give the
+five member feed screens **zero** end-to-end coverage. Anything touching those
+screens is covered by vitest and static comparison only, so say so in the PR
+rather than implying the e2e red is understood and harmless.
+
+**Do this:** baseline before blaming your diff, and do NOT deploy the be
+migration yourself — the local Supabase stack is shared across every worktree
+(see the BE serialization rule). Disclose, and note that CI must re-run these
+once ENG-738 lands.
+
+## `npm test` alone can FAIL `marketing-marquee`, and a dev server is why
+
+`test/marketing-marquee.test.ts` ("ships no confirmation copy in the built output
+either") scans `.next` for bundle files and asserts `bundles.length > 0`. The
+`existsSync` guard documented above skips it when `.next` is absent — but a
+Playwright run (or any `npm run dev`) creates a `.next` with **dev** output, so
+the guard passes and the filter then finds zero production bundles. The test
+fails with `expected 0 to be greater than 0` and looks like a regression in code
+you never touched.
+
+**Do this:** run the documented gate in order — `typecheck && build && test`. After
+a `next build` the file goes green. Two suite skips also disappear once the build
+output exists, so the honest full-suite number on round-6 is 873/873, not
+858 + 2 skipped.
+
+## The five feed mappers are now ONE — add a `post` column in `lib/feed/post-row.ts` (ENG-794)
+
+`postIntrinsics()` + `POST_INTRINSIC_COLUMNS` own the ten post-intrinsic fields
+for all five member screens and both profile routes. A new `post` column the card
+renders needs `lib/feed/post-row.ts` (row type + projection + key + mapper) and
+`components/types.ts` (the view model) — and nothing else. Identity/context
+(`horseId`, `horseName`, `trainerName`, `trainerId`, `stableName`,
+`stableLocation`, `bookmarked`) is deliberately NOT shared; those diverge per
+screen for real reasons. Don't widen the helper to cover them.
+
+The return type is `Required<Pick<FeedPost, PostIntrinsicKey>>` on purpose:
+`title?`, `body?` and `photos?` are optional on `FeedPost`, so a plain `Pick`
+would let the shared mapper drop one and still compile.
