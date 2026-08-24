@@ -849,3 +849,54 @@ shares. Re-publish with
 `clearMarketingTrainers()` to unpublish the seeded ones.
 → The helper refuses to run against anything but a loopback host, so this can
 never reach staging or production — but it WILL surprise you locally.
+
+## `config.matcher` and `isExcludedPath()` must be changed TOGETHER or you get a no-op
+`config.matcher` decides whether middleware is **invoked**; `isExcludedPath()` is
+`middleware()`'s **first line** and returns `next()` when true. Changing only one is a
+no-op in one direction or the other, and ENG-773 burned a whole worker proving it
+(measured 401 → 401 after patching just the guard). The "matcher agrees with the
+in-function guard" test is what keeps the pair honest — it is not decoration.
+→ Any change here MUST be proven by measuring the **built** server
+(`npm run build && PORT=<free> npm start`, then `curl -H 'Host: stablepass.co'`).
+A green unit suite proves nothing: the unit tests call `middleware()` directly and
+so never exercise the matcher at all.
+
+## Write matcher entries as REGEX, not `/api/:path*` sugar
+The agreement test compiles every `config.matcher` entry with `new RegExp`.
+`new RegExp("^/api/:path*$")` reads `:path*` as a literal `:pat` followed by `h*` —
+it matches nothing, so every agreement assertion goes **vacuously green**. A test
+now pins that no entry contains `:`. Next compiles the regex form fine (entry [0]
+has always been one).
+→ Matching is a UNION over entries, so also beware assertions that pass via entry
+[0]: `matchesAny("/api")` is dotless and entry [0] already matches it, so such an
+assertion survives deleting the entry you just added. Assert `patterns[N]` directly.
+
+## Running the full Playwright suite OVERWRITES ~57 committed screenshots
+`e2e/screenshots.spec.ts` rewrites `.rx/review/*.png` in place. They are tracked, so
+they land in `git status` and will silently ride along in your commit if you
+`git add -A`. Always `git checkout -- .rx/review/` after an e2e run unless
+refreshing them is your ticket.
+→ `e2e/screenshots.spec.ts › W6 explore feed renders real posts` currently fails
+(30s timeout) on `feature/waitlist-v1` at `c911193`. Pre-existing — baseline before
+believing it is yours.
+
+## `npm test` BEFORE `npm run build` skips 2 tests — baselines are not comparable
+Two specs are `skipIf(!existsSync(BUILD_DIR))` / `!existsSync(PRERENDER_MANIFEST)`.
+Run the build first, or your "before" is 837 passed + 2 skipped and your "after" is
+844 passed and you will waste time reconciling a phantom delta.
+
+## The repo has NO `.env`, and `next build`/`next start` need one
+`supabaseServer()` does `process.env.NEXT_PUBLIC_SUPABASE_URL!` — with it unset,
+`createServerClient` throws and routes 500 instead of the 401 you are trying to
+measure. A gitignored `.env.local` with dummy values is enough:
+`NEXT_PUBLIC_SUPABASE_URL=https://dummy.supabase.co` +
+`NEXT_PUBLIC_SUPABASE_ANON_KEY=dummy`. No cookie → no session → clean 401, no network.
+
+## Marketing-apex `/api/*` containment is host-DERIVATION dependent
+Post-ENG-773 the apex 404s every `/api/*` except `/api/waitlist`, dotted or not. But
+`requestHost()` prefers `x-forwarded-host`, so `Host: stablepass.co` +
+`X-Forwarded-Host: app.stablepass.co` still reaches the handler (401). Vercel
+overwrites XFH so it is not live in production. Case is the other carve-out:
+everything here is case-sensitive, so `/API/…` is contained by Next's router, not by
+middleware. State the guarantee as "every request whose PUBLIC HOST resolves to
+marketing" — never as unqualified "total".

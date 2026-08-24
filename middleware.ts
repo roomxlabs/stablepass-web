@@ -139,6 +139,24 @@ function isApiPath(pathname: string): boolean {
  * corpus of paths — the two encode the same rule twice and must not diverge.
  */
 export function isExcludedPath(pathname: string): boolean {
+  // `/api/*` is NEVER excluded — dot or no dot (ENG-773).
+  //
+  // The dot rule below is for STATIC ASSETS: `favicon.ico`, `og.jpg`,
+  // `robots.txt`, framework chunks. An API path is not an asset, and a dot in
+  // its last segment is just a dynamic segment's VALUE — `/api/trainers/[id]`
+  // captures `abc.json` perfectly happily. Without this line that handler
+  // executed on the marketing origin and answered 401, so the blanket 404 this
+  // file promises was not total.
+  //
+  // This MUST stay in lockstep with the `/api` entry in `config.matcher` below.
+  // The matcher decides whether middleware is INVOKED at all; this guard runs
+  // INSIDE it and is the first thing `middleware()` consults. Fixing only one
+  // of the two is a no-op in one direction or the other: patching this alone
+  // leaves the function unreachable for dotted API paths, and patching only the
+  // matcher gets middleware invoked just to bail out on the next line. The
+  // "agrees with the in-function guard" test pins the pair together.
+  if (isApiPath(pathname)) return false;
+
   return (
     pathname.startsWith("/_next/") ||
     pathname.startsWith("/marketing/") ||
@@ -248,18 +266,44 @@ export function middleware(request: NextRequest): NextResponse {
     // construction, not just by intent). Nothing else may join it without the
     // same argument.
     //
-    // HONEST CAVEAT — this 404 is NOT total, and the gap predates ENG-726.
-    // `isExcludedPath()` below (and `config.matcher`) skip middleware entirely
-    // for any path whose last segment contains a dot. `/api/me.json` is
-    // harmless because App Router will not resolve it to `app/api/me/route.ts`
-    // — but `/api/trainers/abc.json` DOES resolve, because `[id]` happily
-    // captures `abc.json`, so that handler executes on the marketing origin and
-    // answers 401 rather than 404. It leaks no data (the apex carries no
-    // session — cookies are host-only, which is the whole reason for the
-    // two-domain split), but the containment claim is not absolute. Pinned as
-    // current behaviour in test/middleware.test.ts and raised as follow-up
-    // ENG-773; closing it means touching `config.matcher`, which is the highest
-    // blast radius change in this repo and does not belong in a feature slice.
+    // ENG-773 closed the dotted-path gap. State the guarantee precisely — an
+    // unqualified "this is now total" is how the last false invariant got
+    // written down in the first place:
+    //
+    //   For every request whose PUBLIC HOST resolves to the marketing space,
+    //   every `/api/*` except `/api/waitlist` is refused here.
+    //
+    // Two things that guarantee does NOT cover, both deliberately out of scope
+    // and both unchanged by ENG-773:
+    //
+    //   * The host is whatever `requestHost()` derives, and that prefers
+    //     `x-forwarded-host`. Sending `x-forwarded-host: app.stablepass.co` to
+    //     the apex still reaches the handler (401). Vercel overwrites the
+    //     header so this is not live in production, but the containment claim
+    //     is header-dependent, not absolute.
+    //   * Case. `isApiPath()` and both matcher entries are case-sensitive, so
+    //     `/API/trainers/abc.json` never enters this branch. It is contained
+    //     only because Next's router is case-sensitive too and resolves no
+    //     route for it — that containment comes from the framework, not here.
+    //
+    // It used not to be: both `config.matcher` and `isExcludedPath()` skipped
+    // middleware for any path whose last segment contains a dot, so
+    // `/api/trainers/abc.json` never reached this line — `[id]` captured
+    // `abc.json` and the handler executed on the marketing origin, answering
+    // 401. It leaked nothing (the apex carries no session; cookies are
+    // host-only, which is the whole reason for the two-domain split) but the
+    // containment claim was false, which is worse than a known hole.
+    //
+    // Both halves were fixed together, because either alone is a no-op: the
+    // `/api` matcher entry gets middleware INVOKED for dotted API paths, and
+    // the `isApiPath()` bail-out in `isExcludedPath()` stops it returning
+    // `next()` before it gets here. Measured against the built server rather
+    // than asserted: 401 -> 404 for `/api/trainers/abc.json` on the apex.
+    //
+    // A NOTE ON THE COMMENT ABOVE: it is deliberately scoped rather than
+    // absolute. The whole reason this ticket exists is that a stated, tested
+    // invariant was false; replacing one overclaim with another would repeat
+    // the mistake in the other direction.
     if (isApiPath(pathname)) return new NextResponse(null, { status: 404 });
 
     if (pathname === "/") return serve(space);
@@ -296,14 +340,36 @@ export function middleware(request: NextRequest): NextResponse {
 
 export const config = {
   /*
-   * Everything EXCEPT:
-   *   `_next/*`      framework assets (static chunks, the image optimiser)
-   *   `marketing/*`  the 40 extracted marketing assets under public/
-   *   any path with a file extension (favicon.ico, og.jpg, robots.txt, …)
+   * Next runs middleware if ANY entry matches, so these two are a UNION.
    *
-   * `/api/*` is deliberately NOT excluded — the apex has to be able to refuse
-   * it. Keep `isExcludedPath()` above in sync with this pattern; the test reads
-   * `config.matcher` directly so the two cannot silently diverge.
+   * [0] Everything EXCEPT:
+   *       `_next/*`      framework assets (static chunks, the image optimiser)
+   *       `marketing/*`  the 40 extracted marketing assets under public/
+   *       any path with a file extension (favicon.ico, og.jpg, robots.txt, …)
+   *
+   * [1] `/api` and `/api/*`, unconditionally — ENG-773.
+   *
+   * Entry [0] intends to admit `/api/*` (the apex has to be able to refuse it)
+   * but its own file-extension rule silently took it back: `/api/trainers/
+   * abc.json` has a dot in its last segment, so middleware was never invoked
+   * and `app/api/trainers/[id]/route.ts` executed on the marketing origin,
+   * answering 401 instead of 404. Entry [1] is ADDITIVE and exists solely to
+   * put those paths back in scope. Entry [0] is deliberately left byte-for-byte
+   * alone — it governs every non-API route in the app and is the highest
+   * blast-radius line in this repo, so the risk of this change stays confined
+   * to `/api/*`. Dotted NON-API assets are matched by neither entry and still
+   * bypass middleware entirely, which is the whole point of the dot rule.
+   *
+   * WHY A REGEX AND NOT `/api/:path*`: the "agrees with the in-function guard"
+   * test compiles every entry here with `new RegExp` so the corpus check cannot
+   * drift from what Next compiles. `:path*` is path-to-regexp sugar that
+   * `new RegExp` would read as a literal `:pat` followed by `h*`, which would
+   * silently make that guard stop guarding. This form is exactly equivalent to
+   * `isApiPath()` — `/api` or `/api/` + anything, and nothing else (`/apifoo`
+   * does NOT match).
+   *
+   * Keep `isExcludedPath()` above in sync with BOTH entries; the test reads
+   * `config.matcher` directly so the two encodings cannot silently diverge.
    */
-  matcher: ["/((?!_next/|marketing/|.*\\.[^/]+$).*)"],
+  matcher: ["/((?!_next/|marketing/|.*\\.[^/]+$).*)", "/(api|api/.*)"],
 };
