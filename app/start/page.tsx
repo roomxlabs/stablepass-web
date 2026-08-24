@@ -38,10 +38,26 @@ export default async function StartPage({
           <Wordmark className="auth-side-brand" />
         </div>
         <div className="auth-side-quote">
-          <p className="quote">
-            &ldquo;30 days on us — no credit card, no auto-charge. Just unlock the
-            platform and see if it&rsquo;s for you.&rdquo;
-          </p>
+          {/* The quote must agree with the panel beside it. The trial pitch
+              ("30 days on us, no credit card") next to a wall saying the trial
+              is already used reads as a contradiction and undercuts the join
+              prompt — the same defect ENG-729 shipped, where a CTA band offered
+              the free trial on a page saying you could not join yet. This is
+              also WHY the wall is a server-rendered URL rather than a state
+              swap inside the form: the aside is outside the form, so an
+              in-place swap could only ever change half the screen. */}
+          {trialUsed ? (
+            <p className="quote">
+              &ldquo;Come and join us properly. Every update, every race day report and
+              every replay from the yard, straight from the people who know these
+              horses.&rdquo;
+            </p>
+          ) : (
+            <p className="quote">
+              &ldquo;30 days on us — no credit card, no auto-charge. Just unlock the
+              platform and see if it&rsquo;s for you.&rdquo;
+            </p>
+          )}
           <div className="attrib">
             <div className="attrib-avatar">JA</div>
             <div>Justin Alpar · Founder, stablepass</div>

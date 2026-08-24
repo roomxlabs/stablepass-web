@@ -20,8 +20,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { TrialUsedWall } from "./trial-used-wall";
-
 const MIN_PASSWORD = 8;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // AU postcodes are exactly four digits and are stored as text — '0800' (NT) is
@@ -98,10 +96,6 @@ export function TrialStartForm() {
   const [form, setForm] = useState(EMPTY);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Terminal state for this flow: the trial has already been used, so the form
-  // is replaced outright rather than left sitting under an error banner
-  // inviting a pointless retry. The wall carries its own way back (ENG-763).
-  const [trialUsed, setTrialUsed] = useState(false);
 
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -224,19 +218,25 @@ export function TrialStartForm() {
     // `trial_already_used` for both a repeat phone and a repeat email, and the
     // wall is the whole point of the response; a status-only test would also
     // swallow any future 409 that means something else entirely.
+    //
+    // NAVIGATE rather than swapping the wall in locally. The screen's left-hand
+    // panel — which pitches the free trial — lives in app/start/page.tsx,
+    // OUTSIDE this component, so a local swap would leave the trial pitch sitting
+    // beside a message saying the trial is used up. Going to the URL re-renders
+    // the whole screen from the server, which also means the JS-blocked path and
+    // this one render the exact same markup and cannot drift. `replace`, not
+    // `push`: a dead end does not deserve a history entry, and Back should
+    // return where the member came from. Left busy-locked on purpose so the
+    // button cannot be double-submitted while the navigation is in flight.
     if (body?.error?.code === "trial_already_used") {
-      setTrialUsed(true);
-      return; // stay busy-locked: this form is finished, the wall replaces it.
+      router.replace("/start?trial=used");
+      return;
     }
     if (res.status === 409) setError("That email is already registered. Try signing in instead.");
     else if (res.status === 429) setError("Too many attempts — please wait a moment and try again.");
     else setError(body?.error?.message ?? "Please check your details and try again.");
     setBusy(false);
   }
-
-  // After every hook above, never before one: the wall is a different screen,
-  // not a branch inside the form's own markup.
-  if (trialUsed) return <TrialUsedWall />;
 
   return (
     <form className="auth-card" onSubmit={onSubmit} noValidate>

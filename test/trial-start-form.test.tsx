@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
-const { pushMock, refreshMock } = vi.hoisted(() => ({
+const { pushMock, refreshMock, replaceMock } = vi.hoisted(() => ({
   pushMock: vi.fn(),
   refreshMock: vi.fn(),
+  // ENG-763: the repeat-signup wall is a NAVIGATION, not a local state swap.
+  replaceMock: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: pushMock, refresh: refreshMock }),
+  useRouter: () => ({ push: pushMock, refresh: refreshMock, replace: replaceMock }),
 }));
 
 import { TrialStartForm } from "@/app/start/trial-start-form";
@@ -48,6 +50,7 @@ describe("TrialStartForm", () => {
   beforeEach(() => {
     pushMock.mockClear();
     refreshMock.mockClear();
+    replaceMock.mockClear();
   });
 
   it("renders the six fields in order: first, last, email, phone, postcode, password", () => {
@@ -218,8 +221,13 @@ describe("TrialStartForm", () => {
   });
 
   // ---- the repeat-signup wall (ENG-763) -------------------------------------
-  // The 409 that used to be `email_taken` is now `trial_already_used` and both
-  // the phone hit and the email hit render this same wall.
+  // The 409 that used to be `email_taken` is now `trial_already_used`, and both
+  // the phone hit and the email hit send the member to the SAME wall.
+  //
+  // The wall's own markup is covered by test/trial-used-wall.test.tsx. What this
+  // form owes is the routing decision: the wall is a server-rendered URL, not a
+  // local swap, because the screen's left-hand trial pitch lives outside this
+  // component and a local swap would leave it contradicting the wall.
   describe("repeat-signup wall", () => {
     const WALLED = {
       error: {
@@ -229,51 +237,33 @@ describe("TrialStartForm", () => {
     };
 
     async function submitWalled() {
-      mockFetch(409, WALLED);
+      const fetchMock = mockFetch(409, WALLED);
       render(<TrialStartForm />);
       fill();
       submit();
-      return screen.findByRole("heading", {
-        name: /already had your free trial/i,
-      });
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     }
 
-    it("renders the friendly headline on 409 trial_already_used", async () => {
-      const heading = await submitWalled();
+    it("sends the member to the wall URL on 409 trial_already_used", async () => {
+      await submitWalled();
 
-      expect(heading).toBeInTheDocument();
+      await waitFor(() => expect(replaceMock).toHaveBeenCalledWith("/start?trial=used"));
+      // `replace`, not `push`: a dead end does not deserve a history entry.
       expect(pushMock).not.toHaveBeenCalled();
     });
 
-    it("gives a real next step: the join prompt and a CTA that reaches sign-in", async () => {
+    it("shows no error banner — the wall is the message, not a red box", async () => {
       await submitWalled();
 
-      // The acceptance criterion is that the CTA REACHES sign-in, so the href is
-      // asserted rather than just the label.
-      const cta = screen.getByRole("link", { name: "Sign in to join" });
-      expect(cta).toHaveAttribute("href", "/signin");
-      expect(screen.getByText(/\$19 per month/)).toBeInTheDocument();
+      await waitFor(() => expect(replaceMock).toHaveBeenCalled());
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
 
-    it("replaces the form outright — no fields left to resubmit", async () => {
+    it("stays busy-locked so the form cannot be resubmitted mid-navigation", async () => {
       await submitWalled();
 
-      expect(screen.queryByRole("button", { name: "Start free trial" })).not.toBeInTheDocument();
-      expect(screen.queryByLabelText("Phone")).not.toBeInTheDocument();
-      // ...but there is still a way back for someone who simply mistyped.
-      expect(screen.getByRole("link", { name: "Start over" })).toHaveAttribute("href", "/start");
-    });
-
-    it("never names WHICH credential matched", async () => {
-      await submitWalled();
-
-      // One generic message, per the ticket's resolved open question. The
-      // member's own email and number were on the form they just submitted;
-      // repeating either here would turn the wall into a confirmation oracle.
-      const text = document.body.textContent ?? "";
-      expect(text).not.toContain("jo@example.com");
-      expect(text).not.toContain("400 000 000");
-      expect(text.toLowerCase()).not.toContain("that email is already registered");
+      await waitFor(() => expect(replaceMock).toHaveBeenCalled());
+      expect(screen.getByRole("button", { name: "Starting your trial…" })).toBeDisabled();
     });
 
     it("does NOT wall on a 409 that is not trial_already_used", async () => {
@@ -287,9 +277,7 @@ describe("TrialStartForm", () => {
       expect(await screen.findByRole("alert")).toHaveTextContent(
         "That email is already registered. Try signing in instead.",
       );
-      expect(
-        screen.queryByRole("heading", { name: /already had your free trial/i }),
-      ).not.toBeInTheDocument();
+      expect(replaceMock).not.toHaveBeenCalled();
     });
   });
 
