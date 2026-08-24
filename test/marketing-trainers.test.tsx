@@ -123,7 +123,7 @@ describe("the public_trainer read — the contract", () => {
     expect(PUBLIC_TRAINER_COLUMNS).toBe("id,name,display_name,location,bio,marketing_photo_path,horses");
   });
 
-  it("reads the view, never the base table", async () => {
+  it("reads the view, never the base table — with EXACTLY one select", async () => {
     const { PUBLIC_TRAINER_VIEW, readPublicTrainers, PUBLIC_TRAINER_COLUMNS } = await loadModule();
     selectMock.mockResolvedValue({ data: [], error: null });
 
@@ -131,6 +131,11 @@ describe("the public_trainer read — the contract", () => {
 
     expect(PUBLIC_TRAINER_VIEW).toBe("public_trainer");
     expect(selectMock).toHaveBeenCalledWith("public_trainer", PUBLIC_TRAINER_COLUMNS);
+    // `toHaveBeenCalledWith` passes if ANY call matched, so a second, WIDER
+    // select added later — `.from(PUBLIC_TRAINER_VIEW).select("*")` — would sail
+    // past both this and the `.from(` guard, which only constrains the relation.
+    // Pinning the call COUNT is what actually bounds the projection.
+    expect(selectMock, "the read issues more than one select — the projection is no longer bounded").toHaveBeenCalledTimes(1);
   });
 
   it("builds a BARE anon client — no cookies, no session, no service key", async () => {

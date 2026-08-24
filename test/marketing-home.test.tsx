@@ -481,7 +481,17 @@ describe("marketing home — copy matches the frozen fixture", () => {
    * because an empty roster drops the section entirely and the block-order
    * assertion below is worth keeping honest.
    */
-  const LIVE_DATA_BLOCK = "section#stable-trainers.sec tr-sec";
+  /**
+   * The exemption is an ALLOW-LIST OF ONE, and it is a list rather than a
+   * constant on purpose: both the subtraction below and the anti-vacuity count
+   * read from it, so a second exemption cannot be added in one place and go
+   * unnoticed in the other. Adding to this array fails the length assertion in
+   * "covers the whole page" immediately. Same shape as the pinned allow-lists
+   * ENG-600 and ENG-729 used for the CSS guard.
+   */
+  const EXEMPT_BLOCKS = ["section#stable-trainers.sec tr-sec"];
+  const LIVE_DATA_BLOCK = EXEMPT_BLOCKS[0]!;
+  const isExempt = (signature: string) => EXEMPT_BLOCKS.includes(signature);
   const renderFrozen = () => render(<HomeSections trainers={TRAINER_FIXTURE} />);
 
   it("renders the same blocks, in the same order", () => {
@@ -543,8 +553,8 @@ describe("marketing home — copy matches the frozen fixture", () => {
     blocksOf(container, "main").forEach((block, i) => {
       const { signature, runs: want } = fixture.blocks[i];
 
-      // ENG-730's one documented subtraction — see LIVE_DATA_BLOCK above.
-      if (signature === LIVE_DATA_BLOCK) return;
+      // ENG-730's one documented subtraction — see EXEMPT_BLOCKS above.
+      if (isExempt(signature)) return;
 
       // Subtracted one occurrence at a time, not with a set: "Join the waitlist"
       // is both the button label and part of the line above it in the hero, and
@@ -578,7 +588,7 @@ describe("marketing home — copy matches the frozen fixture", () => {
       // extracted assets under /marketing/ but public-bucket URLs chosen by an
       // admin. `test/marketing-shell.test.tsx` still pins the extracted asset
       // set, and this ticket deleted the nineteen that went orphaned with them.
-      if (fixture.blocks[i].signature === LIVE_DATA_BLOCK) return;
+      if (isExempt(fixture.blocks[i].signature)) return;
       expect(imagesOf(block), `asset drift in ${fixture.blocks[i].signature}`).toEqual(fixture.blocks[i].images);
     });
   });
@@ -591,7 +601,11 @@ describe("marketing home — copy matches the frozen fixture", () => {
     // leaving the old threshold in place would have made this pass on the
     // remaining twelve by luck rather than by coverage. Exactly one block is
     // exempt, and this is what makes exempting a second one fail here.
-    const frozen = fixture.blocks.filter((b) => b.signature !== LIVE_DATA_BLOCK);
+    // EXACTLY one block may be exempt. This is the assertion that stops the
+    // copy freeze being hollowed out one block at a time.
+    expect(EXEMPT_BLOCKS, "a second block was exempted from the copy freeze").toHaveLength(1);
+
+    const frozen = fixture.blocks.filter((b) => !isExempt(b.signature));
     expect(frozen).toHaveLength(12);
     expect(frozen.reduce((n, b) => n + b.runs.length, 0)).toBeGreaterThan(170);
   });
