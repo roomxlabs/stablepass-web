@@ -245,6 +245,37 @@ describe("the public_trainer read — mapping the view's rows", () => {
     expect(initialsOf("&")).toBe("");
   });
 
+  it("returns the roster alphabetically, not in whatever order the view emits", async () => {
+    // The view does NOT order its rows. Delete the sort in the read module and
+    // every other test here still passes, because the fixtures elsewhere are
+    // single-row or already alphabetical — so this is the only thing standing
+    // between a deliberate product decision and PostgREST's arbitrary order.
+    const { readPublicTrainers } = await loadModule();
+    selectMock.mockResolvedValue({
+      data: [
+        { ...row, id: "3", name: "Zara Quinn", display_name: null },
+        { ...row, id: "1", name: "Adam Fry", display_name: null },
+        { ...row, id: "2", name: "Mia Lawson", display_name: null },
+      ],
+      error: null,
+    });
+
+    expect((await readPublicTrainers()).map((t) => t.name)).toEqual(["Adam Fry", "Mia Lawson", "Zara Quinn"]);
+  });
+
+  it("sorts on the DISPLAYED name, not the legal one", async () => {
+    const { readPublicTrainers } = await loadModule();
+    selectMock.mockResolvedValue({
+      data: [
+        { ...row, id: "1", name: "Zzz Legal", display_name: "Aaa Trading" },
+        { ...row, id: "2", name: "Aaa Legal", display_name: "Zzz Trading" },
+      ],
+      error: null,
+    });
+
+    expect((await readPublicTrainers()).map((t) => t.name)).toEqual(["Aaa Trading", "Zzz Trading"]);
+  });
+
   it("exposes no field beyond the six the strip renders", async () => {
     const { readPublicTrainers } = await loadModule();
     selectMock.mockResolvedValue({ data: [row], error: null });
@@ -395,9 +426,43 @@ describe("guardrail — marketing's ONLY Supabase surface", () => {
     expect(visibleInRaw, "the raw check is what catches it, and it must").toBe(true);
   });
 
+  it("is never imported by a CLIENT component", () => {
+    /**
+     * There is no `import "server-only"` here — the package is not a dependency
+     * of this repo — so nothing makes a bad import fail loudly. Worse, it would
+     * fail QUIETLY: both Supabase values are `NEXT_PUBLIC_*`, so a client
+     * component importing this module would simply WORK from the browser,
+     * shipping the read (and the query) into the bundle. And the existing guards
+     * are blind to it: the file contains neither `lib/supabase` nor
+     * `NEXT_PUBLIC_SUPABASE` at its import site, and the `sections/` sweep only
+     * walks one directory. So the guard has to be this one.
+     */
+    const routeGroup = path.join(REPO, "app", "(marketing)");
+    const walk = (dir: string): string[] =>
+      readdirSync(dir).flatMap((name) => {
+        const full = path.join(dir, name);
+        return statSync(full).isDirectory() ? walk(full) : [full];
+      });
+
+    const offenders = walk(routeGroup)
+      .filter((file) => /\.tsx?$/.test(file))
+      .filter((file) => {
+        const body = readFileSync(file, "utf8");
+        const isClient = /^\s*["']use client["']/m.test(body);
+        return isClient && /lib\/marketing\/trainers/.test(body);
+      })
+      .map((file) => path.relative(REPO, file));
+
+    expect(offenders, "a client component imports the server-only trainer read").toEqual([]);
+  });
+
   it("never reaches for a service-role key or a signed URL", () => {
     expect(source).not.toMatch(/SERVICE_ROLE/i);
     expect(source).not.toMatch(/createSignedUrl/);
+    // `.rpc()` bypasses the `.from(` allow-list entirely — a function could
+    // return anything the view does not expose, and the relation sweep above
+    // would never see it.
+    expect(rawSource, "an rpc() call bypasses the relation allow-list").not.toMatch(/\.rpc\(/);
     expect(source).not.toMatch(/lib\/supabase/);
   });
 });

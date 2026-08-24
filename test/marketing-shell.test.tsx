@@ -260,7 +260,13 @@ describe("guardrails", () => {
   // Guardrail #1 — the marketing origin stays off the auth-cookie path. A Supabase
   // import here would make the route dynamic and put the session on a host that has
   // no business seeing it, which is the entire reason for the subdomain split.
-  it("never touches Supabase from the marketing route group", () => {
+  // ENG-730 note on this test's NAME: the route group now DOES reach Supabase,
+  // transitively — `app/(marketing)/page.tsx` imports `lib/marketing/trainers.ts`
+  // for the live trainer roster. What this guard actually asserts, and what still
+  // matters, is that no file IN the group imports a Supabase client or names the
+  // env directly: the one read is quarantined in a single module outside the
+  // group, where a dedicated guard pins its relation and projection.
+  it("imports no Supabase client, and names no Supabase env, inside the route group", () => {
     const offenders = routeGroupSources.filter(
       ({ body }) => /lib\/supabase/.test(body) || /NEXT_PUBLIC_SUPABASE/.test(body),
     );

@@ -5,6 +5,7 @@ import path from "node:path";
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import TrainerModal from "@/app/(marketing)/modals/trainer-modal";
 import HomeSections from "@/app/(marketing)/sections";
 import { RETIRED_PLACEHOLDER_STRINGS, TRAINER_FIXTURE } from "@/test/fixtures/trainers";
 
@@ -378,6 +379,17 @@ describe("marketing home — guardrails", () => {
     for (const trainer of TRAINER_FIXTURE) {
       expect(container.innerHTML).not.toContain(trainer.id);
     }
+  });
+
+  it("never renders the trainer id in the OPEN modal either", () => {
+    // The sweep above renders the modal CLOSED, so its body is not in the HTML
+    // it inspects — and the modal is the component where a future edit would
+    // most plausibly reach for an id (a profile link, an analytics hook). Open
+    // it, so the one place the guard was blind to is covered.
+    const { container } = render(<TrainerModal trainer={TRAINER_FIXTURE[0]!} onClose={() => {}} />);
+
+    expect(container.querySelector("#trm-name")).not.toBeNull();
+    expect(container.innerHTML).not.toContain(TRAINER_FIXTURE[0]!.id);
   });
 
   it("names no bookmaker, odds or betting product in the rendered copy (guardrail #8)", () => {

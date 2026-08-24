@@ -4,6 +4,8 @@ FE + BFF for the **member** web app. The security boundary is the backend's RLS;
 
 ## 1. The browser never sees the backend URL or any token
 Only `lib/supabase/server.ts` (and `lib/api/*`) talk to Supabase server-side; tokens live in **httpOnly cookies** via `@supabase/ssr`. Never expose the service-role key, a raw JWT, or the Supabase URL to client JS beyond the public anon key.
+
+**One sanctioned exception (ENG-730):** `lib/marketing/trainers.ts` is a third server-side Supabase caller. It is a BARE ANON client — no cookies, no session, no service key — and it may read `public.public_trainer` and nothing else. That view is the marketing site's only anonymous read surface (ENG-765), and its fixed column list is the boundary. The module lives outside `app/(marketing)/` so the route group itself stays Supabase-free, and `test/marketing-trainers.test.tsx` pins the projection and the relation. Do not add a fourth caller without the same treatment.
 - **Test:** no `SUPABASE_SERVICE_ROLE_KEY` referenced in any client component; auth token never rendered to the DOM.
 
 ## 2. No PHI/PII-equivalent leak — no owner identity, ever

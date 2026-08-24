@@ -838,3 +838,14 @@ explanation. ENG-730 hit this three times in one sitting (its own read module, i
 new guard test, and `sections/index.tsx` vs the pre-existing `sections/` sweep).
 → Strip comments before grepping (`codeOf()` in `test/marketing-trainers.test.tsx`),
 or word the comment so it does not contain the literal token. Never loosen the guard.
+
+## Running the marketing e2e UNPUBLISHES every real trainer on your local stack
+`e2e/support/marketing-trainers.ts` seeds nineteen `E2E …` trainers and, so the
+counts are its own, sets `marketing_visible = false` on every trainer that is NOT
+one of its rows. Nothing fails, nothing warns: another ticket simply finds its
+trainers missing from `public_trainer` afterwards, on a stack the whole team
+shares. Re-publish with
+`update trainer set marketing_visible = true where slug = '<yours>';`, or call
+`clearMarketingTrainers()` to unpublish the seeded ones.
+→ The helper refuses to run against anything but a loopback host, so this can
+never reach staging or production — but it WILL surprise you locally.

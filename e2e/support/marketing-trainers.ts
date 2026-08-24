@@ -166,6 +166,36 @@ export const RETIRED_PLACEHOLDER_STRINGS = [
   "Trainer bio to come from the stable.",
 ];
 
+/**
+ * LOOPBACK ONLY. This is the one guard that makes the header's claim true
+ * instead of aspirational.
+ *
+ * Both the URL and the service-role key fall back to local defaults but are
+ * OVERRIDABLE from the environment, and unlike every other seeding helper in
+ * this repo (which mutate rows keyed to a user they just created) this one
+ * BULK-MUTATES rows it did not create — and the column it flips is exactly the
+ * one deciding what the client's public marketing site publishes.
+ *
+ * So a developer with staging or production `NEXT_PUBLIC_SUPABASE_URL` and
+ * `SUPABASE_SERVICE_ROLE_KEY` exported who typed `npx playwright test` would
+ * unpublish every real trainer and publish nineteen rows called
+ * "E2E Filler01 Stable01". Refuse to run anywhere but a loopback host.
+ */
+/** Log why seeding gave up, then report the failure. */
+function reason(why: string): false {
+  console.error(`[eng730 seed] ${why}`);
+  return false;
+}
+
+function isLoopback(url: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1" || hostname === "[::1]";
+  } catch (thrown) {
+    return reason(`threw: ${thrown instanceof Error ? thrown.name : "unknown"}`);
+  }
+}
+
 function admin() {
   return createClient(LOCAL_SUPABASE_URL, LOCAL_SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
@@ -175,15 +205,28 @@ function admin() {
 /**
  * Publish {@link SEEDED_TRAINERS}. Returns `false` when the local stack cannot
  * serve them — no Supabase, or a database that predates ENG-765's view — so the
- * caller can `test.skip` with a clear reason instead of failing obscurely.
+ * caller can `test.skip` instead of failing obscurely.
+ *
+ * Every `false` path logs WHY first. There are several of them, any one turns
+ * off around a dozen trainer specs, and the run then reports "0 failed" — with
+ * no CI in this repo, the skip count is the only signal, so the reason had
+ * better be on stdout rather than left for someone to bisect.
  */
 export async function seedMarketingTrainers(): Promise<boolean> {
+  if (!isLoopback(LOCAL_SUPABASE_URL)) {
+    console.error(
+      `[eng730 seed] refusing to seed a non-loopback database: ${LOCAL_SUPABASE_URL}. ` +
+        "This helper bulk-unpublishes trainers and must only ever touch a local supabase start project.",
+    );
+    return false;
+  }
+
   const supabase = admin();
 
   try {
     // Does ENG-765's view exist in this database at all?
     const probe = await supabase.from("public_trainer").select("id").limit(1);
-    if (probe.error) return false;
+    if (probe.error) return reason(`public_trainer is not readable: ${probe.error.code || probe.error.message}`);
 
     // Unpublish only rows that are NOT ours, so the strip shows this roster and
     // nothing else — while never un-publishing a row a parallel worker is
@@ -193,7 +236,7 @@ export async function seedMarketingTrainers(): Promise<boolean> {
       .update({ marketing_visible: false })
       .not("slug", "like", `${SLUG_PREFIX}%`)
       .eq("marketing_visible", true);
-    if (hidden.error) return false;
+    if (hidden.error) return reason(`could not unpublish non-seeded trainers: ${hidden.error.code}`);
 
     await ensureSeedPhoto(supabase);
 
@@ -214,7 +257,7 @@ export async function seedMarketingTrainers(): Promise<boolean> {
         )
         .select("id")
         .single();
-      if (upserted.error || !upserted.data) return false;
+      if (upserted.error || !upserted.data) return reason(`upsert failed for ${trainer.slug}: ${upserted.error?.code}`);
 
       const trainerId = upserted.data.id as string;
       for (const horse of trainer.horses) {
@@ -228,14 +271,17 @@ export async function seedMarketingTrainers(): Promise<boolean> {
         const inserted = await supabase
           .from("horse")
           .insert({ trainer_id: trainerId, display_name: horse, racing_name: horse, status: "active" });
-        if (inserted.error) return false;
+        if (inserted.error) return reason(`horse insert failed for ${trainer.slug}: ${inserted.error.code}`);
       }
     }
 
     // Confirm the view actually publishes them — the WHERE clause is the view's,
     // not ours, and a seed that does not reach the view is a skip, not a pass.
     const published = await supabase.from("public_trainer").select("id");
-    return !published.error && (published.data?.length ?? 0) >= SEEDED_TRAINERS.length;
+    if (published.error) return reason(`view unreadable after seeding: ${published.error.code}`);
+    const got = published.data?.length ?? 0;
+    if (got < SEEDED_TRAINERS.length) return reason(`view published ${got} rows, expected >= ${SEEDED_TRAINERS.length}`);
+    return true;
   } catch {
     return false;
   }
@@ -270,6 +316,7 @@ async function ensureSeedPhoto(supabase: ReturnType<typeof admin>): Promise<void
  * exists to avoid. Kept for a human who wants a clean local database.
  */
 export async function clearMarketingTrainers(): Promise<void> {
+  if (!isLoopback(LOCAL_SUPABASE_URL)) return;
   try {
     await admin().from("trainer").update({ marketing_visible: false }).like("slug", `${SLUG_PREFIX}%`);
   } catch {

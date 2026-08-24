@@ -82,7 +82,12 @@ export const MARKETING_PHOTO_BUCKET = "marketing-photos";
  * seeds a roster can be served a roster cached by the PREVIOUS run, for up to
  * five minutes, and fail for a reason nothing in the test says.
  */
-const configuredRevalidate = Number(process.env.MARKETING_TRAINERS_REVALIDATE_SECONDS);
+// `Number("")` is 0, and `0 >= 0` is true — so reading this without the emptiness
+// check meant `MARKETING_TRAINERS_REVALIDATE_SECONDS=` (set-but-empty, the normal
+// shape of a half-filled .env) SILENTLY DISABLED the cache and put a Supabase
+// round trip on every marketing render. Empty means "unset", not "zero".
+const rawRevalidate = process.env.MARKETING_TRAINERS_REVALIDATE_SECONDS?.trim();
+const configuredRevalidate = rawRevalidate ? Number(rawRevalidate) : Number.NaN;
 export const TRAINER_ROSTER_REVALIDATE_SECONDS =
   Number.isFinite(configuredRevalidate) && configuredRevalidate >= 0 ? configuredRevalidate : 300;
 
@@ -174,10 +179,21 @@ function toTrainer(row: PublicTrainerRow, publicUrlFor: (path: string) => string
 }
 
 /**
- * Read the published roster. NEVER throws: any failure — the view missing
+ * Read the published roster, ALPHABETICALLY BY DISPLAYED NAME. The order is a
+ * visible product decision on a public page, not an implementation detail: the
+ * view does not order its rows, so without this the strip's sequence would be
+ * whatever PostgREST happened to return. Asserted in
+ * `test/marketing-trainers.test.tsx` against a deliberately unsorted fixture.
+ *
+ * NEVER throws: any failure — the view missing
  * because the deploy landed ahead of ENG-765, an unreachable database, missing
  * env — degrades to an empty roster, which the strip renders as "no section".
  * A broken band on the client's marketing site is strictly worse than no band.
+ *
+ * NOTE the failure is CACHED like any other result, so a one-second database
+ * blip costs the trainer band for the whole revalidate window rather than the
+ * blip. That is the deliberate trade — it keeps a flapping database from
+ * hammering the origin — but it is why the window is configurable.
  *
  * Only the error's NAME is logged, server-side. A message could carry the query
  * or connection detail, and this runs on the anonymous marketing origin.
