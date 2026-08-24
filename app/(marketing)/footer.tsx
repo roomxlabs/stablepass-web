@@ -73,7 +73,11 @@ export default function MarketingFooter() {
               <li>
                 <a href="#how">How It Works</a>
               </li>
-              <li>
+              {/* ENG-729: hidden in waitlist mode, where `#subscription` is a
+                  dead anchor — the section it points at is hidden too. The
+                  whole <li> goes, not just the link, so the column does not
+                  keep a blank row where the entry was. */}
+              <li className="launch-only">
                 <a href="#subscription">Subscription</a>
               </li>
               <li>

@@ -15,6 +15,20 @@
  * The wordmark is the extracted asset, not an inlined data URI. It has no
  * width/height attributes because the mockup gives it none — `.nav-logo img`
  * fixes the height in CSS.
+ *
+ * ENG-729 brings the nav under the `data-cta-mode` mechanism, which until now
+ * only governed the in-page CTAs. Nothing is removed:
+ *
+ *   - `.launch-only` marks the three surfaces that only make sense once the
+ *     product is live — Sign in, "Join stablepass." and the Subscription
+ *     anchor, whose target section is itself hidden pre-launch. One mode-scoped
+ *     rule in marketing.css hides the set.
+ *   - `.cta-waitlist` marks the pre-launch button, hidden in the other two
+ *     modes by the same mechanism. It reuses `.nav-cta` verbatim so it adds no
+ *     CSS of its own and cannot drift from the button it replaces.
+ *
+ * It links `#top` rather than a route: the hero carries the capture form, so
+ * this is a scroll, and `html{scroll-behavior:smooth}` does it with no JS.
  */
 export default function MarketingNav() {
   return (
@@ -29,7 +43,10 @@ export default function MarketingNav() {
         <div className="nav-links">
           <a href="#how">How it works</a>
           <a href="#app">The app</a>
-          <a href="#subscription">Subscription</a>
+          {/* Hidden in waitlist mode along with the section it targets. */}
+          <a className="launch-only" href="#subscription">
+            Subscription
+          </a>
           <a href="#trainers">For trainers</a>
           <a href="#faq">FAQ</a>
         </div>
@@ -39,11 +56,17 @@ export default function MarketingNav() {
             it. Muted against the solid CTA: returning subscribers are the
             smaller audience, so it must be findable without competing. */}
         <div className="nav-actions">
-          <a className="nav-signin" href="/signin">
+          <a className="nav-signin launch-only" href="/signin">
             Sign in
           </a>
-          <a className="nav-cta" href="/start">
+          <a className="nav-cta launch-only" href="/start">
             Join stablepass.
+          </a>
+          {/* Pre-launch only. Same `.nav-cta` geometry and colour as the button
+              above, so the two are interchangeable by definition rather than by
+              a second set of rules kept in sync by hand. */}
+          <a className="nav-cta cta-waitlist" href="#top">
+            Join waitlist
           </a>
         </div>
       </div>
