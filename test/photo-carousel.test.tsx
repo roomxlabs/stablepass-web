@@ -22,6 +22,7 @@ function photoPost(overrides: Partial<FeedPost> = {}): FeedPost {
     horseName: "Winx",
     trainerName: "Chris Waller",
     postedAgo: "1d ago",
+    label: null,
     body: "Recovery day in the paddock.",
     media: { type: "photo", posterUrl: "https://signed/photo-0" },
     watermarked: false,
@@ -30,10 +31,6 @@ function photoPost(overrides: Partial<FeedPost> = {}): FeedPost {
     reacted: null,
     bookmarked: false,
     ...overrides,
-    // `Partial<FeedPost>` widens every spread field to `| undefined`, and `label`
-    // is now REQUIRED on FeedPost (ENG-785), so it must be narrowed back after
-    // the spread rather than merely defaulted before it.
-    label: overrides.label ?? null,
   };
 }
 

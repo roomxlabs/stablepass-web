@@ -13,6 +13,16 @@ import {
 } from "@/components/post-card";
 import type { FeedPost } from "@/components/types";
 
+// ENG-785 — `label` must stay REQUIRED on `FeedPost`. Dropping the `?` is the
+// whole point of that ticket: it is what turns a mapper that forgets a column
+// into a compile error instead of a pill nobody notices is missing for weeks.
+// Nothing stopped a future edit from quietly putting the `?` back, so this line
+// is the guard on the guard. `{} extends T` holds only when every key of T is
+// optional, so `label?:` collapses this to `never` and fails the build.
+type LabelIsRequired<T> = {} extends T ? never : true;
+const _labelStaysRequired: LabelIsRequired<Pick<FeedPost, "label">> = true;
+void _labelStaysRequired;
+
 const BASE: FeedPost = {
   id: "post-1",
   horseId: "horse-1",

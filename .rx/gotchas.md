@@ -85,12 +85,13 @@ missing — a worktree branched off the base has everything.
 ## Screenshot evidence = append a test to `e2e/screenshots.spec.ts`
 Convention: seed fixtures with the local service-role admin client, create a
 throwaway confirmed user, sign in through the real `/signin` form, screenshot to
-`.rx/review/<ticket>-<state>.png`. Do NOT commit the PNGs: `.rx/review/` is
-gitignored, and evidence ships on a `screenshots/<ticket>` branch instead (full
-convention below, under "`.rx/review/` is gitignored, but three PNGs in it are
-still TRACKED"). This widening beyond a ticket's declared surface is expected for
-UI tickets, not scope creep. Local Supabase must already be up — the harness never
-starts it.
+`.rx/review/<ticket>-<state>.png`. Do NOT add NEW PNGs to the diff: `.rx/review/`
+is gitignored and fresh evidence ships on a `screenshots/<ticket>` branch instead.
+Beware: gitignore does not untrack, so ~76 PNGs committed before that rule are
+still tracked and many are REWRITTEN by existing specs (see "`.rx/review/` is
+gitignored, but 76 PNGs in it are still TRACKED" below). This widening beyond a
+ticket's declared surface is expected for UI tickets, not scope creep. Local
+Supabase must already be up — the harness never starts it.
 
 ## `new URL(x).href` normalises — don't write it back to an href
 Validating a URL is fine; returning `url.href` rewrites what the admin entered
@@ -829,14 +830,16 @@ curl -s "http://127.0.0.1:54321/rest/v1/app_user?select=id,email,phone&phone=eq.
 Verify a suspected wall directly: `POST /rest/v1/rpc/phone_in_use` `{"p_phone":"+61 400 000 000"}`
 as anon returns a bare `true`/`false`, 200, no auth needed.
 
-## `.rx/review/` is gitignored, but three PNGs in it are still TRACKED
+## `.rx/review/` is gitignored, but 76 PNGs in it are still TRACKED
 `.gitignore:47` ignores the directory, which does **not** untrack files committed before the
-rule. `.rx/review/eng-571-{empty,submitting,validation}.png` are tracked, and running
-`e2e/trial-start.spec.ts` **rewrites them**, so a reflexive `git add -A` silently drags
-another ticket's screenshots into your diff. Check `git diff --stat` against your base before
+rule. `git ls-files .rx/review/ | wc -l` returns **76**, and 40+ of them are still rewritten by
+current specs (`screenshots.spec.ts`, `checkout.spec.ts`, `expiry-banner.spec.ts`,
+`marketing{,-interactive}.spec.ts`, `eng-585-status-truth.spec.ts`, `trial-start.spec.ts`,
+`legal.spec.ts`, `signin-cta-sidebar-email.spec.ts`). So a reflexive `git add -A` after ANY
+screenshot run silently drags another ticket's PNGs into your diff. Check `git diff --stat` against your base before
 committing, and `git checkout origin/<base> -- .rx/review/` to put them back. (The
-"Screenshot evidence" entry above now points here; the "commit the PNGs" advice it used to
-carry is true only of those three legacy files. Current evidence goes to a
+"Screenshot evidence" entry above now points here; its old "commit the PNGs" advice is dead
+for anything new. Current evidence goes to a
 `screenshots/<ticket>` branch of PNGs named `eng-NNN-NN-<state>.png`, per
 `origin/screenshots/eng-761`, `-762`, `-772`.)
 
@@ -893,23 +896,42 @@ restored the same deletion compiles green).
 **Do this for the next non-optional post column too** rather than reaching for `?`, or the
 bug class comes straight back. Keep `?` only for fields that really are sometimes absent.
 Two knock-on traps when you tighten a field on `FeedPost`:
-* A fixture helper doing `{ ...base, ...overrides }` with `overrides: Partial<FeedPost>`
-  widens the field back to `| undefined`. Narrow it AFTER the spread
-  (`label: overrides.label ?? null`); setting a default before the spread does not work.
+* Fixture helpers shaped `{ ...base, ...overrides }` with `overrides: Partial<FeedPost>` stop
+  compiling when the field is missing from the BASE literal. Add it there, beside its siblings.
+  A spread does **not** widen a field the base literal already sets: TypeScript strips
+  `undefined` from an optional right-hand property, so a plain `label: null` in the base is
+  enough. (Narrowing after the spread compiles too, but it is not required, and writing it as
+  though it were teaches a wrong model of spread typing.)
 * `app/preview/components/page.tsx` hand-builds `FeedPost` literals and will also stop
   compiling. It is part of the real surface here even though no feed ticket lists it.
+The fix defends itself: `test/post-card.test.tsx` carries a `LabelIsRequired<...>` type
+assertion that fails the build if anyone puts the `?` back.
 
-## Label e2e specs fail with `PGRST204`/`42703` when the local DB lacks ENG-738's column
-Symptom: `eng-772-profile-label-pill`, `eng-775-saved-label-pill` and `reaction-save` fail
-while seeding, with `Could not find the 'label' column of 'post' in the schema cache`
-(PostgREST) or `column post.label does not exist` (42703 straight from Postgres).
-Cause: **not** a stale schema cache and **not** the web diff. `post.label` ships in the be's
-`20260819120001_post_label.sql` (ENG-738); this repo has no `supabase/migrations` of its own,
-so a local `supabase db reset` drops the column and nothing here puts it back. Confirm in one
-line before blaming your change:
+## Label/media e2e specs fail when the local DB is behind the be migrations
+**Five failures across four spec files**, and they come in two different shapes. Do not assume
+the second shape is the first.
+
+*Shape 1 — dies while SEEDING.* `eng-772-profile-label-pill`, `eng-775-saved-label-pill` and one
+of `eng-762-photo-carousel` insert the column directly, so they fail loudly at insert with
+PostgREST `PGRST204 Could not find the 'label' column of 'post' in the schema cache`. The other
+`eng-762` failure is the same shape one table over: `PGRST205 Could not find the table
+'public.post_media'`.
+
+*Shape 2 — dies while RENDERING, and names no column at all.* `reaction-save` never mentions
+`label` (grep it: zero hits). It fails because `app/api/horses/[id]/feed/route.ts` **names
+`label` in its `.select()`**. A projection naming an undeployed column makes PostgREST reject
+the WHOLE query with `42703` (HTTP 400), unlike `select *`, which would just omit it. The route
+destructures only `data`, so it returns 200 `{"data":[]}` and the screen renders "No updates
+yet". The spec then fails on a missing `.post-media-web`, which looks like a UI regression and
+is not one. That route documents the trap in-file; read it before debugging a blank feed.
+
+Cause of both: this repo has no `supabase/migrations` of its own. `post.label` ships in the be's
+`20260819120001_post_label.sql` (ENG-738) and `post_media` in ENG-762's, so a local
+`supabase db reset` drops them and nothing here puts them back. Check before blaming your diff:
 ```
 docker exec supabase_db_stablepass psql -U postgres -d postgres \
-  -tAc "select 1 from information_schema.columns where table_name='post' and column_name='label';"
+  -tAc "select column_name from information_schema.columns
+        where table_name='post' and column_name='label';"
 ```
 Empty output means the migration is missing: re-apply the be migrations, then re-run. These
 specs passed when ENG-772 and ENG-775 shipped, so a green PR does not mean they stay green
