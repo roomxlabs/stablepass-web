@@ -85,9 +85,12 @@ missing — a worktree branched off the base has everything.
 ## Screenshot evidence = append a test to `e2e/screenshots.spec.ts`
 Convention: seed fixtures with the local service-role admin client, create a
 throwaway confirmed user, sign in through the real `/signin` form, screenshot to
-`.rx/review/<ticket>-<state>.png`, and commit the PNGs (they're tracked). This
-widening beyond a ticket's declared surface is expected for UI tickets, not scope
-creep. Local Supabase must already be up — the harness never starts it.
+`.rx/review/<ticket>-<state>.png`. Do NOT commit the PNGs: `.rx/review/` is
+gitignored, and evidence ships on a `screenshots/<ticket>` branch instead (full
+convention below, under "`.rx/review/` is gitignored, but three PNGs in it are
+still TRACKED"). This widening beyond a ticket's declared surface is expected for
+UI tickets, not scope creep. Local Supabase must already be up — the harness never
+starts it.
 
 ## `new URL(x).href` normalises — don't write it back to an href
 Validating a URL is fine; returning `url.href` rewrites what the admin entered
@@ -832,8 +835,8 @@ rule. `.rx/review/eng-571-{empty,submitting,validation}.png` are tracked, and ru
 `e2e/trial-start.spec.ts` **rewrites them**, so a reflexive `git add -A` silently drags
 another ticket's screenshots into your diff. Check `git diff --stat` against your base before
 committing, and `git checkout origin/<base> -- .rx/review/` to put them back. (The
-"Screenshot evidence" entry above still says the PNGs are tracked and should be committed —
-that is now only true of those three legacy files. Current evidence goes to a
+"Screenshot evidence" entry above now points here; the "commit the PNGs" advice it used to
+carry is true only of those three legacy files. Current evidence goes to a
 `screenshots/<ticket>` branch of PNGs named `eng-NNN-NN-<state>.png`, per
 `origin/screenshots/eng-761`, `-762`, `-772`.)
 
@@ -877,3 +880,21 @@ After that it is stable — verified 3 consecutive full-suite runs, 801/801. Do 
 concluding anything about a red suite, and be suspicious of any "flaky" failure whose file
 you did not touch. Corollary: a Playwright run leaves a dev server alive, so finish e2e work
 before you trust a unit run.
+
+## `FeedPost.label` is REQUIRED, so a dropped mapper line is a compile error (ENG-785)
+Five member screens each re-declare their own local `PostRow` **and** their own
+row->`FeedPost` mapper (`explore-feed`, `following-screen`, `horses/[id]/horse-posts`,
+`trainers/[id]/trainer-posts`, `saved/saved-feed`), so every new `post` column needs an edit
+in all five, plus each explicit projection. `label` was declared `label?:` on `FeedPost`, and
+that single `?` let it be dropped from all five without `tsc` ever complaining: it took three
+tickets (ENG-761, ENG-772, ENG-775) and human eyes to find. It is now `label: string | null`,
+proven by deleting each of the five mapper lines in turn (all five fail `tsc`; with the `?`
+restored the same deletion compiles green).
+**Do this for the next non-optional post column too** rather than reaching for `?`, or the
+bug class comes straight back. Keep `?` only for fields that really are sometimes absent.
+Two knock-on traps when you tighten a field on `FeedPost`:
+* A fixture helper doing `{ ...base, ...overrides }` with `overrides: Partial<FeedPost>`
+  widens the field back to `| undefined`. Narrow it AFTER the spread
+  (`label: overrides.label ?? null`); setting a default before the spread does not work.
+* `app/preview/components/page.tsx` hand-builds `FeedPost` literals and will also stop
+  compiling. It is part of the real surface here even though no feed ticket lists it.
