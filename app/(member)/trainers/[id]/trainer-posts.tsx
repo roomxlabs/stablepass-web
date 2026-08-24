@@ -21,6 +21,7 @@ type PostRow = {
   type: PostMedia["type"];
   title: string | null;
   body: string | null;
+  label: string | null;
   media_url: string | null;
   poster_url: string | null;
   aspect_ratio: number | null;
@@ -103,6 +104,10 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
             postedAgo: relativeTime(r.published_at),
             title: r.title,
             body: r.body,
+            // This screen re-declares its own row type + mapper instead of sharing
+            // one with the BFF, so a new post column needs adding here too or it
+            // is silently dropped after the BFF already returned it (ENG-772).
+            label: r.label,
             // `aspectRatio` is RAW here. `resolveAspect` (post-card) owns the clamp,
             // so exactly one place decides what an unusable value becomes. The
             // `typeof` guard is load-bearing, not belt-and-braces: `'NaN'::numeric`
