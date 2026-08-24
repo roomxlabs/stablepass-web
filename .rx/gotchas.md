@@ -746,3 +746,44 @@ describe will throw in the second one. Use Playwright actions that go over CDP
 instead — `locator.scrollIntoViewIfNeeded()`, `locator.fill()`, `locator.click()`
 all work with page scripting disabled; anything evaluating in page context does
 not.
+
+## A narrow viewport is NOT a phone — `@media (hover:none)` changes the page
+`page.setViewportSize({width:390})` on a normal context still reports
+`hover: hover`. marketing.css closes with an `@media (hover:none)` block that
+materially changes what is on screen: it un-collapses `.cta-trial-line`, and
+turns the `.t-over` / `.tr-over` hover overlays on. So a "phone" screenshot taken
+by resizing is evidence for a device that does not exist, and it will hide real
+content bugs — this is exactly how ENG-729 shipped "Join stablepass. Enjoy your
+free 30 day trial." onto every phone, directly above the waitlist form, through
+a review that included looking at the phone screenshots.
+→ Use `test.use({ viewport: {...}, isMobile: true, hasTouch: true })`. Skip
+`deviceScaleFactor` (the media queries key off the mobile flags, not density; 1x
+is the same layout at a quarter the bytes) and avoid `devices["iPhone 13"]`,
+whose `defaultBrowserType: "webkit"` fights a chromium project. Any marketing
+ticket touching the CTA band, the tiles or the trainer strip needs a touch-profile
+assertion, not just a narrow one.
+
+## ENG-600's nav exemption is a hole you can drive a visible /signin through
+`isNavRule` in `test/marketing-shell.test.tsx` lifts EVERY `.nav-*` rule out of
+the `marketing.css` ordered diff, and the nav pin allows any selector merely
+`startsWith(".nav-actions"|".nav-signin"|".nav-in")`. Appending one line —
+`.marketing .nav-actions .nav-signin{display:inline-flex !important}` — restores
+a visible, clickable `/signin` in waitlist mode with the ENTIRE vitest suite
+green. It matters because ENG-729 hangs the pre-launch hide of both product
+routes off `.nav-signin`/`.nav-cta`, i.e. inside that exemption, and this repo
+has no CI.
+→ ENG-729's follow-up added two cheap guards: ban `display` + `!important`
+anywhere in the sheet (it is used 3x today, never on display), and require
+`.launch-only`/`.price-sec` to carry exactly one display declaration, `none`.
+Any future security-relevant hide that lands on a `.nav-*` selector needs the
+same treatment — the ordered diff will NOT catch it.
+
+## A merged PR can land while its review is still running
+ENG-729's PR was squash-merged (branch auto-deleted) while the adversarial review
+was still working; the review then returned five findings including a real
+content bug. `git push` fails with "upstream is gone" and `git ls-remote` shows
+nothing, which looks alarming and is not — check `gh pr view <n>` for `MERGED`.
+→ Do not try to resurrect the branch. Cut a NEW branch off the freshly-fetched
+integration tip and open a follow-up PR (repo precedent: #48 for ENG-761, #52 for
+ENG-729). Save the uncommitted work as a patch BEFORE any branch operation.
+

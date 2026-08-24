@@ -971,7 +971,13 @@ test.describe("ENG-729 waitlist mode", () => {
 
     await page.locator("header.hero").screenshot({ path: `.rx/review/eng-729-hero-${label}.png` });
     await page.locator(".wrap.cta").screenshot({ path: `.rx/review/eng-729-cta-band-${label}.png` });
-    await page.screenshot({ path: `.rx/review/eng-729-full-${label}.png`, fullPage: true });
+    // Whole-page capture on DESKTOP only. It exists to evidence "no pricing
+    // section, no sign-in anywhere", which one wide view shows better than a
+    // very tall narrow one — and a full-page shot of this page on a 2x touch
+    // profile lands around 8-12MB, which has no business in a git repo.
+    if (label.endsWith("desktop")) {
+      await page.screenshot({ path: `.rx/review/eng-729-full-${label}.png`, fullPage: true });
+    }
   };
 
   test("hero and CTA band, scripting ON", async ({ page }) => {
@@ -981,11 +987,38 @@ test.describe("ENG-729 waitlist mode", () => {
     await shoot(page, "js-desktop");
   });
 
-  test("hero and CTA band, phone, scripting ON", async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("/");
-    await expect(page.locator("header.hero form.wl-form")).toBeVisible();
-    await shoot(page, "js-phone");
+  /**
+   * PHONE = a real touch profile, not a resized desktop window.
+   *
+   * `setViewportSize({width:390})` alone leaves the context reporting
+   * `hover: hover`, and marketing.css has a whole `@media (hover:none)` block
+   * that changes what is on screen — it un-collapses the CTA band's trial line,
+   * turns the hover-only tile and trainer overlays on, and more. Screenshots
+   * taken the narrow-desktop way therefore show a state no phone ever renders,
+   * which is worse than no screenshot: it is evidence for the wrong device, and
+   * the client reviews this site on a phone.
+   *
+   * `isMobile` + `hasTouch` rather than `devices["iPhone 13"]` because that
+   * preset carries `defaultBrowserType: "webkit"`; these are the two flags that
+   * actually drive the media queries under Chromium.
+   */
+  // No deviceScaleFactor: the media queries that decide what a phone shows key
+  // off isMobile/hasTouch, not pixel density, so 1x renders the identical layout
+  // at a quarter the file size. These are review evidence, not print assets.
+  const PHONE = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true };
+
+  test.describe("phone, scripting ON", () => {
+    test.use(PHONE);
+
+    test("hero and CTA band on a touch device", async ({ page }) => {
+      await page.goto("/");
+      await expect(page.locator("header.hero form.wl-form")).toBeVisible();
+      // The state the narrow-desktop capture was hiding: on a touch device the
+      // band's trial line is un-collapsed by `@media (hover:none)`, so this is
+      // where "Join stablepass. Enjoy your free 30 day trial." would show.
+      await expect(page.locator(".cta-trial-line")).toBeHidden();
+      await shoot(page, "js-phone");
+    });
   });
 
   test.describe("scripting OFF — the client's actual browsing mode", () => {
@@ -998,23 +1031,27 @@ test.describe("ENG-729 waitlist mode", () => {
       await shoot(page, "nojs-desktop");
     });
 
-    test("hero and CTA band render with no JavaScript, on a phone", async ({ page }) => {
-      await page.setViewportSize({ width: 390, height: 844 });
-      await page.goto("/");
-      await expect(page.locator("header.hero form.wl-form")).toBeVisible();
-      await shoot(page, "nojs-phone");
+    test.describe("on a touch device", () => {
+      test.use(PHONE);
+
+      test("hero and CTA band render with no JavaScript, on a phone", async ({ page }) => {
+        await page.goto("/");
+        await expect(page.locator("header.hero form.wl-form")).toBeVisible();
+        await expect(page.locator(".cta-trial-line")).toBeHidden();
+        await shoot(page, "nojs-phone");
+      });
+
+      test("the confirmation the native POST redirects back to", async ({ page }) => {
+        // The state that only exists because this ticket made `/` read
+        // searchParams. With scripting off there is nothing else that could have
+        // rendered this text, which is what makes the screenshot evidence.
+        await page.goto("/?joined=1");
+        const message = page.locator("header.hero p.wl-msg");
+        await expect(message).toBeVisible();
+        await expect(message).toContainText(/on the list/i);
+        await page.locator("header.hero").screenshot({ path: ".rx/review/eng-729-hero-nojs-joined.png" });
+      });
     });
 
-    test("the confirmation the native POST redirects back to", async ({ page }) => {
-      // The state that only exists because this ticket made `/` read
-      // searchParams. With scripting off there is nothing else that could have
-      // rendered this text, which is what makes the screenshot evidence.
-      await page.setViewportSize({ width: 390, height: 844 });
-      await page.goto("/?joined=1");
-      const message = page.locator("header.hero p.wl-msg");
-      await expect(message).toBeVisible();
-      await expect(message).toContainText(/on the list/i);
-      await page.locator("header.hero").screenshot({ path: ".rx/review/eng-729-hero-nojs-joined.png" });
-    });
   });
 });

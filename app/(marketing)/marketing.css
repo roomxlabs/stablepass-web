@@ -839,6 +839,12 @@
      accessibility tree and defeat the point of keeping it mounted. */
   .marketing .wl-msg{flex:1 0 100%;margin:0;font-size:13px;color:var(--mut)}
   .marketing .wl-msg-success{color:var(--brand);font-weight:600}
+  /* The mockup has no error state, so there is no token to reuse. This is the
+     one un-derived value in the block: the paper background's ink (--ink #1E2B26)
+     pulled toward the warning end far enough to read as an error against
+     var(--card) at 13px, while staying inside the muted, earthy range the sheet
+     uses everywhere else. Promote it to a token the moment the design system
+     grows a real error colour. */
   .marketing .wl-msg-error{color:#A8412C}
 
   /* The band sits on a dark photograph. The mockup's own answer to a control on
@@ -848,6 +854,11 @@
      needs the same treatment: `.field label` is #3D4E46, near-invisible there.
      The status line needs nothing — `.cta-in p` already lightens it and is the
      more specific selector. */
+  /* `.cta-in` centres every other child, but a wrapped flex row does not inherit
+     that — once the field drops below its 200px basis the button lands on its own
+     line flush-left inside a centred column. Only visible on a phone, which is
+     exactly where this band is read. */
+  .marketing .cta-in .wl-form{justify-content:center}
   .marketing .cta-in .wl-field label{color:rgba(255,255,255,.85)}
   .marketing .cta-in .wl-submit{background:var(--paper);color:var(--brand)}
   .marketing .cta-in .wl-submit:hover{background:#fff}
