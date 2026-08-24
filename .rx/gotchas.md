@@ -807,3 +807,56 @@ build: a scrim pill behind the dots and a white rim on the active dot were both
 dropped because mobile draws neither. A parity ticket's real reference is the
 sibling's pixels, not its ticket prose — fetch with
 `gh api "repos/<owner>/<repo>/contents/.screenshots/<ticket>/<file>.png?ref=screenshots/<ticket>" -q .content | base64 -d`.
+## Signup now consults `phone_in_use` — a LEAKED e2e user bricks every later run
+ENG-763 made `POST /api/auth/signup` ask ENG-742's `phone_in_use` RPC before `auth.signUp`,
+so a phone number that already belongs to an `app_user` is walled with `409
+trial_already_used`. `e2e/trial-start.spec.ts`'s real-signup test uses a **fixed** phone
+(`+61 400 000 000`) and only frees it in its `finally` via `deleteUser`. Interrupt that run
+(Ctrl-C, a crash, a failure before `userId` is assigned) and the number stays claimed —
+after which **every** later run of that test is walled, `waitForURL("**/onboarding")` times
+out, and it reads as "signup is broken" rather than "stale fixture". Harmless before this
+ticket, because the email is unique per run and a duplicate phone had no effect on signup
+succeeding. Recovery, before assuming your change broke signup:
+```sh
+# who holds it?
+curl -s "http://127.0.0.1:54321/rest/v1/app_user?select=id,email,phone&phone=eq.%2B61%20400%20000%20000" \
+  -H "apikey: $SERVICE_ROLE_KEY" -H "Authorization: Bearer $SERVICE_ROLE_KEY"
+# then DELETE /auth/v1/admin/users/<id> with the service role — it cascades to app_user.
+```
+Verify a suspected wall directly: `POST /rest/v1/rpc/phone_in_use` `{"p_phone":"+61 400 000 000"}`
+as anon returns a bare `true`/`false`, 200, no auth needed.
+
+## `.rx/review/` is gitignored, but three PNGs in it are still TRACKED
+`.gitignore:47` ignores the directory, which does **not** untrack files committed before the
+rule. `.rx/review/eng-571-{empty,submitting,validation}.png` are tracked, and running
+`e2e/trial-start.spec.ts` **rewrites them**, so a reflexive `git add -A` silently drags
+another ticket's screenshots into your diff. Check `git diff --stat` against your base before
+committing, and `git checkout origin/<base> -- .rx/review/` to put them back. (The
+"Screenshot evidence" entry above still says the PNGs are tracked and should be committed —
+that is now only true of those three legacy files. Current evidence goes to a
+`screenshots/<ticket>` branch of PNGs named `eng-NNN-NN-<state>.png`, per
+`origin/screenshots/eng-761`, `-762`, `-772`.)
+
+## `test.use({ ...devices[...] })` is rejected inside a `describe`
+`Cannot use({ defaultBrowserType }) in a describe group, because it forces a new worker.`
+Every Playwright device descriptor carries `defaultBrowserType`, and that one field is the
+problem — the parts that matter (`viewport`, `hasTouch`, `isMobile`, `deviceScaleFactor`)
+are fine in a describe. Strip it:
+```ts
+const { defaultBrowserType: _b, ...iPhone13 } = devices["iPhone 13"];
+void _b; test.use(iPhone13);
+```
+This matters because a resized viewport is NOT a touch profile: `setViewportSize({width:390})`
+on a desktop context still reports `hover: hover`, so phone-shaped screenshots render the
+DESKTOP state (this is how ENG-729 shipped a touch-only bug). Assert
+`matchMedia("(hover: none)").matches` inside the test so the profile failing to apply goes
+red instead of quietly re-testing desktop.
+
+## The `/start` + `/signin` split-screen has NO mobile breakpoint (pre-existing)
+`.auth-page` is a bare `display:flex` with two `flex:1` children and no media query, so on a
+390px phone the green brand panel eats ~a third of the width and both columns clip: the
+wordmark renders as "stabl", the founder quote wraps to one word per line, and inputs cut off
+mid-placeholder. Verified on an iPhone 13 profile against the **unmodified** `/start`, so it
+is not attributable to whatever screen you are working on — check a baseline capture before
+"fixing" it, and note the client reviews on a phone. Fixing it is a real responsive ticket
+against `app/globals.css`, not a drive-by.

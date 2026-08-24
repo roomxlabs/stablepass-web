@@ -969,6 +969,33 @@ test("repeat-signup wall renders", async ({ page }) => {
   await page.screenshot({ path: ".rx/review/r22-wall-desktop.png", fullPage: true });
 });
 
+test.describe("repeat-signup wall with JavaScript blocked", () => {
+  // The client form reaches the wall by navigating to this URL, but the URL has
+  // to stand on its own: the person who reviews this screen browses with
+  // scripting off, and a wall that only exists as the result of a fetch() is
+  // invisible to him. This is the regression guard for that — it is why the
+  // wall is a server component behind a query param rather than local state,
+  // and without a test it would quietly break the first time someone made the
+  // wall a client component.
+  test.use({ javaScriptEnabled: false });
+
+  test("renders server-side and its CTA really navigates", async ({ page }) => {
+    await page.goto("/start?trial=used");
+
+    await expect(
+      page.getByRole("heading", { name: /already had your free trial/i }),
+    ).toBeVisible();
+    await expect(page.getByText(/30 days on us/i)).toHaveCount(0);
+
+    // A real <a href>, and it actually gets there with no JS to help it.
+    const cta = page.getByRole("link", { name: "Sign in to join" });
+    await expect(cta).toHaveAttribute("href", "/signin");
+    await cta.click();
+    await page.waitForURL("**/signin");
+    await expect(page.getByRole("heading", { name: "Welcome back." })).toBeVisible();
+  });
+});
+
 test.describe("repeat-signup wall on a real touch device", () => {
   // A REAL device profile, not `setViewportSize({ width: 390 })`.
   //
