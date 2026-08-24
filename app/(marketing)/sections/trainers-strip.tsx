@@ -1,5 +1,5 @@
 import TrainerCarousel from "../trainer-carousel";
-import { TRAINERS, type Trainer } from "./trainers.data";
+import { type Trainer } from "./trainers.data";
 
 /**
  * Section 8 — `section#stable-trainers.sec.tr-sec`, "Participating stables"
@@ -23,23 +23,31 @@ import { TRAINERS, type Trainer } from "./trainers.data";
  *    the class only once it has measured and decided to loop.
  *
  * 2. `data-trainer-count` (W3 decision 8). The count is the real list length,
- *    which is how the strip decides static vs marquee when the list becomes
- *    admin-driven in the CMS epic.
+ *    which is how the strip decides static vs marquee. It was pinned at 19 while
+ *    the roster was hardcoded; ENG-730 makes it whatever the view serves.
  *
- * Guardrail #2: a card shows name, location and photograph. Nothing else about a
- * trainer is public, and `Trainer` in trainers.data.ts has no field that could
- * leak owner or contact detail.
+ * Guardrail #2: a card shows name, location, photograph, the stable's bio and
+ * its horse names. Nothing else about a trainer is public — `Trainer` in
+ * trainers.data.ts has no field that could leak owner or contact detail, and its
+ * two new fields come from the marketing-safe view only.
  */
 
 export type TrainersStripProps = {
-  /** Defaults to the static list; W3 and the later CMS epic pass their own. */
+  /**
+   * The published roster, read live from `public_trainer` (ENG-730).
+   *
+   * There is no default list any more. It defaults to EMPTY rather than to a
+   * placeholder roster, so the failure direction is "no strip" — never nineteen
+   * fictional stables on the client's site.
+   */
   trainers?: Trainer[];
 };
 
-export default function TrainersStrip({ trainers = TRAINERS }: TrainersStripProps) {
-  // No participating stables means no section at all, rather than a heading
-  // over an empty strip. Not reachable from the static list, but the list
-  // becomes admin-driven in the CMS epic.
+export default function TrainersStrip({ trainers = [] }: TrainersStripProps) {
+  // No participating stables means no section at all, rather than a heading over
+  // an empty strip. This is now the REAL launch state, not a hypothetical:
+  // `trainer.marketing_visible` defaults to false, so the strip stays absent
+  // until an admin opts stables in (ENG-766 / W8).
   if (trainers.length === 0) return null;
 
   // The mockup's marquee reads this count off the section to decide static vs

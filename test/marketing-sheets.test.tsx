@@ -5,7 +5,11 @@ import MarketingFooter from "@/app/(marketing)/footer";
 import { CONTACT_EMAIL, contactMailtoHref } from "@/app/(marketing)/modals/contact-mailto";
 import TrainerCarousel from "@/app/(marketing)/trainer-carousel";
 import TrainersStrip from "@/app/(marketing)/sections/trainers-strip";
-import { TRAINERS } from "@/app/(marketing)/sections/trainers.data";
+// ENG-730: `trainers.data.ts` no longer exports any data, only the `Trainer`
+// type. `TRAINER_ROSTER` is a synthetic 19-row roster (see test/fixtures/trainers.ts)
+// built to exercise marquee/clone/threshold behaviour exactly as the old
+// hardcoded nineteen did, so the clone and count arithmetic below is unchanged.
+import { TRAINER_ROSTER } from "@/test/fixtures/trainers";
 
 /**
  * The interactive layer: the duplicate set's accessibility, the dialogs' focus
@@ -57,9 +61,9 @@ afterEach(() => {
 
 describe("trainer marquee — the duplicate set", () => {
   it("clones the set once it has measured, and drops .is-static when it does", () => {
-    const { container } = render(<TrainerCarousel trainers={TRAINERS} />);
+    const { container } = render(<TrainerCarousel trainers={TRAINER_ROSTER} />);
 
-    expect(container.querySelectorAll('.tr-card[data-dup="1"]')).toHaveLength(TRAINERS.length);
+    expect(container.querySelectorAll('.tr-card[data-dup="1"]')).toHaveLength(TRAINER_ROSTER.length);
     expect(container.querySelector(".tr-scroll")?.className).not.toContain("is-static");
   });
 
@@ -69,7 +73,7 @@ describe("trainer marquee — the duplicate set", () => {
    * tab order twice — the strip becomes 38 stops for a keyboard visitor.
    */
   it("hides every clone from assistive tech and from the tab order", () => {
-    const { container } = render(<TrainerCarousel trainers={TRAINERS} />);
+    const { container } = render(<TrainerCarousel trainers={TRAINER_ROSTER} />);
     const clones = [...container.querySelectorAll('.tr-card[data-dup="1"]')];
 
     expect(clones.length).toBeGreaterThan(0);
@@ -81,7 +85,7 @@ describe("trainer marquee — the duplicate set", () => {
 
     // The real cards keep both, so the strip is still fully reachable.
     const originals = [...container.querySelectorAll(".tr-card:not([data-dup])")];
-    expect(originals).toHaveLength(TRAINERS.length);
+    expect(originals).toHaveLength(TRAINER_ROSTER.length);
     for (const card of originals) {
       expect(card).toHaveAttribute("tabindex", "0");
       expect(card).toHaveAttribute("role", "button");
@@ -101,9 +105,9 @@ describe("trainer marquee — the duplicate set", () => {
   it("keeps drifting after a resize that rebuilds but stays live", async () => {
     vi.useFakeTimers();
     try {
-      const { container } = render(<TrainerCarousel trainers={TRAINERS} />);
+      const { container } = render(<TrainerCarousel trainers={TRAINER_ROSTER} />);
       const track = container.querySelector<HTMLElement>(".tr-track")!;
-      expect(container.querySelectorAll("[data-dup]").length).toBe(TRAINERS.length);
+      expect(container.querySelectorAll("[data-dup]").length).toBe(TRAINER_ROSTER.length);
 
       const framesIn = (ms: number) => {
         // jsdom drives rAF off timers, so advancing the clock runs the loop.
@@ -123,7 +127,7 @@ describe("trainer marquee — the duplicate set", () => {
       });
 
       // Still looping — same decision, so `duplicated` did not change.
-      expect(container.querySelectorAll("[data-dup]").length).toBe(TRAINERS.length);
+      expect(container.querySelectorAll("[data-dup]").length).toBe(TRAINER_ROSTER.length);
 
       const afterRebuild = track.style.transform;
       const afterDrifting = framesIn(400);
@@ -135,7 +139,7 @@ describe("trainer marquee — the duplicate set", () => {
 
   it("stays static, with no clones, below the minimum card count", () => {
     // Four trainers: the width test would pass, the count test must not.
-    const { container } = render(<TrainerCarousel trainers={TRAINERS.slice(0, 4)} />);
+    const { container } = render(<TrainerCarousel trainers={TRAINER_ROSTER.slice(0, 4)} />);
 
     expect(container.querySelectorAll("[data-dup]")).toHaveLength(0);
     expect(container.querySelector(".tr-scroll")?.className).toContain("is-static");
@@ -145,7 +149,7 @@ describe("trainer marquee — the duplicate set", () => {
     const raf = vi.spyOn(window, "requestAnimationFrame");
     stubViewport({ hoverNone: true });
 
-    const { container } = render(<TrainerCarousel trainers={TRAINERS} />);
+    const { container } = render(<TrainerCarousel trainers={TRAINER_ROSTER} />);
 
     expect(raf).not.toHaveBeenCalled();
     expect(container.querySelectorAll("[data-dup]")).toHaveLength(0);
@@ -158,11 +162,11 @@ describe("trainer marquee — the duplicate set", () => {
     const raf = vi.spyOn(window, "requestAnimationFrame");
     stubViewport({ reducedMotion: true });
 
-    const { container } = render(<TrainerCarousel trainers={TRAINERS} />);
+    const { container } = render(<TrainerCarousel trainers={TRAINER_ROSTER} />);
 
     expect(raf).not.toHaveBeenCalled();
     // The arrows still have somewhere to go, which is the acceptance criterion.
-    expect(container.querySelectorAll('[data-dup="1"]').length).toBe(TRAINERS.length);
+    expect(container.querySelectorAll('[data-dup="1"]').length).toBe(TRAINER_ROSTER.length);
     expect(container.querySelectorAll("[data-tr]")).toHaveLength(2);
     raf.mockRestore();
   });
@@ -189,7 +193,7 @@ describe("trainer strip — the empty list", () => {
   });
 
   it("still renders the section, with the real count, for a non-empty list", () => {
-    const { container } = render(<TrainersStrip trainers={TRAINERS.slice(0, 3)} />);
+    const { container } = render(<TrainersStrip trainers={TRAINER_ROSTER.slice(0, 3)} />);
     const section = container.querySelector("#stable-trainers");
 
     expect(section).not.toBeNull();
@@ -200,8 +204,8 @@ describe("trainer strip — the empty list", () => {
 
 describe("trainer modal", () => {
   it("opens from a card with that trainer's name, location and photograph", () => {
-    const { container } = render(<TrainerCarousel trainers={TRAINERS} />);
-    const trainer = TRAINERS[2];
+    const { container } = render(<TrainerCarousel trainers={TRAINER_ROSTER} />);
+    const trainer = TRAINER_ROSTER[2];
 
     const card = [...container.querySelectorAll(".tr-card:not([data-dup])")][2];
     fireEvent.click(card);
@@ -218,7 +222,7 @@ describe("trainer modal", () => {
   });
 
   it("keeps the client-signed-off placeholder note verbatim", () => {
-    const { container } = render(<TrainerCarousel trainers={TRAINERS} />);
+    const { container } = render(<TrainerCarousel trainers={TRAINER_ROSTER} />);
     fireEvent.click(container.querySelector(".tr-card")!);
 
     expect(container.querySelector(".trm-note")?.textContent).toBe(
@@ -227,7 +231,7 @@ describe("trainer modal", () => {
   });
 
   it("is closed, and renders no trainer, until a card is clicked", () => {
-    const { container } = render(<TrainerCarousel trainers={TRAINERS} />);
+    const { container } = render(<TrainerCarousel trainers={TRAINER_ROSTER} />);
     expect(container.querySelector("#tr-modal")).not.toHaveAttribute("open");
   });
 });
@@ -294,7 +298,7 @@ describe("dialog shell — the focus contract", () => {
         <button type="button" data-sheet="faq">
           View all
         </button>
-        <TrainerCarousel trainers={TRAINERS} />
+        <TrainerCarousel trainers={TRAINER_ROSTER} />
         <MarketingFooter />
       </>,
     );
@@ -361,7 +365,7 @@ describe("dialog shell — the focus contract", () => {
         <button type="button" data-sheet="faq">
           View all
         </button>
-        <TrainerCarousel trainers={TRAINERS} />
+        <TrainerCarousel trainers={TRAINER_ROSTER} />
         <MarketingFooter />
       </>,
     );

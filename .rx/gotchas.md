@@ -787,3 +787,65 @@ nothing, which looks alarming and is not — check `gh pr view <n>` for `MERGED`
 integration tip and open a follow-up PR (repo precedent: #48 for ENG-761, #52 for
 ENG-729). Save the uncommitted work as a patch BEFORE any branch operation.
 
+
+## A Server Component read CANNOT be mocked with `page.route()`
+ENG-730's ticket said to "mock the `public_trainer` REST call in the existing
+interception harness". Neither half was true, and it costs an afternoon to find
+out: (a) there is no `rest/v1/**` harness in this repo — every `page.route()` in
+`e2e/` mocks one of this app's OWN `/api/*` routes; (b) more fundamentally, the
+trainer roster is read inside the Next process, in a Server Component, before any
+HTML reaches the browser, and `page.route()` only sees requests the BROWSER makes.
+→ For server-side reads, seed the local Supabase (precedent: `e2e/checkout.spec.ts`)
+and `test.skip` when it is unavailable — see `e2e/support/marketing-trainers.ts`.
+To capture deterministic SCREENSHOTS of several data states, point the dev server's
+`NEXT_PUBLIC_SUPABASE_URL` at a tiny local stub HTTP server instead; the app, the
+read module and the rendering all stay real and only the upstream is stubbed.
+
+## `unstable_cache` is FILE-BACKED — it outlives a dev-server restart
+A roster cached at `revalidate: 300` lives under `.next/`, so restarting `next dev`
+does NOT clear it, and neither does re-seeding the database. Symptom: you seed
+rows, curl the view and see them, load the page and the section is still empty,
+with no error logged anywhere because the read never ran. Cost an hour on ENG-730.
+→ `rm -rf .next` between states, or set the interval to 0. ENG-730 made it
+`MARKETING_TRAINERS_REVALIDATE_SECONDS` for exactly this reason and
+`playwright.config.ts` passes `0` to the test server.
+
+## The local Supabase is SHARED and gets reset out from under you
+During one ENG-730 session the `supabase_db_stablepass` container was rebuilt
+twice by another process: the trainer rows vanished, then the entire public schema
+did (`relation "trainer" does not exist`), then it came back with migrations
+re-applied. Any manual seed is transient, and a test that assumes hand-seeded data
+will fail for reasons that have nothing to do with the diff.
+→ Never hand-seed and then assume. Seed inside `beforeAll`, verify the seed
+reached the VIEW (not just the table), and skip when it did not.
+
+## A too-wide PostgREST projection 400s — but the UI still shows nothing
+Folklore says a bad column list "silently returns empty". Measured against a live
+local PostgREST: `select=id,name,photo_url` on `public_trainer` answers
+**HTTP 400** `{"code":"42703","message":"column public_trainer.photo_url does not
+exist"}`. The reason it LOOKS silent is downstream — a marketing read that degrades
+to "no section" on error turns any projection mistake into an empty band with
+nothing in the UI to explain it.
+→ Assert the projection string byte for byte in a test (`PUBLIC_TRAINER_COLUMNS`).
+Both the widening and the typo direction fail loudly there instead of quietly on
+the page.
+
+## Grep-level guards read your COMMENTS, not just your code
+This repo's house style puts long explanatory headers beside the code, so a module
+that documents "this never touches `trainer`" or "the guard bans `lib/supabase`"
+trips a guard that greps the raw file — and the tempting fix is to delete the
+explanation. ENG-730 hit this three times in one sitting (its own read module, its
+new guard test, and `sections/index.tsx` vs the pre-existing `sections/` sweep).
+→ Strip comments before grepping (`codeOf()` in `test/marketing-trainers.test.tsx`),
+or word the comment so it does not contain the literal token. Never loosen the guard.
+
+## Running the marketing e2e UNPUBLISHES every real trainer on your local stack
+`e2e/support/marketing-trainers.ts` seeds nineteen `E2E …` trainers and, so the
+counts are its own, sets `marketing_visible = false` on every trainer that is NOT
+one of its rows. Nothing fails, nothing warns: another ticket simply finds its
+trainers missing from `public_trainer` afterwards, on a stack the whole team
+shares. Re-publish with
+`update trainer set marketing_visible = true where slug = '<yours>';`, or call
+`clearMarketingTrainers()` to unpublish the seeded ones.
+→ The helper refuses to run against anything but a loopback host, so this can
+never reach staging or production — but it WILL surprise you locally.

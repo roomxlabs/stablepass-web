@@ -1,12 +1,34 @@
 import { test, expect, devices, type Page } from "@playwright/test";
 
+import {
+  seedMarketingTrainers,
+  SEEDED_TRAINERS,
+  SEEDED_TRAINER_WITH_PHOTO,
+} from "./support/marketing-trainers";
+
 /**
  * The interactive layer (ENG-589 / W3) — behavioural evidence.
  *
- * Public and static like the W1/W2 specs, so no session and no Supabase.
  * Screenshots and the marquee's motion frames land in .rx/review/ and are
  * committed, per .rx/fe-harness.md.
+ *
+ * ENG-730 made the trainer strip read live from Supabase, so — unlike the
+ * W1/W2 shell specs — every test below that touches `#stable-trainers` seeds a
+ * roster first and skips cleanly when the local stack cannot serve one. See
+ * `./support/marketing-trainers.ts` for why this cannot be `page.route()`'d
+ * instead. `seeded` is set once per worker in the top-level `beforeAll`; tests
+ * outside the trainer strip (the footer's links, the FAQ sheet) do not depend
+ * on it and are not skipped by it.
  */
+
+let seeded = false;
+test.beforeAll(async () => {
+  seeded = await seedMarketingTrainers();
+});
+// No teardown on purpose. Playwright runs fullyParallel, and unpublishing the
+// roster while another worker is mid-test is precisely the race that made this
+// suite look like it needed --workers=1. Seeding is additive and idempotent;
+// see e2e/support/marketing-trainers.ts.
 
 const SHOT_DIR = ".rx/review";
 /** Gitignored: raw marquee frames, assembled into one committed GIF. */
@@ -102,6 +124,8 @@ test.describe("trainer marquee — hover-capable desktop", () => {
   test.use({ viewport: DESKTOP });
 
   test("drifts, pauses on hover, and resumes on leave", async ({ page }) => {
+    test.skip(!seeded, "local Supabase has no public_trainer view — cannot seed the marketing roster");
+
     await page.goto("/");
     await page.locator("#stable-trainers .tr-card").first().waitFor();
     await imagesSettled(page);
@@ -129,6 +153,8 @@ test.describe("trainer marquee — hover-capable desktop", () => {
   });
 
   test("the arrows nudge the same offset the drift uses", async ({ page }) => {
+    test.skip(!seeded, "local Supabase has no public_trainer view — cannot seed the marketing roster");
+
     await page.goto("/");
     await page.locator("#stable-trainers .tr-card").first().waitFor();
 
@@ -171,6 +197,8 @@ test.describe("trainer marquee — hover-capable desktop", () => {
    * change and React would otherwise skip re-running the drift effect.
    */
   test("keeps drifting after a resize that rebuilds but stays live", async ({ page }) => {
+    test.skip(!seeded, "local Supabase has no public_trainer view — cannot seed the marketing roster");
+
     await page.goto("/");
     await page.locator("#stable-trainers .tr-card").first().waitFor();
     await expect(page.locator('.tr-card[data-dup="1"]').first()).toBeAttached();
@@ -193,6 +221,8 @@ test.describe("trainer marquee — hover-capable desktop", () => {
   /** The guard, checked at the three widths the ticket names. */
   for (const width of [1440, 1024, 768]) {
     test(`never shows the same trainer twice at ${width}px`, async ({ page }) => {
+      test.skip(!seeded, "local Supabase has no public_trainer view — cannot seed the marketing roster");
+
       await page.setViewportSize({ width, height: 900 });
       await page.goto("/");
       await page.locator("#stable-trainers .tr-card").first().waitFor();
@@ -213,6 +243,8 @@ test.describe("trainer marquee — reduced motion", () => {
   test.use({ viewport: DESKTOP });
 
   test("does not drift, but the arrows still work", async ({ page }) => {
+    test.skip(!seeded, "local Supabase has no public_trainer view — cannot seed the marketing roster");
+
     // Set before the first navigation so the mount effect reads it. (`test.use`
     // has no `reducedMotion` option on this Playwright version.)
     await page.emulateMedia({ reducedMotion: "reduce" });
@@ -246,6 +278,8 @@ test.describe("trainer marquee — touch", () => {
   });
 
   test("scrolls natively with no drift and no duplicate set", async ({ page }) => {
+    test.skip(!seeded, "local Supabase has no public_trainer view — cannot seed the marketing roster");
+
     await page.goto("/");
     await page.locator("#stable-trainers .tr-card").first().waitFor();
 
@@ -273,8 +307,18 @@ test.describe("dialogs", () => {
   test.use({ viewport: DESKTOP });
 
   test("a trainer card opens the modal, and every close path returns focus", async ({ page }) => {
+    test.skip(!seeded, "local Supabase has no public_trainer view — cannot seed the marketing roster");
+
     await page.goto("/");
-    const card = page.locator("#stable-trainers .tr-card:not([data-dup])").first();
+    // ENG-730: eighteen of the nineteen seeded cards have no photograph, so
+    // `.first()` is not safe here — the roster is also served sorted
+    // alphabetically (`readPublicTrainers`), not in seed order. Target the one
+    // seeded trainer that DOES carry a photo, so `#trm-img` below is exercising
+    // the real photo path rather than getting lucky on sort order.
+    const card = page
+      .locator("#stable-trainers .tr-card:not([data-dup])")
+      .filter({ hasText: SEEDED_TRAINER_WITH_PHOTO.name })
+      .first();
     await card.waitFor();
     await imagesSettled(page);
 
@@ -284,9 +328,16 @@ test.describe("dialogs", () => {
 
     const modal = page.locator("#tr-modal");
     await expect(modal).toHaveAttribute("open", "");
-    await expect(modal.locator("#trm-name")).not.toBeEmpty();
+    await expect(modal.locator("#trm-name")).toHaveText(SEEDED_TRAINER_WITH_PHOTO.name);
     await expect(modal.locator("#trm-loc")).not.toBeEmpty();
-    await expect(modal.locator("#trm-img")).toHaveAttribute("src", /\/marketing\//);
+    // ENG-730: photos are served off the `marketing-photos` Supabase Storage
+    // bucket now, not a `/marketing/` public asset path — check the seeded
+    // object path resolves through rather than resolution itself, since the
+    // fixture path is DB-only and proves the plumbing, not an uploaded object.
+    await expect(modal.locator("#trm-img")).toHaveAttribute(
+      "src",
+      new RegExp(`${SEEDED_TRAINER_WITH_PHOTO.photoPath}$`),
+    );
     // Focus lands on the close button, so Esc and Tab are both immediately usable.
     await expect(modal.locator("[data-close]")).toBeFocused();
 
@@ -312,6 +363,8 @@ test.describe("dialogs", () => {
   });
 
   test("only one dialog is open at a time", async ({ page }) => {
+    test.skip(!seeded, "local Supabase has no public_trainer view — cannot seed the marketing roster");
+
     await page.goto("/");
     await page.locator('#faq [data-sheet="faq"]').click();
     await expect(page.locator("#sheet-faq")).toHaveAttribute("open", "");
@@ -411,14 +464,21 @@ test.describe("the footer's links", () => {
 test.describe("with scripting off (the client's review condition)", () => {
   test.use({ viewport: DESKTOP, javaScriptEnabled: false });
 
-  test("shows all nineteen trainers, navigable legal links, and nothing stuck invisible", async ({ page }) => {
+  test("shows every seeded trainer, navigable legal links, and nothing stuck invisible", async ({ page }) => {
+    test.skip(!seeded, "local Supabase has no public_trainer view — cannot seed the marketing roster");
+
     await page.goto("/");
     await imagesSettled(page);
 
     // Every card rendered AND actually visible — `.is-static` is what stops
-    // overflow:hidden clipping thirteen of them.
+    // overflow:hidden clipping the rest of them. The exact number is not the
+    // point of this test; that at least one card renders, and that the real
+    // count still matches the section's own count attribute, is.
     const cards = page.locator("#stable-trainers .tr-card");
-    await expect(cards).toHaveCount(19);
+    await expect(cards).not.toHaveCount(0);
+    expect(await page.locator("#stable-trainers").getAttribute("data-trainer-count")).toBe(
+      String(await cards.count()),
+    );
     await expect(page.locator(".tr-scroll")).toHaveClass(/is-static/);
 
     const hidden = await page.evaluate(() =>
@@ -463,6 +523,8 @@ test.describe("motion evidence", () => {
   test.use({ viewport: DESKTOP });
 
   test("captures the marquee drifting", async ({ page }) => {
+    test.skip(!seeded, "local Supabase has no public_trainer view — cannot seed the marketing roster");
+
     await page.goto("/");
     await page.locator("#stable-trainers .tr-card").first().waitFor();
     await imagesSettled(page);
