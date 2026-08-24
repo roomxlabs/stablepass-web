@@ -4,6 +4,7 @@
 // race badge), media (photo, or a video with a play button), the watermark overlay
 // when `watermarked`, body, and the reaction bar. Presentational + callback-driven;
 // it never fetches (the consumer supplies data + wires reactions/bookmark/play).
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { ReactionBar } from "./reaction-bar";
 import { PostOverlay } from "./post-overlay";
@@ -153,6 +154,78 @@ const More = () => (
   </svg>
 );
 
+/**
+ * The photo chip — the still-image counterpart to `.media-duration`, in the
+ * same corner with the same scrim (round 6 / ENG-761 item 3). A video says how
+ * long it runs; a photo has no such number, so it says what it IS with a glyph.
+ * That is the whole parity: at a glance the media box always declares its type.
+ */
+const PhotoGlyph = () => (
+  <svg className="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2">
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <circle cx="8.5" cy="10" r="1.5" />
+    <path d="m21 16-5-5L5 19" />
+  </svg>
+);
+
+/**
+ * The caption, clamped to two lines with a "more" affordance (round 6 / ENG-761
+ * item 2, matching mobile).
+ *
+ * WHY A MEASUREMENT AND NOT A CHARACTER COUNT: how many lines a caption takes
+ * depends on the rendered font, the column width and where the words break, so
+ * any length threshold is wrong at some viewport. After layout we compare the
+ * element's `scrollHeight` (its full text) against its `clientHeight` (the two
+ * lines the clamp actually shows) and only offer "more" when the former
+ * genuinely exceeds the latter. A caption that lands on exactly two lines
+ * measures equal and gets NO affordance — the edge case the ticket calls out.
+ *
+ * WHY "more" EXPANDS IN PLACE rather than opening the post detail: this app has
+ * no post-detail route. `app/(member)` has explore, following, saved, horses,
+ * horses/[id], trainers, trainers/[id], account and checkout — there is no
+ * `posts/[id]` page to open, and adding one is a screen, not a line of this
+ * ticket. Expanding in place is the honest web equivalent (and is what
+ * Instagram's own web feed does); if a detail route is ever built, this is the
+ * one call site to repoint. Flagged on ENG-761.
+ */
+export function PostCaption({ body }: { body: string }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+
+  const measure = useCallback(() => {
+    const el = ref.current;
+    if (!el || expanded) return;
+    // A 1px tolerance: sub-pixel line heights make an exactly-two-line caption
+    // measure a hair over on some zoom levels, which would show a "more" that
+    // reveals nothing.
+    setOverflows(el.scrollHeight - el.clientHeight > 1);
+  }, [expanded]);
+
+  useEffect(() => {
+    measure();
+    // The column is fluid, so a resize can turn a two-line caption into three.
+    // Guarded because jsdom (the unit suite) has no ResizeObserver.
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    if (ref.current) ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, [measure, body]);
+
+  return (
+    <div className="post-body-web">
+      <div ref={ref} className={expanded ? "post-caption" : "post-caption clamped"} data-testid="post-caption">
+        {body}
+      </div>
+      {overflows && !expanded && (
+        <button type="button" className="post-caption-more" onClick={() => setExpanded(true)}>
+          more
+        </button>
+      )}
+    </div>
+  );
+}
+
 export interface PostCardProps {
   post: FeedPost;
   viewerId: string; // signed-in user id — for the watermark overlay
@@ -210,10 +283,13 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
           {post.raceBadge && (
             <div className={`race-badge${post.raceBadge.kind === "result" ? " result" : ""}`}>{post.raceBadge.text}</div>
           )}
-          {/* The `.post-badge` PILL IS RETIRED (Justin via Naufal, 18 Aug
-              2026: not needed — "the header will stay the same as the
-              others"). The horse heads EVERY card, update cards included,
-              which also means it leaves the update byline below. */}
+          {/* The `.post-badge` pill RETURNS in round 6 (ENG-761), but as DATA
+              rather than the card-type copy it used to be: it draws
+              `post.label`, one of the be's 13 presets (ENG-738), and nothing
+              at all when the column is null — which is every pre-round-6 post.
+              The 18 Aug retirement stands for the old derived-copy pill; the
+              horse name still heads every card variant beneath it. */}
+          {post.label && <span className="post-badge">{post.label}</span>}
           <h3 className="post-horse">{post.horseName}</h3>
           {/* `post.title` is not drawn AT ALL — on any variant (client, 18
               Aug 2026, in two steps: media cards first, then the update card:
@@ -242,6 +318,9 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
             <div className="reel-head">
               <div className="post-avatar-web" aria-hidden="true">{initial}</div>
               <div className="reel-head-meta">
+                {/* The pill draws on EVERY web card variant, reel included —
+                    web has no separate reel treatment for it this round. */}
+                {post.label && <span className="post-badge">{post.label}</span>}
                 <h3 className="reel-horse">{post.horseName}</h3>
                 <div className="reel-byline">
                   <span className="by-trainer">{post.trainerName}</span> · {post.postedAgo}
@@ -254,6 +333,12 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
             <button className="media-play" type="button" aria-label="Play video" onClick={onPlay}><Play /></button>
           )}
           {isVideo && post.media.duration && <div className="media-duration">{post.media.duration}</div>}
+          {/* The photo's answer to the duration chip: same corner, same scrim. */}
+          {post.media.type === "photo" && (
+            <div className="media-photo-chip" data-testid="media-photo-chip" aria-label="Photo">
+              <PhotoGlyph />
+            </div>
+          )}
           {post.watermarked && <PostOverlay viewerId={viewerId} />}
           {!isReel && canFollow && <FollowPill trainerName={post.trainerName} onFollow={onFollow} />}
         </div>
@@ -284,7 +369,7 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
       {/* The caption renders LAST in the DOM and is placed below the reaction bar
           by `order` in globals.css — Instagram's ordering, decided 5 Aug. An
           update card has no caption: its body IS the panel above. */}
-      {!isUpdate && post.body && <div className="post-body-web">{post.body}</div>}
+      {!isUpdate && post.body && <PostCaption body={post.body} />}
     </article>
   );
 }

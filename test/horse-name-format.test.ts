@@ -8,6 +8,7 @@
 // point of the ticket — web rendered the raw registrar string until now, so the
 // two apps disagreed on every horse name. Whoever changes one formatter must
 // change both, and these two files are how a divergence is caught.
+import { describe, it, expect } from "vitest";
 import { displayHorseName, displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 
 describe("displayHorseName", () => {

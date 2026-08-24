@@ -38,6 +38,17 @@ export interface FeedPost {
    * as on mobile's M4 — so a text post with no title still gets pill and panel.
    */
   title?: string | null;
+  /**
+   * `post.label` — one of the 13 presets the be pins with a CHECK (ENG-738), or
+   * null. Drawn as the green pill at the top of the card; null means no pill,
+   * which is every pre-round-6 post (the column is nullable with no backfill).
+   *
+   * It is COPY chosen by the admin at compose time, not a card selector: what
+   * makes a card a STABLE UPDATE is still `media.type`, exactly as on mobile.
+   * The two are independent — a labelled photo post is a normal photo card that
+   * happens to carry a pill.
+   */
+  label?: string | null;
   body?: string | null;
   media: PostMedia;
   watermarked: boolean;
