@@ -268,6 +268,22 @@ describe("the public_trainer read — every failure degrades to no strip", () =>
     expect(logged).not.toContain("relation public_trainer does not exist");
   });
 
+  it("still names the failure when the error carries an empty code", async () => {
+    // Not hypothetical: pointed at a dead port, supabase-js returns an error
+    // whose `code` is an EMPTY STRING. With `??` this logged the prefix and
+    // nothing else, which is indistinguishable from not logging at all — the one
+    // thing the operator needs when the strip silently vanishes.
+    const { readPublicTrainers } = await loadModule();
+    selectMock.mockResolvedValue({ data: null, error: { code: "", name: "FetchError", message: "fetch failed" } });
+
+    expect(await readPublicTrainers()).toEqual([]);
+
+    const logged = String((console.error as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]![0]);
+    expect(logged).toContain("FetchError");
+    expect(logged.replace("[marketing/trainers]", "").trim()).not.toBe("");
+    expect(logged).not.toContain("fetch failed");
+  });
+
   it("returns an empty roster when the client throws outright", async () => {
     const { readPublicTrainers } = await loadModule();
     selectMock.mockRejectedValue(new TypeError("fetch failed"));

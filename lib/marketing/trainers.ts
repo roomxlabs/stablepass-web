@@ -193,7 +193,13 @@ export async function readPublicTrainers(): Promise<Trainer[]> {
     const { data, error } = await supabase.from(PUBLIC_TRAINER_VIEW).select(PUBLIC_TRAINER_COLUMNS);
 
     if (error) {
-      console.error(`[marketing/trainers] ${error.code ?? "SupabaseError"}`);
+      // `||`, NOT `??`. Measured against a dev server pointed at a dead port:
+      // supabase-js hands back an error whose `code` is an EMPTY STRING, and
+      // `??` only falls back on null/undefined — so this logged
+      // "[marketing/trainers] " with nothing after it, which tells an operator
+      // exactly as much as logging nothing at all. Fall through to the name, and
+      // keep a constant as the last resort so the line is never empty.
+      console.error(`[marketing/trainers] ${error.code || error.name || "SupabaseError"}`);
       return [];
     }
 
