@@ -11,7 +11,11 @@ export const metadata = { title: "Start your free trial · StablePass" };
 export default async function StartPage({
   searchParams,
 }: {
-  searchParams: Promise<{ trial?: string }>;
+  // `string | string[]`, not just `string`: Next gives an ARRAY when a key is
+  // repeated (`?trial=used&trial=used`). Typing it as a bare string is a lie
+  // that `tsc` cannot catch, and the strict compare below then silently renders
+  // the form. That is the safe direction, but the type should say what arrives.
+  searchParams: Promise<{ trial?: string | string[] }>;
 }) {
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
@@ -45,12 +49,16 @@ export default async function StartPage({
               the free trial on a page saying you could not join yet. This is
               also WHY the wall is a server-rendered URL rather than a state
               swap inside the form: the aside is outside the form, so an
-              in-place swap could only ever change half the screen. */}
+              in-place swap could only ever change half the screen.
+
+              The replacement is kept SHORTER than the quote it replaces (16
+              words vs 26): this column has no mobile breakpoint and clips badly
+              on a phone (pre-existing, see .rx/gotchas.md), so a longer quote
+              would make the walled state read worse than the form does. */}
           {trialUsed ? (
             <p className="quote">
-              &ldquo;Come and join us properly. Every update, every race day report and
-              every replay from the yard, straight from the people who know these
-              horses.&rdquo;
+              &ldquo;Come and join us properly. Every update, every race day report,
+              every replay from the yard.&rdquo;
             </p>
           ) : (
             <p className="quote">

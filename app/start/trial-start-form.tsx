@@ -232,8 +232,13 @@ export function TrialStartForm() {
       router.replace("/start?trial=used");
       return;
     }
-    if (res.status === 409) setError("That email is already registered. Try signing in instead.");
-    else if (res.status === 429) setError("Too many attempts — please wait a moment and try again.");
+    // No status-409 branch any more. The route's ONLY 409 is
+    // `trial_already_used`, handled above, and the copy that used to live here
+    // ("That email is already registered") named the credential that matched —
+    // exactly what the wall is required not to reveal. Any unexpected 409 now
+    // falls through to the generic message rather than to a stale, off-message
+    // one that contradicts the ticket.
+    if (res.status === 429) setError("Too many attempts — please wait a moment and try again.");
     else setError(body?.error?.message ?? "Please check your details and try again.");
     setBusy(false);
   }

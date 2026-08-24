@@ -267,17 +267,25 @@ describe("TrialStartForm", () => {
     });
 
     it("does NOT wall on a 409 that is not trial_already_used", async () => {
-      // Branching on the status alone would swallow any future 409 whole.
+      // Branching on the status alone would swallow any future 409 whole. Such
+      // a 409 now falls through to the route's own message rather than to the
+      // old hardcoded "That email is already registered", which named the
+      // credential the wall must never name.
       mockFetch(409, { error: { code: "something_else", message: "Nope." } });
       render(<TrialStartForm />);
 
       fill();
       submit();
 
-      expect(await screen.findByRole("alert")).toHaveTextContent(
-        "That email is already registered. Try signing in instead.",
-      );
+      expect(await screen.findByRole("alert")).toHaveTextContent("Nope.");
       expect(replaceMock).not.toHaveBeenCalled();
+    });
+
+    it("no longer ships the copy that named which credential matched", async () => {
+      await submitWalled();
+      await waitFor(() => expect(replaceMock).toHaveBeenCalled());
+
+      expect(document.body.textContent ?? "").not.toContain("already registered");
     });
   });
 

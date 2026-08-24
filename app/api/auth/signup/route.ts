@@ -119,8 +119,16 @@ export async function POST(req: Request) {
 
   // Supabase resists enumeration: a duplicate email may come back as an
   // `error`, or as a 200 with a user whose `identities` array is empty.
+  //
+  // The CODE is checked before the message. Verified against the running stack,
+  // supabase-js returns `AuthApiError { status: 422, code: "user_already_exists",
+  // message: "User already registered" }`, and a stable code beats matching
+  // GoTrue's prose — a reworded upstream string would otherwise silently demote
+  // the email half of the wall to a generic 400. The regex stays as the
+  // fallback for older GoTrue builds that send no code.
+  const duplicateCode = (error as { code?: string } | null)?.code;
   const looksLikeDuplicate =
-    (error && /already registered/i.test(error.message)) ||
+    (error && (duplicateCode === "user_already_exists" || /already registered/i.test(error.message))) ||
     (!error && data?.user && Array.isArray(data.user.identities) && data.user.identities.length === 0);
   if (looksLikeDuplicate) {
     // Was `email_taken`. An address that already has an account has, for this
@@ -133,27 +141,32 @@ export async function POST(req: Request) {
   }
 
   if (error) {
-    // The race the pre-check cannot close: two signups with the same number in
-    // flight at once both see `phone_in_use` false, and one loses the index.
-    // On the CURRENT schema this branch is unreachable for that case, because
-    // ENG-742's trigger catches exactly that unique violation and retries with
-    // a NULL phone, so the signup SUCCEEDS and there is no error to inspect
-    // (accepted behaviour: the loser keeps their trial, and their phone is not
-    // stored). It is handled anyway because the alternative if that ever stops
-    // holding — the trigger's exception scoping is pinned to the index NAME and
-    // the migration flags it as a rename hazard — is a raw 500 on a signup.
-    // The member gets the same friendly wall either way, never a stack trace.
+    // WHAT HAPPENS IF THE DATABASE ITSELF REJECTS THE SIGNUP, and why there is
+    // no phone-specific branch here. Measured on this stack, not assumed:
     //
-    // Matched on the index name and SQLSTATE, which api-contract.md documents
-    // as the distinguishable signal (`23505`, message naming
-    // `idx_app_user_phone`). The error is never forwarded: PostgREST echoes
-    // Postgres DETAIL verbatim and that DETAIL contains the phone number
-    // itself.
-    const dbCode = (error as { code?: string }).code;
-    if (dbCode === "23505" || /idx_app_user_phone/.test(error.message)) {
-      return fail(TRIAL_ALREADY_USED, TRIAL_ALREADY_USED_MESSAGE, 409);
-    }
-
+    // A trigger that raises inside the auth.users insert makes GoTrue answer
+    // HTTP 500 with the raw Postgres error, PII and all —
+    //   {"code":"23514","message":"...violates check constraint...",
+    //    "detail":"Failing row contains (…, someone@example.com, …)"}
+    // — but supabase-js does NOT surface that. It flattens the whole thing to
+    //   AuthRetryableFetchError { status: 500, code: undefined, message: "{}" }
+    // so by the time the error reaches this line the SQLSTATE and the DETAIL
+    // are both already gone. An earlier revision matched `23505` /
+    // `idx_app_user_phone` here to show the wall on a lost index race; it was
+    // deleted because it could never fire, and two tests that "proved" it were
+    // asserting a response shape the client cannot produce.
+    //
+    // That is acceptable rather than merely unavoidable, for two reasons:
+    //   1. The phone race does not reach here at all. ENG-742's trigger catches
+    //      its own unique violation and retries with a NULL phone, so a losing
+    //      concurrent signup SUCCEEDS. The member keeps their trial and their
+    //      number simply is not stored. That is the migration's locked decision
+    //      (never abort an auth.users insert), not a gap.
+    //   2. The fallthrough below is already the right answer: fixed copy, no
+    //      stack trace, no leak. The flattened "{}" carries nothing to echo.
+    //
+    // If a future client stops flattening this, the SQLSTATE becomes visible
+    // and mapping it to the wall would be worth revisiting.
     const status = (error as { status?: number }).status;
     if (status === 429 || /rate limit/i.test(error.message)) {
       return fail("rate_limited", "Too many attempts — please wait a moment and try again.", 429);

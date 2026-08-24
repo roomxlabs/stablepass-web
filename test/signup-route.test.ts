@@ -164,11 +164,22 @@ describe("POST /api/auth/signup", () => {
       expect(signUpMock).toHaveBeenCalled();
     });
 
-    it("does NOT wall on a non-boolean RPC result", async () => {
-      // `sb` is untyped, so nothing upstream guarantees the shape. Only an
-      // explicit `true` may close this door — a truthy object here would lock a
-      // legitimate member out of signing up with no way to act on it.
-      rpcMock.mockResolvedValue({ data: null, error: null });
+    // `sb` is untyped, so nothing upstream guarantees the RPC's shape. Only an
+    // explicit boolean `true` may close this door: a TRUTHY NON-BOOLEAN would
+    // otherwise lock a legitimate member out of signing up with nothing they
+    // could do about it, which is the worst outcome available in this ticket.
+    //
+    // The truthy values are the point. An earlier version of this test passed
+    // only `data: null`, which is FALSY — so `=== true` and a bare truthiness
+    // check behaved identically and the guard was not actually pinned by
+    // anything. These are the shapes where the two genuinely differ.
+    it.each([
+      ["a falsy null", null],
+      ["an empty object", {}],
+      ["the STRING 'false'", "false"],
+      ["the number 1", 1],
+    ])("does NOT wall when the RPC returns %s", async (_label, value) => {
+      rpcMock.mockResolvedValue({ data: value, error: null });
       mockSuccess();
 
       const res = await POST(req(VALID_BODY));
@@ -176,43 +187,24 @@ describe("POST /api/auth/signup", () => {
       expect(res.status).toBe(201);
     });
 
-    it("shows the wall, not a stack trace, if the DB ever surfaces the phone unique violation", async () => {
-      // Unreachable on the current schema (ENG-742's trigger catches this and
-      // retries with a NULL phone), so this pins the fallback rather than
-      // current behaviour: the index name is a documented rename hazard, and
-      // the failure mode without this branch is a raw 500 on signup.
+    it("does not leak a database error to the caller when signUp fails", async () => {
+      // Measured, not assumed: supabase-js flattens a trigger-raised 500 to
+      // AuthRetryableFetchError { code: undefined, message: "{}" }, so the
+      // SQLSTATE and the PII-bearing DETAIL never reach this route. Two earlier
+      // tests here mocked a `23505` / idx_app_user_phone error and passed
+      // happily while asserting a shape the client cannot produce. This pins
+      // what actually arrives, and that we answer with fixed copy.
       signUpMock.mockResolvedValue({
         data: {},
-        error: {
-          code: "23505",
-          message: 'duplicate key value violates unique constraint "idx_app_user_phone"',
-        },
+        error: { name: "AuthRetryableFetchError", status: 500, message: "{}" },
       });
 
       const res = await POST(req(VALID_BODY));
       const body = await res.json();
 
-      expect(res.status).toBe(409);
-      expect(body.error.code).toBe("trial_already_used");
-    });
-
-    it("never echoes the database DETAIL, which carries the member's number", async () => {
-      // PostgREST forwards Postgres DETAIL verbatim and it contains the
-      // normalised phone number. Nothing may reflect it back to the caller.
-      signUpMock.mockResolvedValue({
-        data: {},
-        error: {
-          code: "23505",
-          message: "Key (normalize_phone(phone))=(61400111222) already exists.",
-        },
-      });
-
-      const res = await POST(req(VALID_BODY));
-      const raw = JSON.stringify(await res.json());
-
-      expect(res.status).toBe(409);
-      expect(raw).not.toContain("61400111222");
-      expect(raw).not.toContain("normalize_phone");
+      expect(res.status).toBe(400);
+      expect(body.error.code).toBe("validation_failed");
+      expect(body.error.message).toBe("Please check your details and try again.");
     });
 
     it("uses ONE message for both the phone hit and the email hit (no enumeration)", async () => {

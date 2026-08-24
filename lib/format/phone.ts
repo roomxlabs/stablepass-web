@@ -19,8 +19,8 @@
 // null can never be in use, which is the RPC's own documented answer for that
 // input). If this function and the SQL ever disagree, that short-circuit starts
 // skipping calls the database would have answered `true` to, and a repeat
-// signup sails through the wall. The matrix in `test/phone-normalise.test.ts`
-// is copied case-for-case from ENG-742's `test/rls/phone-unique.test.mjs` so the
+// signup sails through the wall. The matrix in `test/phone-format.test.ts` is
+// copied case-for-case from ENG-742's `test/rls/phone-unique.test.mjs` so the
 // two suites go red together rather than drifting apart quietly.
 //
 // !! If ENG-742's SQL rule ever changes, change this in the same round, and
