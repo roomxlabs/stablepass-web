@@ -937,23 +937,42 @@ Empty output means the migration is missing: re-apply the be migrations, then re
 specs passed when ENG-772 and ENG-775 shipped, so a green PR does not mean they stay green
 locally. Always baseline the same specs on the merge-base before treating a red as yours.
 
-## Three member e2e specs are RED on `feature/round6-v1` — `post.label` is undeployed (ENG-794)
+## Three member e2e specs are RED on `feature/round6-v1` — they die in their own SEED (ENG-794)
 
 `e2e/eng-772-profile-label-pill`, `e2e/eng-775-saved-label-pill` and
-`e2e/reaction-save` fail on the branch tip with "element(s) not found" for
-`.post-web`/`.post-media-web` — i.e. no cards at all, not a styling miss.
-Measured at `4dbefe7`: 3 failed / 5 passed, before any change.
+`e2e/reaction-save` fail on the round-6 tip. Measured at `4dbefe7` and again on
+ENG-794's branch: **3 failed / 2 passed** across those three files (5 tests), and
+**9 failed / 105 passed** across the whole Playwright suite — identical on both,
+so they are not anyone's regression.
 
-**Cause:** the local `post` table has no `label` column. `information_schema`
-lists 19 columns and `label` is not among them; the migration
-`20260819120001_post_label.sql` (ENG-738) exists only on unmerged `stablepass-be`
-worktrees, never on be `main`. Every feed `.select()` naming `label` is therefore
-rejected 42703/400 and the routes turn that into a silent empty list.
+**They fail in their service-role seed, before any page is loaded.** The error is:
 
-**Do this:** baseline these three before blaming your diff, and do NOT "fix" them
-by deploying the be migration yourself — the local Supabase stack is shared
-across every worktree (see the BE serialization rule). Disclose them in the PR
-and note that CI must re-run them once ENG-738 lands.
+```
+{ code: 'PGRST204', message: "Could not find the 'label' column of 'post' in the schema cache" }
+```
+
+The specs INSERT a post with `label: "Trackwork"`, and the local `post` table has
+no `label` column — `information_schema` lists 19 and `label` is not one. The
+migration `20260819120001_post_label.sql` (ENG-738) exists only on unmerged
+`stablepass-be` worktrees, never on be `main`. A transient
+`42501 permission denied for table trainer` has also been seen from the same seed
+when the local stack was in a half-restarted state.
+
+**Do NOT conflate this with the 42703 projection trap.** That trap is real and
+documented above, but it applies to a `.select()` naming an undeployed column,
+where PostgREST rejects the query and the ROUTE turns it into a silent empty
+list. These specs never get that far — they cannot even write their fixture. If
+you go looking for a blank feed you will waste the afternoon.
+
+**The consequence worth knowing:** while this holds, the three specs give the
+five member feed screens **zero** end-to-end coverage. Anything touching those
+screens is covered by vitest and static comparison only, so say so in the PR
+rather than implying the e2e red is understood and harmless.
+
+**Do this:** baseline before blaming your diff, and do NOT deploy the be
+migration yourself — the local Supabase stack is shared across every worktree
+(see the BE serialization rule). Disclose, and note that CI must re-run these
+once ENG-738 lands.
 
 ## `npm test` alone can FAIL `marketing-marquee`, and a dev server is why
 
