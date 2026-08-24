@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   PostCard,
@@ -537,6 +537,26 @@ describe("PostCard — the reel card", () => {
       <PostCard post={post} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={vi.fn()} {...extra} />,
     );
 
+  // ROUND 6 / ENG-761 item 1 — the pill must draw on ALL web card variants, and
+  // the reel head is the SECOND of the two render sites. Without this the site
+  // is invisible to the suite: deleting it left 755/755 green, and the preview
+  // gallery has no reel fixture, so the e2e does not cover it either.
+  it("draws the label pill inside the reel head, not only on the classic card", () => {
+    const { container } = renderReel({ ...REEL, label: "Trackwork" });
+
+    const badge = container.querySelector(".reel-head .post-badge");
+    expect(badge).not.toBeNull();
+    expect(badge!.textContent).toBe("Trackwork");
+    // It belongs to the overlaid head, not to a classic header row (which a
+    // reel does not render at all).
+    expect(container.querySelector(".post-head-web")).toBeNull();
+  });
+
+  it("draws no pill on a reel whose label is null", () => {
+    const { container } = renderReel({ ...REEL, label: null });
+    expect(container.querySelector(".post-badge")).toBeNull();
+  });
+
   it("draws the FULL 9:16 box, tagged reel", () => {
     const { container } = renderReel(REEL);
     const box = container.querySelector<HTMLElement>(".post-media-web")!;
@@ -725,6 +745,45 @@ describe("PostCaption (ENG-761 item 2)", () => {
 
       expect(screen.queryByRole("button", { name: "Expand caption" })).not.toBeInTheDocument();
       expect(screen.getByTestId("post-caption")).toHaveClass("clamped");
+    });
+
+    // THE CONTENT-LOSS GUARD. The first measurement runs against the FALLBACK
+    // font. If the real face is wider the caption grows a third line — and the
+    // ResizeObserver cannot see it, because `line-height` is unitless so the
+    // clamped box stays exactly two lines tall and its border box never
+    // changes, while `scrollHeight` grows underneath. Without the
+    // `document.fonts.ready` re-measure the member is left with a silently
+    // truncated caption and no way to open it.
+    it("re-measures when the webfont lands, so a caption that only overflows after the swap still gets its 'more'", async () => {
+      let fontsLoaded = false;
+      // Fits on the fallback face, overflows once the real face applies.
+      vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(40);
+      vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(() => (fontsLoaded ? 100 : 40));
+
+      let releaseFonts: () => void = () => {};
+      const ready = new Promise<void>((resolve) => {
+        releaseFonts = () => {
+          fontsLoaded = true;
+          resolve();
+        };
+      });
+      // jsdom has no FontFaceSet; the component guards on `document.fonts?.ready`.
+      Object.defineProperty(document, "fonts", { value: { ready }, configurable: true });
+
+      render(<PostCaption body="A caption that only overflows once the real face loads." />);
+
+      // Before the swap it measures as fitting, so no affordance — this half is
+      // what makes the assertion below meaningful rather than trivially true.
+      expect(screen.queryByRole("button", { name: "Expand caption" })).not.toBeInTheDocument();
+
+      await act(async () => {
+        releaseFonts();
+        await ready;
+      });
+
+      expect(screen.getByRole("button", { name: "Expand caption" })).toBeInTheDocument();
+
+      Reflect.deleteProperty(document, "fonts");
     });
   });
 });

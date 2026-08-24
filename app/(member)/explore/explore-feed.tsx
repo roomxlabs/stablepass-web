@@ -277,7 +277,7 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
             if (!horse) continue;
             entries.push({
               horseId: horse.id,
-              horseName: horse.display_name,
+              horseName: displayHorseNameOrEmpty(horse.display_name),
               info: `${r.venue ?? "TBC"} R${r.race_number ?? "?"} · ${r.race_class ?? ""} · ${r.distance_m ?? "?"}m`,
               when: raceWhen(r.scheduled_at),
             });
