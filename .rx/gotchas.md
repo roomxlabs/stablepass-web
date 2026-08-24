@@ -860,3 +860,20 @@ mid-placeholder. Verified on an iPhone 13 profile against the **unmodified** `/s
 is not attributable to whatever screen you are working on — check a baseline capture before
 "fixing" it, and note the client reviews on a phone. Fixing it is a real responsive ticket
 against `app/globals.css`, not a drive-by.
+
+## A MIXED `.next` makes the built-output guardrail test fail at random
+`test/marketing-marquee.test.ts`'s "ships no confirmation copy in the built output either"
+greps `.next`. It is `it.skipIf`-guarded, so in a fresh worktree with no build it simply
+SKIPS — which is why a clean checkout looks green and says nothing. Once you have run BOTH
+`npm run build` and `npm run dev` in the same worktree, `.next` holds production chunks and
+dev chunks together, and the grep intermittently reads stale or half-written output: the
+full suite then fails roughly one run in four, always in files with no relationship to your
+diff (`marketing-marquee`, `following-screen`), which sends you hunting a phantom regression
+in your own change. Fix is not a retry loop:
+```sh
+pkill -f "next dev"; rm -rf .next && npm run build && npx vitest run
+```
+After that it is stable — verified 3 consecutive full-suite runs, 801/801. Do this BEFORE
+concluding anything about a red suite, and be suspicious of any "flaky" failure whose file
+you did not touch. Corollary: a Playwright run leaves a dev server alive, so finish e2e work
+before you trust a unit run.
