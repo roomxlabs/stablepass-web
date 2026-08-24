@@ -99,19 +99,31 @@ type PublicTrainerRow = {
 };
 
 /**
- * The mockup's disc carries two letters ("AB", "AA" for "Annabel & Rob
- * Archibald"), so take the initial of each of the first two real words. "&" and
- * other punctuation-only tokens are skipped — "Annabel & Rob" must read "AR",
- * not "A&". A single-word name yields a single letter rather than a padded one.
+ * FIRST word + LAST word, which is the rule the mockup's own hand-written discs
+ * follow. Read them off the signed-off cards and it is unambiguous:
+ *
+ *   "Andrew Bobbin"            -> AB
+ *   "Annabel & Rob Archibald"  -> AA   (Annabel ... Archibald, NOT "AR")
+ *   "Corey & Kylie Geran"      -> CG
+ *   "Matt Cumani"              -> MC
+ *
+ * So it is given-name + family-name, not "the first two words" — a partnership
+ * stable would otherwise read as the two given names and lose the surname the
+ * disc is meant to identify. Punctuation-only tokens ("&") are dropped first, so
+ * they can never become a letter. A single-word name yields one letter rather
+ * than a padded or doubled one.
  */
 export function initialsOf(name: string): string {
-  return name
+  const words = name
     .split(/\s+/)
     .map((word) => word.replace(/[^\p{L}\p{N}]/gu, ""))
-    .filter((word) => word.length > 0)
-    .slice(0, 2)
-    .map((word) => word[0]!.toUpperCase())
-    .join("");
+    .filter((word) => word.length > 0);
+
+  if (words.length === 0) return "";
+
+  const first = words[0]!;
+  const last = words[words.length - 1]!;
+  return (words.length === 1 ? first[0]! : `${first[0]!}${last[0]!}`).toUpperCase();
 }
 
 /**
