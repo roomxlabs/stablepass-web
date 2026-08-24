@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useId, useState, useSyncExternalStore } from "react";
 
 /**
  * The pre-launch waitlist capture form — ENG-726 (W2 of ENG-721).
@@ -90,36 +90,57 @@ function stateFromQuery(
   return null;
 }
 
+/**
+ * Read one query parameter from the LIVE browser URL, safely across the
+ * server/client boundary.
+ *
+ * `useSyncExternalStore` rather than a mount effect that calls setState. The
+ * server snapshot is `null`, so the first client render matches the server HTML
+ * byte for byte and there is no hydration mismatch — this route group has
+ * already been bitten by one (see the `.js` flag note in `.rx/gotchas.md`).
+ * React then re-renders with the client snapshot. Doing it with an effect works
+ * too, but it is a cascading render that `react-hooks/set-state-in-effect`
+ * rightly flags, and the derived-value form below is simply the honest shape of
+ * this: the state is DERIVED from the URL, never owned.
+ *
+ * `subscribe` is a no-op returning a no-op: this reads the LANDING url, which
+ * cannot change under us without a navigation that remounts the component.
+ * The snapshot returns a string or null — a primitive — so React's
+ * "getSnapshot should be cached" check is satisfied by value equality.
+ */
+const NEVER_CHANGES = () => () => {};
+const SERVER_SNAPSHOT = () => null;
+
+function useQueryParam(name: string): string | null {
+  return useSyncExternalStore(
+    NEVER_CHANGES,
+    () => new URLSearchParams(window.location.search).get(name),
+    SERVER_SNAPSHOT,
+  );
+}
+
 export default function WaitlistForm({ initialJoined, initialReason }: WaitlistFormProps = {}) {
-  const fromServer = stateFromQuery(initialJoined, initialReason);
-
   const [email, setEmail] = useState("");
-  const [status, setStatus] = useState<Status>(fromServer?.status ?? "idle");
-  const [message, setMessage] = useState(fromServer?.message ?? "");
-
   const emailId = useId();
 
   /**
-   * Recover the outcome of a native round-trip.
-   *
-   * In an effect, and reading `window.location` directly, so the first render
-   * matches the server HTML exactly — flipping this during render would be a
-   * hydration mismatch, and this route group has already been bitten by one
-   * (see the `.js` flag note in `.rx/gotchas.md`).
-   *
-   * Skipped entirely when the mounting page already told us server-side.
+   * What THIS submission did, once the visitor has submitted in-page. `null`
+   * until then, which is what lets the URL-derived state below show through
+   * after a native round-trip — and what stops it clobbering an inline result
+   * afterwards. One nullable piece of state instead of two that must be kept
+   * consistent with each other.
    */
-  useEffect(() => {
-    if (fromServer) return;
-    const params = new URLSearchParams(window.location.search);
-    const next = stateFromQuery(params.get("joined"), params.get("reason"));
-    if (!next) return;
-    setStatus(next.status);
-    setMessage(next.message);
-    // Intentionally once, on mount: this reads the landing URL, and re-running
-    // it would fight the inline states the fetch path sets.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const [submitted, setSubmitted] = useState<{ status: Status; message: string } | null>(null);
+
+  // Server-supplied first (the only form a scripting-off visitor can see), then
+  // the live browser URL. Both are DERIVED during render — neither is copied
+  // into state, so there is nothing to keep in sync.
+  const urlJoined = useQueryParam("joined");
+  const urlReason = useQueryParam("reason");
+  const fromQuery =
+    stateFromQuery(initialJoined, initialReason) ?? stateFromQuery(urlJoined, urlReason);
+
+  const { status, message } = submitted ?? fromQuery ?? { status: "idle" as Status, message: "" };
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -133,8 +154,7 @@ export default function WaitlistForm({ initialJoined, initialReason }: WaitlistF
       company: String(data.get("company") ?? ""),
     };
 
-    setStatus("submitting");
-    setMessage("");
+    setSubmitted({ status: "submitting", message: "" });
 
     try {
       const response = await fetch("/api/waitlist", {
@@ -146,19 +166,19 @@ export default function WaitlistForm({ initialJoined, initialReason }: WaitlistF
       });
 
       if (response.ok) {
-        setStatus("success");
-        setMessage(MESSAGES.success);
+        setSubmitted({ status: "success", message: MESSAGES.success });
         return;
       }
 
       const body = await response.json().catch(() => null);
       const code = body?.error?.code;
-      setStatus("error");
-      setMessage(code === "invalid_email" ? MESSAGES.email : MESSAGES.server);
+      setSubmitted({
+        status: "error",
+        message: code === "invalid_email" ? MESSAGES.email : MESSAGES.server,
+      });
     } catch {
       // Offline, DNS, a blocked request — never a reason to lose what they typed.
-      setStatus("error");
-      setMessage(MESSAGES.server);
+      setSubmitted({ status: "error", message: MESSAGES.server });
     }
   }
 
