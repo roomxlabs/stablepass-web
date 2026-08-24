@@ -898,3 +898,19 @@ Two knock-on traps when you tighten a field on `FeedPost`:
   (`label: overrides.label ?? null`); setting a default before the spread does not work.
 * `app/preview/components/page.tsx` hand-builds `FeedPost` literals and will also stop
   compiling. It is part of the real surface here even though no feed ticket lists it.
+
+## Label e2e specs fail with `PGRST204`/`42703` when the local DB lacks ENG-738's column
+Symptom: `eng-772-profile-label-pill`, `eng-775-saved-label-pill` and `reaction-save` fail
+while seeding, with `Could not find the 'label' column of 'post' in the schema cache`
+(PostgREST) or `column post.label does not exist` (42703 straight from Postgres).
+Cause: **not** a stale schema cache and **not** the web diff. `post.label` ships in the be's
+`20260819120001_post_label.sql` (ENG-738); this repo has no `supabase/migrations` of its own,
+so a local `supabase db reset` drops the column and nothing here puts it back. Confirm in one
+line before blaming your change:
+```
+docker exec supabase_db_stablepass psql -U postgres -d postgres \
+  -tAc "select 1 from information_schema.columns where table_name='post' and column_name='label';"
+```
+Empty output means the migration is missing: re-apply the be migrations, then re-run. These
+specs passed when ENG-772 and ENG-775 shipped, so a green PR does not mean they stay green
+locally. Always baseline the same specs on the merge-base before treating a red as yours.
