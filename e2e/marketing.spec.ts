@@ -1,5 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
+import { seedMarketingTrainers, SEEDED_TRAINERS } from "./support/marketing-trainers";
+
 /**
  * Marketing shell (ENG-587 / W1) — visual + behavioural evidence.
  *
@@ -170,7 +172,20 @@ test.describe("marketing shell", () => {
 test.describe("with JavaScript disabled", () => {
   test.use({ javaScriptEnabled: false });
 
+  // ENG-730: `.tr-over` is one per trainer card, and the strip now reads live
+  // from Supabase — so the count this test pins below needs a seeded roster.
+  let seeded = false;
+  test.beforeAll(async () => {
+    seeded = await seedMarketingTrainers();
+  });
+  // No teardown on purpose. Playwright runs fullyParallel, and unpublishing the
+  // roster while another worker is mid-test is precisely the race that made this
+  // suite look like it needed --workers=1. Seeding is additive and idempotent;
+  // see e2e/support/marketing-trainers.ts.
+
   test("renders the whole shell, with nothing stuck at opacity 0", async ({ page }) => {
+    test.skip(!seeded, "local Supabase has no public_trainer view — cannot seed the marketing roster");
+
     await page.goto("/");
 
     await expect(page.locator(".marketing")).not.toHaveClass(/(^|\s)js(\s|$)/);
@@ -229,7 +244,12 @@ test.describe("with JavaScript disabled", () => {
       ),
       HOVER_AFFORDANCES,
     );
-    expect(excluded).toEqual({ "t-over": 4, "tr-over": 19, "cta-fill": 1, "cta-trial-line": 1 });
+    expect(excluded).toEqual({
+      "t-over": 4,
+      "tr-over": SEEDED_TRAINERS.length,
+      "cta-fill": 1,
+      "cta-trial-line": 1,
+    });
 
     // ENG-588 filled the shell with .rv markup, so the sweep above is no longer
     // vacuous. Keep measuring the gate itself anyway: with the page's scripts

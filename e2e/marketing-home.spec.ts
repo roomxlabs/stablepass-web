@@ -3,6 +3,14 @@ import path from "node:path";
 
 import { test, expect, type Page } from "@playwright/test";
 
+import {
+  seedMarketingTrainers,
+  SEEDED_TRAINERS,
+  SEEDED_TRAINER_WITH_PHOTO,
+  SEEDED_TRAINER_SPARSE,
+  RETIRED_PLACEHOLDER_STRINGS,
+} from "./support/marketing-trainers";
+
 /**
  * Marketing home (ENG-588 / W2) — design-fidelity + no-JS evidence.
  *
@@ -75,7 +83,21 @@ async function hideDevOverlay(page: Page) {
 }
 
 test.describe("marketing home", () => {
+  // ENG-730: the strip now reads live from Supabase, so any assertion that
+  // touches #stable-trainers needs a seeded roster. Runs per-worker; seeding is
+  // idempotent (upsert by slug), so re-running it for each worker is harmless.
+  let seeded = false;
+  test.beforeAll(async () => {
+    seeded = await seedMarketingTrainers();
+  });
+  // No teardown on purpose. Playwright runs fullyParallel, and unpublishing the
+  // roster while another worker is mid-test is precisely the race that made this
+  // suite look like it needed --workers=1. Seeding is additive and idempotent;
+  // see e2e/support/marketing-trainers.ts.
+
   test("renders the twelve sections in order between nav and footer", async ({ page }) => {
+    test.skip(!seeded, "local Supabase has no public_trainer view — cannot seed the marketing roster");
+
     await page.goto("/");
 
     const blocks = page.locator("main > header.hero, main > .ribbon, main > section");
@@ -127,7 +149,9 @@ test.describe("marketing home", () => {
     await expect(page.locator("#subscription")).toBeHidden();
   });
 
-  test("shows all nineteen trainer cards with their photographs", async ({ page }) => {
+  test("shows every seeded trainer card, each with a photograph or an initials disc", async ({ page }) => {
+    test.skip(!seeded, "local Supabase has no public_trainer view — cannot seed the marketing roster");
+
     await page.goto("/");
     await imagesSettled(page);
 
@@ -149,9 +173,14 @@ test.describe("marketing home", () => {
     const cards = section.locator(".tr-card:not([data-dup])");
     const clones = section.locator(".tr-card[data-dup]");
 
-    await expect(section).toHaveAttribute("data-trainer-count", "19");
-    await expect(cards).toHaveCount(19);
-    await expect(cards.first().locator(".tr-nm")).toHaveText("Andrew Bobbin");
+    await expect(section).toHaveAttribute("data-trainer-count", String(SEEDED_TRAINERS.length));
+    await expect(cards).toHaveCount(SEEDED_TRAINERS.length);
+    // The attribute and the actually-rendered card count must agree — that
+    // cross-check is the valuable part, not just two numbers that happen to
+    // both come from the seed on paper.
+    expect(await section.getAttribute("data-trainer-count")).toBe(String(await cards.count()));
+
+    await expect(cards.first().locator(".tr-nm")).not.toBeEmpty();
 
     /**
      * And that exclusion is real rather than vacuous — if cloning broke, or a
@@ -174,28 +203,82 @@ test.describe("marketing home", () => {
     // Re-pinned AFTER the clones have mounted. The retrying count above is
     // satisfied by the pre-clone frame, so without this the trainer count and
     // the clone contract could be describing two different DOM frames.
-    expect(realCount, "the real set stopped being the nineteen supplied trainers").toBe(19);
+    expect(realCount, "the real set stopped being the seeded trainers").toBe(SEEDED_TRAINERS.length);
     expect(cloneCount, "the marquee clones the whole set, not part of it").toBe(realCount);
 
     // `textContent`, not `innerText`: `.tr-nm` is display:none under
     // `(hover: none)`, where an innerText comparison would quietly compare empty
     // strings to empty strings instead of failing.
     const names = await cards.locator(".tr-nm").allTextContents();
-    expect(names, "the trainer captions stopped rendering").toHaveLength(19);
+    expect(names, "the trainer captions stopped rendering").toHaveLength(SEEDED_TRAINERS.length);
+    // Order-insensitive: `readPublicTrainers` sorts alphabetically, the seed
+    // array does not, so this is the set of seeded names, not the sequence.
+    expect(new Set(names)).toEqual(new Set(SEEDED_TRAINERS.map((t) => t.name)));
     expect(await clones.locator(".tr-nm").allTextContents()).toEqual(names);
 
-    // Each card actually HAS a photograph, and each photograph resolved. The
-    // count is load-bearing rather than belt-and-braces: `evaluateAll` over an
-    // empty match returns [], so the broken-image check below passes happily on
-    // a page where every <img> has been deleted.
-    await expect(cards.locator("img"), "a trainer card rendered no photograph at all").toHaveCount(19);
-
-    // A 404 would silently fall back to the initials disc and still "render 19
-    // cards", so resolution is checked as well as presence.
-    const broken = await cards.locator("img").evaluateAll((imgs) =>
-      imgs.filter((i) => !(i as HTMLImageElement).naturalWidth).map((i) => (i as HTMLImageElement).src),
+    // `.tr-init` (the initials disc) is on EVERY card — it is the launch-common
+    // state, because `marketing_photo_path` is null until the admin photo copy
+    // (ENG-766) runs. Only the one seeded trainer with a photograph also carries
+    // an `<img>`; the other eighteen render the disc alone. Asserting an exact
+    // count of 19 photographs, as this test did before ENG-730, would now be
+    // wrong by design.
+    await expect(cards.locator(".tr-init"), "a card rendered no initials disc at all").toHaveCount(
+      SEEDED_TRAINERS.length,
     );
-    expect(broken).toEqual([]);
+    const initTexts = await cards.locator(".tr-init").allTextContents();
+    expect(initTexts.every((text) => text.trim().length > 0), "a card rendered an empty initials disc").toBe(
+      true,
+    );
+
+    // Exactly the one photographed seeded trainer renders an <img>; every other
+    // card relies on the disc above, which is the launch-common state because
+    // `marketing_photo_path` stays null until the admin photo copy (ENG-766).
+    const photos = cards.locator("img");
+    await expect(photos, "more than the single photographed trainer rendered an <img>").toHaveCount(1);
+    await expect(photos).toHaveAttribute("src", new RegExp(`${SEEDED_TRAINER_WITH_PHOTO.photoPath}$`));
+
+    // ...and it must actually LOAD. The seed uploads a real object into the
+    // public `marketing-photos` bucket, so this exercises the whole path end to
+    // end: `marketing_photo_path` -> unsigned public URL -> a decoded image.
+    // Asserting only the `src` string would keep passing if the bucket went
+    // private or the URL shape changed, which is most of what could break here.
+    await expect
+      .poll(
+        async () => photos.first().evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0),
+        { message: "the trainer photograph never decoded — check the bucket is public and the path unsigned" },
+      )
+      .toBe(true);
+  });
+
+  test("no trainer card falls back to retired placeholder copy", async ({ page }) => {
+    test.skip(!seeded, "local Supabase has no public_trainer view — cannot seed the marketing roster");
+
+    await page.goto("/");
+
+    const text = (await page.locator("#stable-trainers").innerText()) ?? "";
+    for (const placeholder of RETIRED_PLACEHOLDER_STRINGS) {
+      expect(text, `retired placeholder copy ${JSON.stringify(placeholder)} rendered again`).not.toContain(
+        placeholder,
+      );
+    }
+  });
+
+  test("the sparse seeded trainer omits its empty horses and bio lines but keeps its identity", async ({
+    page,
+  }) => {
+    test.skip(!seeded, "local Supabase has no public_trainer view — cannot seed the marketing roster");
+
+    await page.goto("/");
+
+    const card = page
+      .locator("#stable-trainers .tr-card:not([data-dup])")
+      .filter({ hasText: SEEDED_TRAINER_SPARSE.name });
+
+    await expect(card).toHaveCount(1);
+    await expect(card.locator(".tr-nm")).toHaveText(SEEDED_TRAINER_SPARSE.name);
+    await expect(card.locator(".tr-init")).not.toBeEmpty();
+    await expect(card.locator(".tr-over .hz")).toHaveCount(0);
+    await expect(card.locator(".tr-over .bio")).toHaveCount(0);
   });
 
   test("ships no inlined image on the home page", async ({ page }) => {
@@ -247,7 +330,9 @@ test.describe("marketing home", () => {
       await expect(first).not.toHaveAttribute("open", /.*/);
     });
 
-    test("no section is stuck invisible and all nineteen trainers are visible", async ({ page }) => {
+    test("no section is stuck invisible and all seeded trainers are visible", async ({ page }) => {
+      test.skip(!seeded, "local Supabase has no public_trainer view — cannot seed the marketing roster");
+
       await page.goto("/");
 
       const hidden = await page.locator("main > header.hero, main > section").evaluateAll((els) =>
@@ -255,12 +340,18 @@ test.describe("marketing home", () => {
       );
       expect(hidden).toEqual([]);
 
-      // Counted through the same `data-dup` contract as the scripted test, so
-      // both mean "the nineteen supplied trainers". With no scripting the
-      // marquee never runs, so the clone set is expected to be absent entirely —
-      // which is the other half of why a hard total would be the wrong assertion.
-      await expect(page.locator(".tr-card:not([data-dup])")).toHaveCount(19);
+      // Counted through the same `data-dup` contract as the scripted test. With
+      // no scripting the marquee never runs, so the clone set is expected to be
+      // absent entirely — which is the other half of why a hard total would be
+      // the wrong assertion. The exact number is not the point of this test;
+      // that every real card is actually visible, and that the real-card count
+      // still matches the section's own count attribute, is.
+      const realCards = page.locator(".tr-card:not([data-dup])");
+      await expect(realCards).not.toHaveCount(0);
       await expect(page.locator(".tr-card[data-dup]")).toHaveCount(0);
+      expect(await page.locator("#stable-trainers").getAttribute("data-trainer-count")).toBe(
+        String(await realCards.count()),
+      );
 
       const offscreen = await page.locator(".tr-card").evaluateAll((cards) => {
         const strip = document.querySelector(".tr-scroll")!.getBoundingClientRect();

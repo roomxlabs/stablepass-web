@@ -29,6 +29,23 @@ import { createClient } from "@supabase/supabase-js";
  * server restart. `playwright.config.ts` therefore starts the dev server with
  * that variable set to `0`. If you run these specs against a server you started
  * yourself, set it too, or you will be served a roster from a previous run.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHY SEEDING IS PURELY ADDITIVE, AND WHY NOTHING IS TORN DOWN
+ *
+ * `playwright.config.ts` runs `fullyParallel`, so several workers seed at once.
+ * The first version of this helper hid EVERY published trainer and then
+ * republished its own, and tore them down in `afterAll`. Both halves race: the
+ * hide un-publishes this helper's own rows for the instant before it re-adds
+ * them, and one worker's teardown deletes the roster another worker's in-flight
+ * test is still asserting against. That produced exactly the failure you would
+ * expect and the wrong conclusion to draw from it — "run with --workers=1".
+ *
+ * So seeding is now ADDITIVE and IDEMPOTENT: it only ever unpublishes rows that
+ * are NOT its own, and it never tears down. Every worker converges on the same
+ * state, in any order, concurrently. The rows are left published afterwards on
+ * purpose — they are inert local fixtures, `supabase db reset` clears them, and
+ * `clearMarketingTrainers()` is available for a human who wants them gone.
  */
 
 const LOCAL_SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "http://127.0.0.1:54321";
@@ -38,6 +55,9 @@ const LOCAL_SERVICE_ROLE_KEY =
 
 /** Slug prefix, so a run only ever touches rows it created. */
 const SLUG_PREFIX = "eng730-e2e-";
+
+/** The one object the seed uploads into the public bucket. */
+export const SEEDED_PHOTO_PATH = "e2e/seeded.png";
 
 export type SeededTrainer = {
   slug: string;
@@ -69,7 +89,7 @@ const SHAPED_TRAINERS: SeededTrainer[] = [
     location: "Cranbourne, Victoria",
     bio: "Third-generation horseman with a stable built on patience and a long view.",
     horses: ["E2E Ardent Lane", "E2E Bellhaven"],
-    photoPath: "e2e/seeded.png",
+    photoPath: SEEDED_PHOTO_PATH,
   },
   {
     slug: `${SLUG_PREFIX}archibald`,
@@ -165,9 +185,17 @@ export async function seedMarketingTrainers(): Promise<boolean> {
     const probe = await supabase.from("public_trainer").select("id").limit(1);
     if (probe.error) return false;
 
-    // Hide anything another run left published, so the count is ours alone.
-    const hidden = await supabase.from("trainer").update({ marketing_visible: false }).neq("id", ZERO_UUID);
+    // Unpublish only rows that are NOT ours, so the strip shows this roster and
+    // nothing else — while never un-publishing a row a parallel worker is
+    // relying on. `not.like` is the whole reason this is parallel-safe.
+    const hidden = await supabase
+      .from("trainer")
+      .update({ marketing_visible: false })
+      .not("slug", "like", `${SLUG_PREFIX}%`)
+      .eq("marketing_visible", true);
     if (hidden.error) return false;
+
+    await ensureSeedPhoto(supabase);
 
     for (const trainer of SEEDED_TRAINERS) {
       const upserted = await supabase
@@ -213,7 +241,34 @@ export async function seedMarketingTrainers(): Promise<boolean> {
   }
 }
 
-/** Unpublish everything this helper published. Safe to call when seeding failed. */
+/**
+ * The photographed card is only honest if the object really exists in the public
+ * bucket — otherwise its `<img>` 404s and the "a photograph actually loads"
+ * assertion has to be dropped. So the seed uploads one, unsigned and public,
+ * exactly as ENG-766 will.
+ *
+ * A 1x1 PNG is enough: the assertion is that the URL resolves and the browser
+ * decodes it, not what it depicts.
+ */
+const SEED_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+async function ensureSeedPhoto(supabase: ReturnType<typeof admin>): Promise<void> {
+  try {
+    const bytes = Buffer.from(SEED_PNG_BASE64, "base64");
+    await supabase.storage
+      .from("marketing-photos")
+      .upload(SEEDED_PHOTO_PATH, bytes, { contentType: "image/png", upsert: true });
+  } catch {
+    // A missing object only costs the photograph assertion, never the run.
+  }
+}
+
+/**
+ * Unpublish this helper's rows. NOT called by the specs — see the header: a
+ * teardown that runs while another worker is mid-test is the race this helper
+ * exists to avoid. Kept for a human who wants a clean local database.
+ */
 export async function clearMarketingTrainers(): Promise<void> {
   try {
     await admin().from("trainer").update({ marketing_visible: false }).like("slug", `${SLUG_PREFIX}%`);
@@ -221,5 +276,3 @@ export async function clearMarketingTrainers(): Promise<void> {
     /* the stack is gone; nothing to clean up */
   }
 }
-
-const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
