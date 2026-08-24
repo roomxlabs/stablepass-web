@@ -179,6 +179,13 @@ test("ENG-761 PRIZEMONEY holds one line at 360px and (AUS) is stripped from the 
     // which would silently produce a 731px-wide '360px' screenshot.
     await page.screenshot({ path: `${SHOTS}/eng-761-03-stats-360-aus-stripped.png` });
   } finally {
+    // Clean up the CONTENT too, not just the user. These rows are a named
+    // trainer and a named horse: left behind they accumulate across runs and
+    // drift the /horses and /trainers gallery screenshots (and any count
+    // assertion) in other specs. Horse first — `post.horse_id` and the trainer
+    // FK order the deletes. Best-effort: never fail the test on teardown.
+    await admin.from("horse").delete().eq("id", horse.id).then(undefined, () => {});
+    await admin.from("trainer").delete().eq("id", trainer.id).then(undefined, () => {});
     if (userData?.user?.id) {
       await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});
     }

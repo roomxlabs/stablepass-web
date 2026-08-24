@@ -39,9 +39,15 @@ export function displayHorseName(name: string): string {
   // Dropping the token with `filter` (rather than blanking it in place) is what
   // keeps the spacing honest: `join(' ')` below re-inserts exactly one
   // separator between the words that survive, so the drop cannot leave a double
-  // space mid-name or a stray one at either end. Whitespace that was already in
-  // the input is left exactly as it arrived, with or without a suffix — this
-  // function strips a suffix, it does not reformat the name around it.
+  // space mid-name.
+  //
+  // It does NOT promise clean edges on already-dirty input: "CANNONBROOK  (AUS)"
+  // (two spaces) splits to an empty token that survives the filter, so the
+  // result keeps a trailing space. Mobile behaves identically — this is shared
+  // source, and the two must not drift — so it is documented rather than fixed
+  // unilaterally. `split(/\s+/)` + `trim()` would fix it on BOTH platforms in
+  // one round if it ever matters. Note a non-breaking space defeats the strip
+  // entirely (`split(" ")` does not split NBSP), also on both.
   const kept = name.split(" ").filter((word) => !AUS_SUFFIX.test(word));
 
   return kept
