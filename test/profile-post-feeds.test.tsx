@@ -18,6 +18,18 @@ const { fromMock } = vi.hoisted(() => ({ fromMock: vi.fn() }));
 
 vi.mock("@/lib/supabase/client", () => ({ supabaseBrowser: () => ({ from: fromMock }) }));
 
+// ENG-762 — the multi-photo carousel read. Mocked at the module boundary
+// rather than faked through the PostgREST chain: `readPostPhotos` owns its
+// own query + signing round trip and carries its own unit coverage
+// (lib/post-media.ts). `photosMock` starts empty (reset in the beforeEach
+// below) so every PRE-EXISTING test in this file — none of which touches it
+// — renders exactly as it did before ENG-762.
+let photosMock = new Map<string, { url: string | null; sort: number }[]>();
+
+vi.mock("@/lib/post-media", () => ({
+  readPostPhotos: vi.fn(() => Promise.resolve(photosMock)),
+}));
+
 function chainable(result: { data: unknown; error: null }) {
   const obj: Record<string, unknown> = {};
   for (const m of ["select", "eq", "in", "not", "order"]) obj[m] = vi.fn(() => obj);
@@ -48,6 +60,7 @@ const TEXT_ROW = {
 
 beforeEach(() => {
   feedRows = [TEXT_ROW];
+  photosMock = new Map();
   fromMock.mockReset();
   fromMock.mockImplementation(() => chainable({ data: [], error: null }));
   global.fetch = vi.fn((input: string | URL) => {
@@ -114,6 +127,41 @@ describe("HorsePosts — ENG-613 parity on the horse profile", () => {
     expect(await screen.findByText("Trackwork")).toBeInTheDocument();
     expect(document.querySelector(".post-badge")!.textContent).toBe("Trackwork");
   });
+
+  // ENG-762 — the multi-photo carousel, rendered through HorsePosts' REAL
+  // mapper (not a hand-built FeedPost/PostCard render, which would bypass
+  // the exact mapper bug class ENG-772 exists to catch).
+  it("renders the multi-photo carousel (ENG-762)", async () => {
+    photosMock = new Map([
+      [
+        "p1",
+        [
+          { url: "https://signed.test/p1-0.jpg", sort: 0 },
+          { url: "https://signed.test/p1-1.jpg", sort: 1 },
+          { url: "https://signed.test/p1-2.jpg", sort: 2 },
+        ],
+      ],
+    ]);
+    feedRows = [{ ...TEXT_ROW, type: "photo", title: null, body: "Trackwork this morning." }];
+
+    render(<HorsePosts horseId="h1" horseName="Mahogany" trainerName="Tom Alcott" viewerId={VIEWER_ID} />);
+    await screen.findByText("Trackwork this morning.");
+
+    expect(screen.getAllByTestId("photo-slide")).toHaveLength(3);
+    expect(screen.getByTestId("photo-dots").querySelectorAll("button")).toHaveLength(3);
+    expect(screen.getByTestId("media-photo-count")).toHaveTextContent("1/3");
+  });
+
+  it("renders no carousel for a single-photo post (ENG-762)", async () => {
+    photosMock = new Map([["p1", [{ url: "https://signed.test/p1-0.jpg", sort: 0 }]]]);
+    feedRows = [{ ...TEXT_ROW, type: "photo", title: null, body: "Trackwork this morning." }];
+
+    render(<HorsePosts horseId="h1" horseName="Mahogany" trainerName="Tom Alcott" viewerId={VIEWER_ID} />);
+    await screen.findByText("Trackwork this morning.");
+
+    expect(screen.queryByTestId("photo-dots")).toBeNull();
+    expect(screen.queryByTestId("photo-track")).toBeNull();
+  });
 });
 
 describe("TrainerPosts — ENG-613 parity on the trainer profile", () => {
@@ -158,5 +206,40 @@ describe("TrainerPosts — ENG-613 parity on the trainer profile", () => {
 
     expect(await screen.findByText("Trackwork")).toBeInTheDocument();
     expect(document.querySelector(".post-badge")!.textContent).toBe("Trackwork");
+  });
+
+  // ENG-762 — the multi-photo carousel, rendered through TrainerPosts' REAL
+  // mapper (not a hand-built FeedPost/PostCard render, which would bypass
+  // the exact mapper bug class ENG-772 exists to catch).
+  it("renders the multi-photo carousel (ENG-762)", async () => {
+    photosMock = new Map([
+      [
+        "p1",
+        [
+          { url: "https://signed.test/p1-0.jpg", sort: 0 },
+          { url: "https://signed.test/p1-1.jpg", sort: 1 },
+          { url: "https://signed.test/p1-2.jpg", sort: 2 },
+        ],
+      ],
+    ]);
+    feedRows = [{ ...TEXT_ROW, type: "photo", title: null, body: "Trackwork this morning." }];
+
+    render(<TrainerPosts trainerId="t1" trainerName="Tom Alcott" viewerId={VIEWER_ID} />);
+    await screen.findByText("Trackwork this morning.");
+
+    expect(screen.getAllByTestId("photo-slide")).toHaveLength(3);
+    expect(screen.getByTestId("photo-dots").querySelectorAll("button")).toHaveLength(3);
+    expect(screen.getByTestId("media-photo-count")).toHaveTextContent("1/3");
+  });
+
+  it("renders no carousel for a single-photo post (ENG-762)", async () => {
+    photosMock = new Map([["p1", [{ url: "https://signed.test/p1-0.jpg", sort: 0 }]]]);
+    feedRows = [{ ...TEXT_ROW, type: "photo", title: null, body: "Trackwork this morning." }];
+
+    render(<TrainerPosts trainerId="t1" trainerName="Tom Alcott" viewerId={VIEWER_ID} />);
+    await screen.findByText("Trackwork this morning.");
+
+    expect(screen.queryByTestId("photo-dots")).toBeNull();
+    expect(screen.queryByTestId("photo-track")).toBeNull();
   });
 });

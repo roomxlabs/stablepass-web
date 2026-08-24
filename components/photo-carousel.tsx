@@ -10,7 +10,7 @@
 // native scrollbar, and arrow keys once the track has focus — costs zero JS and
 // survives a hydration failure. JS adds exactly two things on top: the dots as
 // clickable shortcuts, and the `n/m` counter tracking which slide you are on.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { PostPhoto } from "./types";
 
 /**
@@ -83,10 +83,10 @@ export function PhotoCarousel({ photos, alt = "" }: PhotoCarouselProps) {
   const total = photos.length;
 
   // A post whose photo count shrinks (a re-fetch after an admin edit) must not
-  // leave the counter reading "3/2".
-  useEffect(() => {
-    setIndex((i) => (i > total - 1 ? Math.max(0, total - 1) : i));
-  }, [total]);
+  // leave the counter reading "3/2". Clamped DURING RENDER rather than corrected
+  // afterwards in an effect: an effect would render the impossible value once
+  // first, and then re-render to fix it.
+  const active = Math.min(index, Math.max(0, total - 1));
 
   const onScroll = useCallback(() => {
     const el = trackRef.current;
@@ -147,16 +147,16 @@ export function PhotoCarousel({ photos, alt = "" }: PhotoCarouselProps) {
           card draws, in the same corner — one affordance, two states. It also
           keeps the card's existing paint order (chip under the watermark
           overlay, Follow pill on top) exactly as ENG-761 left it. */}
-      <MediaPhotoChip index={index} total={total} />
+      <MediaPhotoChip index={active} total={total} />
 
       <div className="photo-dots" data-testid="photo-dots">
         {photos.map((photo, i) => (
           <button
             key={`${photo.sort}-${i}`}
             type="button"
-            className={i === index ? "photo-dot active" : "photo-dot"}
+            className={i === active ? "photo-dot active" : "photo-dot"}
             aria-label={`Go to photo ${i + 1} of ${total}`}
-            aria-current={i === index}
+            aria-current={i === active}
             onClick={() => goTo(i)}
           />
         ))}

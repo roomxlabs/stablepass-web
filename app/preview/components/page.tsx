@@ -148,6 +148,72 @@ const UNLABELLED_POST: FeedPost = {
   raceBadge: null,
 };
 
+// ROUND 6 / ENG-762 fixtures — the multi-photo carousel.
+//
+// The slides are generated SVGs rather than real photographs, and deliberately
+// so: the thing under review here is whether the dots and the n/m chip stay
+// LEGIBLE over whatever the stable uploads. Three grounds — near-black, cream,
+// and brand green — cover the range, and the green one is the hostile case that
+// the active dot's white rim exists for. A single pretty horse photo would
+// prove less.
+const slide = (bg: string, fg: string, n: number) =>
+  `data:image/svg+xml,${encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400">` +
+      `<rect width="640" height="400" fill="${bg}"/>` +
+      `<text x="320" y="220" font-family="Inter, sans-serif" font-size="64" font-weight="600" ` +
+      `fill="${fg}" text-anchor="middle">PHOTO ${n}</text></svg>`,
+  )}`;
+
+const CAROUSEL_PHOTOS = [
+  { url: slide("#1A1A1A", "#FAF7F2", 1), sort: 0 },
+  { url: slide("#F1ECE3", "#1A1A1A", 2), sort: 1 },
+  { url: slide("#285D50", "#FAF7F2", 3), sort: 2 },
+];
+
+const CAROUSEL_POST: FeedPost = {
+  ...PHOTO_POST,
+  id: "post-carousel-1",
+  horseName: "Cannonbrook",
+  label: "Trackwork",
+  body: "Three from the course proper this morning.",
+  media: { type: "photo", posterUrl: CAROUSEL_PHOTOS[0].url },
+  photos: CAROUSEL_PHOTOS,
+};
+
+// One photo is the SAME rendering case as none: post.media_url already mirrors
+// sort_order 0, so this must draw the plain chip and no dots at all.
+const SINGLE_PHOTO_POST: FeedPost = {
+  ...PHOTO_POST,
+  id: "post-carousel-single",
+  horseName: "Verry Elleegant (NZ)",
+  body: "One photo — no dots, no count.",
+  media: { type: "photo", posterUrl: CAROUSEL_PHOTOS[1].url },
+  photos: [CAROUSEL_PHOTOS[1]],
+};
+
+// A photo that failed to sign takes the media ground; its siblings still render.
+const DEGRADED_CAROUSEL_POST: FeedPost = {
+  ...PHOTO_POST,
+  id: "post-carousel-degraded",
+  horseName: "Black Caviar",
+  body: "The middle photo could not be signed.",
+  media: { type: "photo", posterUrl: CAROUSEL_PHOTOS[0].url },
+  photos: [CAROUSEL_PHOTOS[0], { url: null, sort: 1 }, CAROUSEL_PHOTOS[2]],
+};
+
+// The contract's cap. Ten dots must still fit the narrow card.
+const TEN_PHOTO_POST: FeedPost = {
+  ...PHOTO_POST,
+  id: "post-carousel-ten",
+  horseName: "Northern Star",
+  body: "Ten is the maximum the schema allows.",
+  media: { type: "photo", posterUrl: CAROUSEL_PHOTOS[0].url },
+  photos: Array.from({ length: 10 }, (_, i) => ({
+    url: slide(i % 2 ? "#F1ECE3" : "#1A1A1A", i % 2 ? "#1A1A1A" : "#FAF7F2", i + 1),
+    sort: i,
+  })),
+};
+
 export default function ComponentPreviewPage() {
   return (
     <div className="page-pad">
@@ -173,6 +239,20 @@ export default function ComponentPreviewPage() {
         <PostCard post={LABELLED_LONG_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
         <PostCard post={TWO_LINE_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
         <PostCard post={UNLABELLED_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
+      </div>
+
+      <h2 id="round6-carousel">Round 6 — multi-photo carousel (ENG-762)</h2>
+      <p style={{ color: "var(--muted)", marginBottom: 16 }}>
+        Two or more <code>post_media</code> rows turn the media box into a scroll-snap carousel: dots
+        bottom-centre, and the ENG-761 photo chip extended with an <code>n/m</code> count. One photo —
+        or none, which is the same case, since <code>post.media_url</code> mirrors row 0 — draws neither.
+        Drag, swipe or press a dot to page.
+      </p>
+      <div style={{ maxWidth: 520, marginBottom: 40 }} data-testid="round6-carousel-gallery">
+        <PostCard post={CAROUSEL_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
+        <PostCard post={SINGLE_PHOTO_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
+        <PostCard post={DEGRADED_CAROUSEL_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
+        <PostCard post={TEN_PHOTO_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
       </div>
 
       <h2>Stable update card (post.type = text | news)</h2>
