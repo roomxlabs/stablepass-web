@@ -200,10 +200,25 @@ test.describe("with JavaScript disabled", () => {
         [...document.querySelectorAll<HTMLElement>(".marketing *")]
           .filter((el) => getComputedStyle(el).opacity === "0")
           .filter((el) => !affordances.some((cls) => el.classList.contains(cls)))
+          // ENG-729: the two waitlist honeypots. They are the one thing on this
+          // page that is SUPPOSED to be invisible to a human — ENG-726 parks each
+          // off-screen at opacity 0 so browser autofill's visibility heuristic
+          // skips it, which is load-bearing: an autofilled decoy would make the
+          // route silently discard a real signup. Excluded by exact identity
+          // rather than by class, because it deliberately carries no class (a
+          // class is a selector a bot can learn), and counted below so the
+          // carve-out cannot quietly widen.
+          .filter((el) => !(el.tagName === "INPUT" && el.getAttribute("name") === "hp_ref" && el.closest("form.wl-form")))
           .map((el) => el.tagName + "." + el.className),
       HOVER_AFFORDANCES,
     );
     expect(invisible).toEqual([]);
+
+    // Exactly one honeypot per mounted form, and no stray invisible input.
+    const honeypots = await page.evaluate(
+      () => document.querySelectorAll('form.wl-form input[name="hp_ref"]').length,
+    );
+    expect(honeypots, "one honeypot per waitlist form, no more").toBe(2);
 
     // ...and the exclusion cannot quietly grow: it is by exact class name, and the
     // excluded set must be precisely the overlays the mockup defines — one per
