@@ -66,7 +66,7 @@ export interface FeedPost {
    * The two are independent — a labelled photo post is a normal photo card that
    * happens to carry a pill.
    */
-  label?: string | null;
+  label: string | null;
   body?: string | null;
   media: PostMedia;
   /**

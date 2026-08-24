@@ -19,6 +19,7 @@ const BASE: FeedPost = {
   horseName: "Mahogany",
   trainerName: "Chris Waller",
   postedAgo: "2h ago",
+  label: null,
   body: "Trackwork this morning.",
   media: { type: "photo", posterUrl: null },
   watermarked: false,
