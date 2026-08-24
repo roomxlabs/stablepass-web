@@ -15,34 +15,17 @@ import { ReactionBar } from "@/components/reaction-bar";
 import { RaceDayBand } from "@/components/race-day-band";
 import { TrainerCard } from "@/components/trainer-card";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { signPhotoMap, POST_MEDIA_BUCKET, signedPosterFor } from "@/lib/storage/photos";
+import { signPhotoMap, POST_MEDIA_BUCKET } from "@/lib/storage/photos";
 import { readPostPhotos } from "@/lib/post-media";
-import type { FeedPost, PostMedia, ReactionEmoji, RaceDayEntry, TrainerSummary } from "@/components/types";
+import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
+import type { FeedPost, ReactionEmoji, RaceDayEntry, TrainerSummary } from "@/components/types";
 import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 
 const LIMIT = 10;
 
 // Bare be `post` row shape (no horse/trainer names — see module comment).
-type PostRow = {
-  id: string;
-  horse_id: string;
-  type: PostMedia["type"];
-  title: string | null;
-  /**
-   * `post.label` — the green pill's copy (ENG-738's 13 presets, or null). The
-   * feed edge function returns `setof post`, so the column arrives on the row
-   * with no change to the request; this type is what stops it being dropped
-   * silently on the way to the card. Pinned by test/explore-feed.test.tsx.
-   */
-  label: string | null;
-  body: string | null;
-  media_url: string | null;
-  poster_url: string | null;
-  aspect_ratio: number | null;
-  watermarked: boolean;
-  like_count: number;
-  published_at: string;
-};
+// Pinned by test/explore-feed.test.tsx.
+type PostRow = PostIntrinsicRow & { horse_id: string };
 
 // `id` for the Follow pill (a name is not a key), `stable_name`/`location` for the
 // STABLE UPDATE panel footer. Stable identity only — there is no owner field here
@@ -84,18 +67,6 @@ const Bell = () => (
     <path d="M10 20a2 2 0 0 0 4 0" />
   </svg>
 );
-
-export function relativeTime(iso: string | null): string {
-  if (!iso) return "";
-  const ms = Date.now() - new Date(iso).getTime();
-  const mins = Math.max(0, Math.round(ms / 60000));
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
-}
 
 function formatClock(iso: string): string {
   const d = new Date(iso);
@@ -206,11 +177,12 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
         readPostPhotos(sb, rows.map((r) => r.id)),
       ]);
 
+      const intrinsics = { signedMedia: postMedia, photosByPost, reactionByPost: myReaction };
       const mapped: FeedPost[] = rows.map((r) => {
         const horse = horseById.get(r.horse_id);
         const trainer = one(horse?.trainer ?? null);
         return {
-          id: r.id,
+          ...postIntrinsics(r, intrinsics),
           horseId: r.horse_id,
           // Title-cased and (AUS)-stripped for display; the raw value stays on
           // the row for keys and comparisons (ENG-761 item 6).
@@ -219,28 +191,6 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
           trainerId: trainer?.id ?? null,
           stableName: trainer?.stable_name ?? null,
           stableLocation: trainer?.location ?? null,
-          postedAgo: relativeTime(r.published_at),
-          title: r.title,
-          label: r.label,
-          body: r.body,
-          // `aspectRatio` is RAW here. `resolveAspect` (post-card) owns the clamp,
-          // so exactly one place decides what an unusable value becomes. The
-          // `typeof` guard is load-bearing, not belt-and-braces: `'NaN'::numeric`
-          // passes the be's `CHECK (aspect_ratio > 0)` and `to_json` serialises it
-          // as the QUOTED string "NaN", which would otherwise widen a string into
-          // a field typed `number | null`.
-          media: {
-            type: r.type,
-            posterUrl: signedPosterFor(r, postMedia),
-            duration: null,
-            aspectRatio: typeof r.aspect_ratio === "number" ? r.aspect_ratio : null,
-          },
-          // ENG-762. Like `label` above, this screen's own mapper has to copy it
-          // or the BFF's work is thrown away one layer later (ENG-772's lesson).
-          photos: photosByPost.get(r.id) ?? [],
-          watermarked: r.watermarked,
-          count: r.like_count,
-          reacted: myReaction.get(r.id) ?? null,
           bookmarked: mySet.has(r.id),
         };
       });

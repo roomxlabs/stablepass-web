@@ -9,29 +9,15 @@
 import { useEffect, useState } from "react";
 import { PostCard, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
-import { relativeTime } from "@/app/(member)/explore/explore-feed";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { signPhotoMap, POST_MEDIA_BUCKET, signedPosterFor } from "@/lib/storage/photos";
+import { signPhotoMap, POST_MEDIA_BUCKET } from "@/lib/storage/photos";
 import { readPostPhotos } from "@/lib/post-media";
-import type { FeedPost, PostMedia, ReactionEmoji } from "@/components/types";
+import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
+import type { FeedPost, ReactionEmoji } from "@/components/types";
 import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 
 type HorseRef = { display_name: string; racing_name: string | null };
-type PostRow = {
-  id: string;
-  type: PostMedia["type"];
-  title: string | null;
-  body: string | null;
-  label: string | null;
-  media_url: string | null;
-  poster_url: string | null;
-  aspect_ratio: number | null;
-  watermarked: boolean;
-  like_count: number;
-  published_at: string;
-  horse_id: string;
-  horse: HorseRef | HorseRef[] | null;
-};
+type PostRow = PostIntrinsicRow & { horse_id: string; horse: HorseRef | HorseRef[] | null };
 type ReactionRow = { post_id: string; emoji: ReactionEmoji };
 type BookmarkRow = { post_id: string };
 
@@ -92,10 +78,11 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
           readPostPhotos(sb, rows.map((r) => r.id)),
         ]);
 
+        const intrinsics = { signedMedia: postMedia, photosByPost, reactionByPost: myReaction };
         const mapped: FeedPost[] = rows.map((r) => {
           const horse = one(r.horse);
           return {
-            id: r.id,
+            ...postIntrinsics(r, intrinsics),
             horseId: r.horse_id,
             // Formatted per side of the `||` so a racing_name of just "(AUS)"
             // falls through (ENG-761 item 6). Without this the trainer profile
@@ -107,31 +94,6 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
             trainerName,
             stableName,
             stableLocation,
-            postedAgo: relativeTime(r.published_at),
-            title: r.title,
-            body: r.body,
-            // This screen re-declares its own row type + mapper instead of sharing
-            // one with the BFF, so a new post column needs adding here too or it
-            // is silently dropped after the BFF already returned it (ENG-772).
-            label: r.label,
-            // `aspectRatio` is RAW here. `resolveAspect` (post-card) owns the clamp,
-            // so exactly one place decides what an unusable value becomes. The
-            // `typeof` guard is load-bearing, not belt-and-braces: `'NaN'::numeric`
-            // passes the be's `CHECK (aspect_ratio > 0)` and `to_json` serialises it
-            // as the QUOTED string "NaN", which would otherwise widen a string into
-            // a field typed `number | null`.
-            media: {
-              type: r.type,
-              posterUrl: signedPosterFor(r, postMedia),
-              duration: null,
-              aspectRatio: typeof r.aspect_ratio === "number" ? r.aspect_ratio : null,
-            },
-            // ENG-762. Like `label` above, this screen's own mapper has to copy
-            // it or the BFF's work is thrown away one layer later (ENG-772).
-            photos: photosByPost.get(r.id) ?? [],
-            watermarked: r.watermarked,
-            count: r.like_count,
-            reacted: myReaction.get(r.id) ?? null,
             bookmarked: mySet.has(r.id),
           };
         });

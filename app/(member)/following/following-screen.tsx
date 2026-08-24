@@ -13,34 +13,17 @@ import { AccessWall } from "@/components/access-wall";
 import { PostCard, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { signPhotoMap, HORSE_PHOTO_BUCKET, TRAINER_PHOTO_BUCKET, POST_MEDIA_BUCKET, signedPosterFor } from "@/lib/storage/photos";
+import { signPhotoMap, HORSE_PHOTO_BUCKET, TRAINER_PHOTO_BUCKET, POST_MEDIA_BUCKET } from "@/lib/storage/photos";
 import { readPostPhotos } from "@/lib/post-media";
-import type { FeedPost, PostMedia, ReactionEmoji } from "@/components/types";
+import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
+import type { FeedPost, ReactionEmoji } from "@/components/types";
 import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 
 const LIMIT = 10;
 
 // Bare be `post` row shape (the following feed returns post rows; names are enriched).
-type PostRow = {
-  id: string;
-  horse_id: string;
-  type: PostMedia["type"];
-  title: string | null;
-  /**
-   * `post.label` — the green pill's copy (ENG-738's 13 presets, or null). The
-   * feed edge function returns `setof post`, so the column arrives on the row
-   * with no change to the request; this type is what stops it being dropped
-   * silently on the way to the card. Pinned by test/following-screen.test.tsx.
-   */
-  label: string | null;
-  body: string | null;
-  media_url: string | null;
-  poster_url: string | null;
-  aspect_ratio: number | null;
-  watermarked: boolean;
-  like_count: number;
-  published_at: string;
-};
+// Pinned by test/following-screen.test.tsx.
+type PostRow = PostIntrinsicRow & { horse_id: string };
 // `id` for the Follow pill (a name is not a key), `stable_name`/`location` for the
 // STABLE UPDATE panel footer. Stable identity only — no owner field, ever.
 type HorseTrainer = { id: string; name: string; stable_name: string | null; location: string | null };
@@ -57,18 +40,6 @@ type RailItem = { id: string; name: string; photoUrl: string | null; href: strin
 
 function one<T>(v: T | T[] | null): T | null {
   return Array.isArray(v) ? (v[0] ?? null) : v;
-}
-
-function relativeTime(iso: string | null): string {
-  if (!iso) return "";
-  const ms = Date.now() - new Date(iso).getTime();
-  const mins = Math.max(0, Math.round(ms / 60000));
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
 }
 
 // A circular "story"-style avatar (photo, or the initial-letter fallback) + name.
@@ -252,11 +223,12 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
         readPostPhotos(sb, rows.map((r) => r.id)),
       ]);
 
+      const intrinsics = { signedMedia: postMedia, photosByPost, reactionByPost: myReaction };
       const mapped: FeedPost[] = rows.map((r) => {
         const horse = horseById.get(r.horse_id);
         const trainer = one(horse?.trainer ?? null);
         return {
-          id: r.id,
+          ...postIntrinsics(r, intrinsics),
           horseId: r.horse_id,
           // Title-cased and (AUS)-stripped for display; the raw value stays on
           // the row for keys and comparisons (ENG-761 item 6).
@@ -265,28 +237,6 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
           trainerId: trainer?.id ?? null,
           stableName: trainer?.stable_name ?? null,
           stableLocation: trainer?.location ?? null,
-          postedAgo: relativeTime(r.published_at),
-          title: r.title,
-          label: r.label,
-          body: r.body,
-          // `aspectRatio` is RAW here. `resolveAspect` (post-card) owns the clamp,
-          // so exactly one place decides what an unusable value becomes. The
-          // `typeof` guard is load-bearing, not belt-and-braces: `'NaN'::numeric`
-          // passes the be's `CHECK (aspect_ratio > 0)` and `to_json` serialises it
-          // as the QUOTED string "NaN", which would otherwise widen a string into
-          // a field typed `number | null`.
-          media: {
-            type: r.type,
-            posterUrl: signedPosterFor(r, postMedia),
-            duration: null,
-            aspectRatio: typeof r.aspect_ratio === "number" ? r.aspect_ratio : null,
-          },
-          // ENG-762. Like `label` above, this screen's own mapper has to copy it
-          // or the BFF's work is thrown away one layer later (ENG-772's lesson).
-          photos: photosByPost.get(r.id) ?? [],
-          watermarked: r.watermarked,
-          count: r.like_count,
-          reacted: myReaction.get(r.id) ?? null,
           bookmarked: mySet.has(r.id),
         };
       });
