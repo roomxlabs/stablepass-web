@@ -936,3 +936,50 @@ docker exec supabase_db_stablepass psql -U postgres -d postgres \
 Empty output means the migration is missing: re-apply the be migrations, then re-run. These
 specs passed when ENG-772 and ENG-775 shipped, so a green PR does not mean they stay green
 locally. Always baseline the same specs on the merge-base before treating a red as yours.
+
+## Three member e2e specs are RED on `feature/round6-v1` — `post.label` is undeployed (ENG-794)
+
+`e2e/eng-772-profile-label-pill`, `e2e/eng-775-saved-label-pill` and
+`e2e/reaction-save` fail on the branch tip with "element(s) not found" for
+`.post-web`/`.post-media-web` — i.e. no cards at all, not a styling miss.
+Measured at `4dbefe7`: 3 failed / 5 passed, before any change.
+
+**Cause:** the local `post` table has no `label` column. `information_schema`
+lists 19 columns and `label` is not among them; the migration
+`20260819120001_post_label.sql` (ENG-738) exists only on unmerged `stablepass-be`
+worktrees, never on be `main`. Every feed `.select()` naming `label` is therefore
+rejected 42703/400 and the routes turn that into a silent empty list.
+
+**Do this:** baseline these three before blaming your diff, and do NOT "fix" them
+by deploying the be migration yourself — the local Supabase stack is shared
+across every worktree (see the BE serialization rule). Disclose them in the PR
+and note that CI must re-run them once ENG-738 lands.
+
+## `npm test` alone can FAIL `marketing-marquee`, and a dev server is why
+
+`test/marketing-marquee.test.ts` ("ships no confirmation copy in the built output
+either") scans `.next` for bundle files and asserts `bundles.length > 0`. The
+`existsSync` guard documented above skips it when `.next` is absent — but a
+Playwright run (or any `npm run dev`) creates a `.next` with **dev** output, so
+the guard passes and the filter then finds zero production bundles. The test
+fails with `expected 0 to be greater than 0` and looks like a regression in code
+you never touched.
+
+**Do this:** run the documented gate in order — `typecheck && build && test`. After
+a `next build` the file goes green. Two suite skips also disappear once the build
+output exists, so the honest full-suite number on round-6 is 873/873, not
+858 + 2 skipped.
+
+## The five feed mappers are now ONE — add a `post` column in `lib/feed/post-row.ts` (ENG-794)
+
+`postIntrinsics()` + `POST_INTRINSIC_COLUMNS` own the ten post-intrinsic fields
+for all five member screens and both profile routes. A new `post` column the card
+renders needs `lib/feed/post-row.ts` (row type + projection + key + mapper) and
+`components/types.ts` (the view model) — and nothing else. Identity/context
+(`horseId`, `horseName`, `trainerName`, `trainerId`, `stableName`,
+`stableLocation`, `bookmarked`) is deliberately NOT shared; those diverge per
+screen for real reasons. Don't widen the helper to cover them.
+
+The return type is `Required<Pick<FeedPost, PostIntrinsicKey>>` on purpose:
+`title?`, `body?` and `photos?` are optional on `FeedPost`, so a plain `Pick`
+would let the shared mapper drop one and still compile.
