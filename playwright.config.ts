@@ -205,6 +205,12 @@ export default defineConfig({
       PORT: String(DEV_PORT),
       NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL ?? LOCAL_SUPABASE_URL,
       NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? LOCAL_SUPABASE_ANON_KEY,
+      // ENG-730: the marketing trainer roster is cached for 5 minutes by default,
+      // and that cache is FILE-BACKED under `.next/` — it outlives a dev-server
+      // restart. A spec that seeds trainers would otherwise be served the roster
+      // cached by the PREVIOUS run and fail for a reason nothing in the test
+      // mentions. `0` disables the cache for the test server only.
+      MARKETING_TRAINERS_REVALIDATE_SECONDS: process.env.MARKETING_TRAINERS_REVALIDATE_SECONDS ?? "0",
     },
   },
 });

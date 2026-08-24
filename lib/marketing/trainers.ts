@@ -70,8 +70,21 @@ import type { Trainer } from "@/app/(marketing)/sections/trainers.data";
 /** The bucket the admin app copies marketing-approved photos into (ENG-765). */
 export const MARKETING_PHOTO_BUCKET = "marketing-photos";
 
-/** Admin edits reach the site within this many seconds, with no redeploy. */
-export const TRAINER_ROSTER_REVALIDATE_SECONDS = 300;
+/**
+ * Admin edits reach the site within this many seconds, with no redeploy.
+ *
+ * Overridable with `MARKETING_TRAINERS_REVALIDATE_SECONDS`, and `0` disables the
+ * cache entirely. That is not a test backdoor bolted on: the freshness window is
+ * genuine deployment config — the gate's client-approval pass wants edits to
+ * appear immediately, production wants them batched — and it is also the only way
+ * to make an end-to-end test deterministic. The cache is FILE-BACKED under
+ * `.next/`, so it outlives a dev-server restart; without this an e2e run that
+ * seeds a roster can be served a roster cached by the PREVIOUS run, for up to
+ * five minutes, and fail for a reason nothing in the test says.
+ */
+const configuredRevalidate = Number(process.env.MARKETING_TRAINERS_REVALIDATE_SECONDS);
+export const TRAINER_ROSTER_REVALIDATE_SECONDS =
+  Number.isFinite(configuredRevalidate) && configuredRevalidate >= 0 ? configuredRevalidate : 300;
 
 /**
  * The projection, as a LITERAL, exported so a test can pin it.
@@ -201,7 +214,10 @@ export async function readPublicTrainers(): Promise<Trainer[]> {
  * The cached roster the page renders. `unstable_cache` rather than route-level
  * ISR, for the reason set out at the top of this file.
  */
-export const getMarketingTrainers = unstable_cache(readPublicTrainers, ["marketing", "public-trainer-roster"], {
-  revalidate: TRAINER_ROSTER_REVALIDATE_SECONDS,
-  tags: ["public-trainer-roster"],
-});
+export const getMarketingTrainers =
+  TRAINER_ROSTER_REVALIDATE_SECONDS === 0
+    ? readPublicTrainers
+    : unstable_cache(readPublicTrainers, ["marketing", "public-trainer-roster"], {
+        revalidate: TRAINER_ROSTER_REVALIDATE_SECONDS,
+        tags: ["public-trainer-roster"],
+      });

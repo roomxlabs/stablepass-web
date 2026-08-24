@@ -1,0 +1,225 @@
+import { createClient } from "@supabase/supabase-js";
+
+/**
+ * Seeded trainers for the marketing strip's end-to-end specs (ENG-730 / W4).
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHY THESE SPECS SEED A DATABASE INSTEAD OF INTERCEPTING A REQUEST
+ *
+ * The ticket planned to "mock the `public_trainer` REST call in the existing
+ * route-interception harness". That cannot work, and it is worth writing down so
+ * nobody spends an afternoon rediscovering it: **the read is SERVER-side.** It
+ * happens inside the Next process, in a Server Component, before any HTML
+ * reaches the browser. `page.route()` intercepts requests the BROWSER makes, so
+ * it never sees this one. (There is also no `rest/v1/**` interception harness in
+ * this repo — every existing `page.route` call mocks one of this app's own
+ * `/api/*` routes.)
+ *
+ * So these specs follow the repo's actual precedent for "a test that needs real
+ * backend state", `e2e/checkout.spec.ts`: talk to the local Supabase with the
+ * well-known local service-role key, seed exactly what the test needs, and
+ * `test.skip` cleanly when the stack is not there. Nothing here runs against
+ * anything but a local `supabase start` project.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * THE CACHE, WHICH WILL BITE YOU IF YOU IGNORE IT
+ *
+ * The roster is cached for `MARKETING_TRAINERS_REVALIDATE_SECONDS` (300 by
+ * default) and that cache is FILE-BACKED under `.next/`, so it survives a dev
+ * server restart. `playwright.config.ts` therefore starts the dev server with
+ * that variable set to `0`. If you run these specs against a server you started
+ * yourself, set it too, or you will be served a roster from a previous run.
+ */
+
+const LOCAL_SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "http://127.0.0.1:54321";
+const LOCAL_SERVICE_ROLE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ??
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
+
+/** Slug prefix, so a run only ever touches rows it created. */
+const SLUG_PREFIX = "eng730-e2e-";
+
+export type SeededTrainer = {
+  slug: string;
+  name: string;
+  location: string;
+  bio: string;
+  horses: string[];
+  /** Null on purpose for most of them — the launch-common, no-photo-yet card. */
+  photoPath: string | null;
+};
+
+/**
+ * The SHAPES that matter, hand-written: only ONE has had a photograph copied
+ * across (the rest render the initials disc, which is the launch-common card),
+ * and one has neither a bio nor an active horse, so the "no placeholder copy"
+ * sweep is not vacuous.
+ *
+ * {@link SEEDED_TRAINERS} pads these out to nineteen with filler rows. Nineteen
+ * is not sentimental about the old hardcoded roster — it is what makes the
+ * marquee behave: the duplicate set is only built once the track is wider than
+ * the strip by at least a card, and at 1440px a handful of 222px cards is not.
+ * Seeding six made the clone and "never shows the same trainer twice" specs fail
+ * for a reason that had nothing to do with the code under test.
+ */
+const SHAPED_TRAINERS: SeededTrainer[] = [
+  {
+    slug: `${SLUG_PREFIX}griffiths`,
+    name: "E2E Robbie Griffiths",
+    location: "Cranbourne, Victoria",
+    bio: "Third-generation horseman with a stable built on patience and a long view.",
+    horses: ["E2E Ardent Lane", "E2E Bellhaven"],
+    photoPath: "e2e/seeded.png",
+  },
+  {
+    slug: `${SLUG_PREFIX}archibald`,
+    name: "E2E Annabel & Rob Archibald",
+    location: "Warwick Farm, New South Wales",
+    bio: "A hands-on operation that prizes soundness over speed.",
+    horses: ["E2E Dunkeld Rose"],
+    photoPath: null,
+  },
+  {
+    slug: `${SLUG_PREFIX}freedman`,
+    name: "E2E Mitch Freedman",
+    location: "Ballarat, Victoria",
+    bio: "Patient placement and a long preparation.",
+    horses: ["E2E Fairholme"],
+    photoPath: null,
+  },
+  {
+    slug: `${SLUG_PREFIX}bruce`,
+    name: "E2E Jack Bruce",
+    location: "Eagle Farm, Queensland",
+    // No bio and no active horses: both lines must be OMITTED, not filled with
+    // placeholder copy. This row is the reason the "no placeholder strings"
+    // sweep below is not vacuous.
+    bio: "",
+    horses: [],
+    photoPath: null,
+  },
+  {
+    slug: `${SLUG_PREFIX}cumani`,
+    name: "E2E Matt Cumani",
+    location: "Ballarat, Victoria",
+    bio: "A stable that places its horses where they can win.",
+    horses: ["E2E Gleneagle"],
+    photoPath: null,
+  },
+  {
+    slug: `${SLUG_PREFIX}stokes`,
+    name: "E2E Phillip Stokes",
+    location: "Pakenham, Victoria",
+    bio: "Long preparations and a patient eye on the spring.",
+    horses: ["E2E Hollybank"],
+    photoPath: null,
+  },
+];
+
+/**
+ * Filler, so the roster is wide enough for the marquee to clone. Fully populated
+ * and obviously synthetic — the interesting shapes are in SHAPED_TRAINERS above.
+ */
+const FILLER_TRAINERS: SeededTrainer[] = Array.from({ length: 13 }, (_, i) => {
+  const n = i + 1;
+  return {
+    slug: `${SLUG_PREFIX}filler-${String(n).padStart(2, "0")}`,
+    name: `E2E Filler${String(n).padStart(2, "0")} Stable${String(n).padStart(2, "0")}`,
+    location: `Town ${n}, Victoria`,
+    bio: `Fixture bio for seeded stable ${n}.`,
+    horses: [`E2E Filler Horse ${n}`],
+    photoPath: null,
+  };
+});
+
+/** The nineteen rows a seeded run publishes. */
+export const SEEDED_TRAINERS: SeededTrainer[] = [...SHAPED_TRAINERS, ...FILLER_TRAINERS];
+
+/** The one seeded stable that has a photograph; every other card is initials. */
+export const SEEDED_TRAINER_WITH_PHOTO = SHAPED_TRAINERS[0]!;
+/** The seeded stable with no bio and no active horses — both lines omitted. */
+export const SEEDED_TRAINER_SPARSE = SHAPED_TRAINERS[3]!;
+
+/** Copy that must never appear on a card again (ENG-730 deleted both). */
+export const RETIRED_PLACEHOLDER_STRINGS = [
+  "Horses to be confirmed",
+  "Trainer bio to come from the stable.",
+];
+
+function admin() {
+  return createClient(LOCAL_SUPABASE_URL, LOCAL_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+}
+
+/**
+ * Publish {@link SEEDED_TRAINERS}. Returns `false` when the local stack cannot
+ * serve them — no Supabase, or a database that predates ENG-765's view — so the
+ * caller can `test.skip` with a clear reason instead of failing obscurely.
+ */
+export async function seedMarketingTrainers(): Promise<boolean> {
+  const supabase = admin();
+
+  try {
+    // Does ENG-765's view exist in this database at all?
+    const probe = await supabase.from("public_trainer").select("id").limit(1);
+    if (probe.error) return false;
+
+    // Hide anything another run left published, so the count is ours alone.
+    const hidden = await supabase.from("trainer").update({ marketing_visible: false }).neq("id", ZERO_UUID);
+    if (hidden.error) return false;
+
+    for (const trainer of SEEDED_TRAINERS) {
+      const upserted = await supabase
+        .from("trainer")
+        .upsert(
+          {
+            slug: trainer.slug,
+            name: trainer.name,
+            location: trainer.location,
+            bio: trainer.bio,
+            status: "active",
+            marketing_visible: true,
+            marketing_photo_path: trainer.photoPath,
+          },
+          { onConflict: "slug" },
+        )
+        .select("id")
+        .single();
+      if (upserted.error || !upserted.data) return false;
+
+      const trainerId = upserted.data.id as string;
+      for (const horse of trainer.horses) {
+        const existing = await supabase
+          .from("horse")
+          .select("id")
+          .eq("trainer_id", trainerId)
+          .eq("display_name", horse)
+          .maybeSingle();
+        if (existing.data) continue;
+        const inserted = await supabase
+          .from("horse")
+          .insert({ trainer_id: trainerId, display_name: horse, racing_name: horse, status: "active" });
+        if (inserted.error) return false;
+      }
+    }
+
+    // Confirm the view actually publishes them — the WHERE clause is the view's,
+    // not ours, and a seed that does not reach the view is a skip, not a pass.
+    const published = await supabase.from("public_trainer").select("id");
+    return !published.error && (published.data?.length ?? 0) >= SEEDED_TRAINERS.length;
+  } catch {
+    return false;
+  }
+}
+
+/** Unpublish everything this helper published. Safe to call when seeding failed. */
+export async function clearMarketingTrainers(): Promise<void> {
+  try {
+    await admin().from("trainer").update({ marketing_visible: false }).like("slug", `${SLUG_PREFIX}%`);
+  } catch {
+    /* the stack is gone; nothing to clean up */
+  }
+}
+
+const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
