@@ -74,7 +74,7 @@ flowchart TD
     A([Trial start screen: name, email, phone, password]) --> B["POST /api/auth/signup"]
     B --> C{Valid & email free?}
     C -- "400 validation_failed" --> A
-    C -- "409 email_taken" --> A2[Prompt to log in instead]
+    C -- "409 trial_already_used" --> A2[Repeat-signup wall: join prompt + sign in]
     C -- Yes --> D["Atomic: create auth user + app_user + subscription(status=trial, trial_ends_at=now+30d); NO card / NO Stripe"]
     D --> E["201 Created -> session established (revokes any other device's session — one device only)"]
     E --> F[Go to Onboarding]

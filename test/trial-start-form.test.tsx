@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
-const { pushMock, refreshMock } = vi.hoisted(() => ({
+const { pushMock, refreshMock, replaceMock } = vi.hoisted(() => ({
   pushMock: vi.fn(),
   refreshMock: vi.fn(),
+  // ENG-763: the repeat-signup wall is a NAVIGATION, not a local state swap.
+  replaceMock: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: pushMock, refresh: refreshMock }),
+  useRouter: () => ({ push: pushMock, refresh: refreshMock, replace: replaceMock }),
 }));
 
 import { TrialStartForm } from "@/app/start/trial-start-form";
@@ -48,6 +50,7 @@ describe("TrialStartForm", () => {
   beforeEach(() => {
     pushMock.mockClear();
     refreshMock.mockClear();
+    replaceMock.mockClear();
   });
 
   it("renders the six fields in order: first, last, email, phone, postcode, password", () => {
@@ -217,17 +220,73 @@ describe("TrialStartForm", () => {
     expect(typeof body.postcode).toBe("string");
   });
 
-  it("renders the duplicate-email copy on 409", async () => {
-    mockFetch(409, { error: { code: "email_taken", message: "That email is already registered." } });
-    render(<TrialStartForm />);
+  // ---- the repeat-signup wall (ENG-763) -------------------------------------
+  // The 409 that used to be `email_taken` is now `trial_already_used`, and both
+  // the phone hit and the email hit send the member to the SAME wall.
+  //
+  // The wall's own markup is covered by test/trial-used-wall.test.tsx. What this
+  // form owes is the routing decision: the wall is a server-rendered URL, not a
+  // local swap, because the screen's left-hand trial pitch lives outside this
+  // component and a local swap would leave it contradicting the wall.
+  describe("repeat-signup wall", () => {
+    const WALLED = {
+      error: {
+        code: "trial_already_used",
+        message: "Looks like you've already had your free trial. Sign in to join stablepass.",
+      },
+    };
 
-    fill();
-    submit();
+    async function submitWalled() {
+      const fetchMock = mockFetch(409, WALLED);
+      render(<TrialStartForm />);
+      fill();
+      submit();
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    }
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "That email is already registered. Try signing in instead.",
-    );
-    expect(pushMock).not.toHaveBeenCalled();
+    it("sends the member to the wall URL on 409 trial_already_used", async () => {
+      await submitWalled();
+
+      await waitFor(() => expect(replaceMock).toHaveBeenCalledWith("/start?trial=used"));
+      // `replace`, not `push`: a dead end does not deserve a history entry.
+      expect(pushMock).not.toHaveBeenCalled();
+    });
+
+    it("shows no error banner — the wall is the message, not a red box", async () => {
+      await submitWalled();
+
+      await waitFor(() => expect(replaceMock).toHaveBeenCalled());
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("stays busy-locked so the form cannot be resubmitted mid-navigation", async () => {
+      await submitWalled();
+
+      await waitFor(() => expect(replaceMock).toHaveBeenCalled());
+      expect(screen.getByRole("button", { name: "Starting your trial…" })).toBeDisabled();
+    });
+
+    it("does NOT wall on a 409 that is not trial_already_used", async () => {
+      // Branching on the status alone would swallow any future 409 whole. Such
+      // a 409 now falls through to the route's own message rather than to the
+      // old hardcoded "That email is already registered", which named the
+      // credential the wall must never name.
+      mockFetch(409, { error: { code: "something_else", message: "Nope." } });
+      render(<TrialStartForm />);
+
+      fill();
+      submit();
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("Nope.");
+      expect(replaceMock).not.toHaveBeenCalled();
+    });
+
+    it("no longer ships the copy that named which credential matched", async () => {
+      await submitWalled();
+      await waitFor(() => expect(replaceMock).toHaveBeenCalled());
+
+      expect(document.body.textContent ?? "").not.toContain("already registered");
+    });
   });
 
   it("renders the rate-limit copy on 429", async () => {

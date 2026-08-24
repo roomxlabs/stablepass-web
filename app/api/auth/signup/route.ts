@@ -1,7 +1,17 @@
 import { supabaseServer } from "@/lib/supabase/server";
 import { created, fail } from "@/lib/api/envelope";
+import { normalizePhone } from "@/lib/format/phone";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// The repeat-signup wall (ENG-763, R22). ONE code and ONE message for both the
+// phone hit and the email hit: the wall must not reveal which credential
+// matched (resolved open question on the ticket), so the two branches are
+// deliberately indistinguishable to the caller. The form keys its wall UI off
+// the CODE, not this message.
+const TRIAL_ALREADY_USED = "trial_already_used";
+const TRIAL_ALREADY_USED_MESSAGE =
+  "Looks like you've already had your free trial. Sign in to join stablepass.";
 const MIN_PASSWORD = 8;
 // AU postcode: exactly four digits, stored as text so '0800' survives. Never
 // parseInt it, and never widen this to accept 'VIC 3000' — the DB has a
@@ -42,6 +52,52 @@ export async function POST(req: Request) {
   }
 
   const sb = await supabaseServer();
+
+  // ---- the pre-signup wall (ENG-763) -------------------------------------
+  // One free trial per phone number. This check is the ONLY thing that can tell
+  // a member their number has already had a trial: ENG-742's backstop index
+  // deliberately does NOT fail the signup, it degrades the duplicate phone to
+  // NULL and issues the trial anyway, because `handle_new_user` is an AFTER
+  // INSERT trigger on auth.users and anything it raises 500s the whole insert
+  // and echoes the row back (the ENG-566 outage). Per stablepass-be's
+  // docs/specs/api-contract.md: "a client cannot detect 'phone already used'
+  // from the signup response" — so the wall lives here, before the account is
+  // created, and `phone_in_use` is the documented supported signal.
+  //
+  // It is a DETERRENT, not a security control. GoTrue's /auth/v1/signup is
+  // publicly reachable, so anyone willing to curl it directly walks straight
+  // past this. Making it a real gate needs a verified phone (OTP at signup),
+  // which is out of scope. Do not describe this as enforcement.
+  //
+  // The number is sent AS TYPED because the RPC normalises in its own body,
+  // which is what keeps the comparison identical to the index's. normalizePhone
+  // is only used to skip a pointless round trip: the RPC's contract is that
+  // null/empty/garbage input returns false, so a value that normalises to null
+  // can never be in use.
+  if (normalizePhone(phone) !== null) {
+    const { data: phoneTaken, error: rpcError } = await sb.rpc("phone_in_use", {
+      p_phone: phone,
+    });
+
+    if (rpcError) {
+      // Fail OPEN, by design (ticket decision): during a deploy skew where web
+      // is ahead of the migration the RPC is missing (PGRST202) and walling
+      // every signup would take the funnel down. The DB backstop still degrades
+      // a duplicate phone to NULL, so the worst case is an extra trial, not a
+      // duplicate phone in app_user.
+      //
+      // The error CODE only. Never the message, and never `phone`: PostgREST
+      // forwards Postgres DETAIL verbatim and this endpoint handles PII.
+      console.warn("[signup] phone_in_use unavailable, allowing signup:", rpcError.code);
+    } else if (phoneTaken === true) {
+      // Strict `=== true`. `.rpc()` returns `{ data: null, error }` on failure
+      // and `sb` is untyped, so a truthiness test here would wall a legitimate
+      // signup on any shape we did not expect. Only an explicit boolean true
+      // from the database closes this door.
+      return fail(TRIAL_ALREADY_USED, TRIAL_ALREADY_USED_MESSAGE, 409);
+    }
+  }
+
   const { data, error } = await sb.auth.signUp({
     email,
     password,
@@ -63,14 +119,54 @@ export async function POST(req: Request) {
 
   // Supabase resists enumeration: a duplicate email may come back as an
   // `error`, or as a 200 with a user whose `identities` array is empty.
+  //
+  // The CODE is checked before the message. Verified against the running stack,
+  // supabase-js returns `AuthApiError { status: 422, code: "user_already_exists",
+  // message: "User already registered" }`, and a stable code beats matching
+  // GoTrue's prose — a reworded upstream string would otherwise silently demote
+  // the email half of the wall to a generic 400. The regex stays as the
+  // fallback for older GoTrue builds that send no code.
+  const duplicateCode = (error as { code?: string } | null)?.code;
   const looksLikeDuplicate =
-    (error && /already registered/i.test(error.message)) ||
+    (error && (duplicateCode === "user_already_exists" || /already registered/i.test(error.message))) ||
     (!error && data?.user && Array.isArray(data.user.identities) && data.user.identities.length === 0);
   if (looksLikeDuplicate) {
-    return fail("email_taken", "That email is already registered.", 409);
+    // Was `email_taken`. An address that already has an account has, for this
+    // product, already had its free trial, so it gets the SAME wall as a repeat
+    // phone (ENG-763 decision 2) rather than a second, subtly different dead
+    // end. The old code is gone rather than aliased: this BFF has exactly one
+    // consumer, app/start/trial-start-form.tsx, and two codes meaning one thing
+    // is how the two branches drift apart.
+    return fail(TRIAL_ALREADY_USED, TRIAL_ALREADY_USED_MESSAGE, 409);
   }
 
   if (error) {
+    // WHAT HAPPENS IF THE DATABASE ITSELF REJECTS THE SIGNUP, and why there is
+    // no phone-specific branch here. Measured on this stack, not assumed:
+    //
+    // A trigger that raises inside the auth.users insert makes GoTrue answer
+    // HTTP 500 with the raw Postgres error, PII and all —
+    //   {"code":"23514","message":"...violates check constraint...",
+    //    "detail":"Failing row contains (…, someone@example.com, …)"}
+    // — but supabase-js does NOT surface that. It flattens the whole thing to
+    //   AuthRetryableFetchError { status: 500, code: undefined, message: "{}" }
+    // so by the time the error reaches this line the SQLSTATE and the DETAIL
+    // are both already gone. An earlier revision matched `23505` /
+    // `idx_app_user_phone` here to show the wall on a lost index race; it was
+    // deleted because it could never fire, and two tests that "proved" it were
+    // asserting a response shape the client cannot produce.
+    //
+    // That is acceptable rather than merely unavoidable, for two reasons:
+    //   1. The phone race does not reach here at all. ENG-742's trigger catches
+    //      its own unique violation and retries with a NULL phone, so a losing
+    //      concurrent signup SUCCEEDS. The member keeps their trial and their
+    //      number simply is not stored. That is the migration's locked decision
+    //      (never abort an auth.users insert), not a gap.
+    //   2. The fallthrough below is already the right answer: fixed copy, no
+    //      stack trace, no leak. The flattened "{}" carries nothing to echo.
+    //
+    // If a future client stops flattening this, the SQLSTATE becomes visible
+    // and mapping it to the wall would be worth revisiting.
     const status = (error as { status?: number }).status;
     if (status === 429 || /rate limit/i.test(error.message)) {
       return fail("rate_limited", "Too many attempts — please wait a moment and try again.", 429);
