@@ -1,0 +1,195 @@
+import { createClient } from "@supabase/supabase-js";
+import { unstable_cache } from "next/cache";
+
+import type { Trainer } from "@/app/(marketing)/sections/trainers.data";
+
+/**
+ * The marketing site's ONE read of live trainer data (ENG-730 / W4).
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHY THIS FILE LIVES OUTSIDE `app/(marketing)/`
+ *
+ * Two independent guards ban Supabase from the marketing route group:
+ * `test/marketing-shell.test.tsx` ("never touches Supabase from the marketing
+ * route group") sweeps every file under `app/(marketing)/**` for `lib/supabase`
+ * and `NEXT_PUBLIC_SUPABASE`, and `test/marketing-home.test.tsx` additionally
+ * bans a bare `fetch(` anywhere directly under `sections/`.
+ *
+ * Those guards are NOT worked around here — they are honoured. The read lives in
+ * `lib/marketing/`, so the route group still contains no Supabase reference of
+ * its own and both sweeps stay green BY CONSTRUCTION rather than by exemption.
+ * `test/marketing-trainers.test.tsx` adds the companion guard the ticket asks
+ * for: this is the ONLY module the marketing tree can reach that talks to
+ * Supabase, and it may select from `public_trainer` and nothing else.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * THE CONTRACT (ENG-765 / W7, verified against a live PostgREST — see the PR)
+ *
+ * `public.public_trainer` is a DEFINER-style view (deliberately NOT
+ * `security_invoker`) exposing EXACTLY seven columns and filtering to
+ * `status = 'active' AND marketing_visible`. `marketing_visible` DEFAULTS TO
+ * FALSE, so "no rows" is the normal launch state, not a failure.
+ *
+ *   id                   — the trainer's uuid. Used ONLY as a React key here and
+ *                          never rendered; names are not unique once the roster
+ *                          is admin-driven, and keying on a name would collide.
+ *   name                 — always present.
+ *   display_name         — NULLABLE. Falls back to `name`.
+ *   location             — NULLABLE. Falls back to "" (the card drops the line).
+ *   bio                  — NEVER null (`coalesce(bio, '')`), but MAY be "".
+ *   marketing_photo_path — NULLABLE object path inside the PUBLIC
+ *                          `marketing-photos` bucket. Null until an admin copies
+ *                          a photo across (ENG-766 / W8), which is why the
+ *                          initials disc is the COMMON case at launch, not an
+ *                          edge case.
+ *   horses               — NEVER null, but MAY be "". Comma-separated names of
+ *                          that trainer's active horses, capped at 12 by the view.
+ *
+ * A BARE ANON CLIENT is mandatory: no cookies, no session, no signing. The photo
+ * is served straight off the public bucket URL unsigned. This is the sanctioned
+ * exception recorded in the migration — every OTHER bucket in this project stays
+ * private and subscription-gated, and nothing here may ever read `trainer` or
+ * `trainer_contact` directly.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHY THE **DATA** IS CACHED AND NOT THE **ROUTE**
+ *
+ * The ticket planned `export const revalidate = 300` on the marketing page.
+ * That is now a no-op: ENG-729 made `app/(marketing)/page.tsx` read
+ * `searchParams` (so the no-JS waitlist redirect `303 -> /?joined=1` can render
+ * its confirmation), which opts `/` out of static prerendering into a
+ * per-request render — the build output reports `/` as `f`, not `o`. Route-level
+ * ISR and a request-varying page are mutually exclusive.
+ *
+ * So the ROSTER is cached instead, which is the more precise tool anyway: it
+ * caches the expensive thing rather than the whole document, and it survives `/`
+ * being dynamic for any other reason later. Same 5-minute freshness the ticket
+ * specifies.
+ */
+
+/** The bucket the admin app copies marketing-approved photos into (ENG-765). */
+export const MARKETING_PHOTO_BUCKET = "marketing-photos";
+
+/** Admin edits reach the site within this many seconds, with no redeploy. */
+export const TRAINER_ROSTER_REVALIDATE_SECONDS = 300;
+
+/**
+ * The projection, as a LITERAL, exported so a test can pin it.
+ *
+ * This is security surface, and getting it wrong fails QUIETLY. Measured against
+ * a live PostgREST: naming a column the view does not expose (say `photo_url`)
+ * answers `400 {"code":"42703"}` rather than 500 — and because a failed read
+ * degrades to "no strip" by design below, a widened or misspelt projection would
+ * surface as an EMPTY STRIP on a healthy site, not as an error anyone would see.
+ * `test/marketing-trainers.test.tsx` asserts this string byte for byte.
+ */
+export const PUBLIC_TRAINER_COLUMNS = "id,name,display_name,location,bio,marketing_photo_path,horses";
+
+/** The view. Never `trainer`, never `trainer_contact`. */
+export const PUBLIC_TRAINER_VIEW = "public_trainer";
+
+type PublicTrainerRow = {
+  id: string;
+  name: string;
+  display_name: string | null;
+  location: string | null;
+  bio: string | null;
+  marketing_photo_path: string | null;
+  horses: string | null;
+};
+
+/**
+ * The mockup's disc carries two letters ("AB", "AA" for "Annabel & Rob
+ * Archibald"), so take the initial of each of the first two real words. "&" and
+ * other punctuation-only tokens are skipped — "Annabel & Rob" must read "AR",
+ * not "A&". A single-word name yields a single letter rather than a padded one.
+ */
+export function initialsOf(name: string): string {
+  return name
+    .split(/\s+/)
+    .map((word) => word.replace(/[^\p{L}\p{N}]/gu, ""))
+    .filter((word) => word.length > 0)
+    .slice(0, 2)
+    .map((word) => word[0]!.toUpperCase())
+    .join("");
+}
+
+/**
+ * A bare anon client: no cookie adapter, no session persistence, no refresh.
+ *
+ * Deliberately NOT `supabaseServer()` — that binds the request's auth cookies,
+ * which is exactly what must not happen on an anonymous marketing origin, and
+ * reading cookies would also opt the caller out of caching.
+ */
+function anonClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !anonKey) return null;
+
+  return createClient(url, anonKey, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+}
+
+function toTrainer(row: PublicTrainerRow, publicUrlFor: (path: string) => string): Trainer {
+  const name = row.display_name?.trim() || row.name;
+
+  return {
+    id: row.id,
+    name,
+    location: row.location?.trim() ?? "",
+    // Null path is the COMMON case until W8 runs the copy: no <img> is rendered
+    // at all and the mockup's `.tr-init` disc, which sits behind the photograph
+    // at `inset:0`, becomes what you see. That is the mockup's own mechanism.
+    photo: row.marketing_photo_path ? publicUrlFor(row.marketing_photo_path) : null,
+    initials: initialsOf(name),
+    bio: row.bio?.trim() ?? "",
+    horses: row.horses?.trim() ?? "",
+  };
+}
+
+/**
+ * Read the published roster. NEVER throws: any failure — the view missing
+ * because the deploy landed ahead of ENG-765, an unreachable database, missing
+ * env — degrades to an empty roster, which the strip renders as "no section".
+ * A broken band on the client's marketing site is strictly worse than no band.
+ *
+ * Only the error's NAME is logged, server-side. A message could carry the query
+ * or connection detail, and this runs on the anonymous marketing origin.
+ */
+export async function readPublicTrainers(): Promise<Trainer[]> {
+  const supabase = anonClient();
+  if (!supabase) {
+    console.error("[marketing/trainers] MissingSupabaseEnv");
+    return [];
+  }
+
+  try {
+    const { data, error } = await supabase.from(PUBLIC_TRAINER_VIEW).select(PUBLIC_TRAINER_COLUMNS);
+
+    if (error) {
+      console.error(`[marketing/trainers] ${error.code ?? "SupabaseError"}`);
+      return [];
+    }
+
+    const rows = (data ?? []) as PublicTrainerRow[];
+    const publicUrlFor = (path: string) =>
+      supabase.storage.from(MARKETING_PHOTO_BUCKET).getPublicUrl(path).data.publicUrl;
+
+    return rows
+      .map((row) => toTrainer(row, publicUrlFor))
+      .sort((a, b) => a.name.localeCompare(b.name, "en-AU"));
+  } catch (thrown) {
+    console.error(`[marketing/trainers] ${thrown instanceof Error ? thrown.name : "UnknownError"}`);
+    return [];
+  }
+}
+
+/**
+ * The cached roster the page renders. `unstable_cache` rather than route-level
+ * ISR, for the reason set out at the top of this file.
+ */
+export const getMarketingTrainers = unstable_cache(readPublicTrainers, ["marketing", "public-trainer-roster"], {
+  revalidate: TRAINER_ROSTER_REVALIDATE_SECONDS,
+  tags: ["public-trainer-roster"],
+});

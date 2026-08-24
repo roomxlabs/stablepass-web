@@ -5,11 +5,7 @@
 import { useState, type KeyboardEvent } from "react";
 
 import TrainerModal from "./modals/trainer-modal";
-import {
-  TRAINER_BIO_PLACEHOLDER,
-  TRAINER_HORSES_PLACEHOLDER,
-  type Trainer,
-} from "./sections/trainers.data";
+import { type Trainer } from "./sections/trainers.data";
 import { useMarquee } from "./use-marquee";
 
 /**
@@ -49,7 +45,7 @@ export default function TrainerCarousel({ trainers }: TrainerCarouselProps) {
       >
         <div ref={trackRef} className="tr-track">
           {trainers.map((trainer) => (
-            <TrainerCard key={trainer.name} trainer={trainer} onOpen={setActive} />
+            <TrainerCard key={trainer.id} trainer={trainer} onOpen={setActive} />
           ))}
           {/**
            * The duplicate set. Rendered from state rather than `cloneNode`d
@@ -58,7 +54,7 @@ export default function TrainerCarousel({ trainers }: TrainerCarouselProps) {
            */}
           {duplicated &&
             trainers.map((trainer) => (
-              <TrainerCard key={`dup-${trainer.name}`} trainer={trainer} onOpen={setActive} duplicate />
+              <TrainerCard key={`dup-${trainer.id}`} trainer={trainer} onOpen={setActive} duplicate />
             ))}
         </div>
       </div>
@@ -135,18 +131,38 @@ function TrainerCard({ trainer, onOpen, duplicate = false }: TrainerCardProps) {
       className="tr-card"
       onClick={open}
       data-loc={trainer.location}
-      data-horses={TRAINER_HORSES_PLACEHOLDER}
-      data-bio={TRAINER_BIO_PLACEHOLDER}
+      data-horses={trainer.horses}
+      data-bio={trainer.bio}
       {...interaction}
     >
+      {/*
+        `.tr-init` and the photograph are BOTH `position:absolute; inset:0` in the
+        mockup, the disc first, so the photograph covers it when there is one.
+        ENG-730 makes the roster live, and `marketing_photo_path` is null until an
+        admin copies a photo across (ENG-766 / W8) — so at launch the usual card
+        has NO `<img>` at all and the disc is simply what shows. Rendering an
+        `<img>` with an empty src instead would fire a request for the page URL
+        and paint a broken-image glyph over the disc.
+      */}
       <span className="tr-init">{trainer.initials}</span>
-      <img src={trainer.photo} alt={`${trainer.name}, ${trainer.location}`} />
+      {trainer.photo && (
+        <img src={trainer.photo} alt={trainer.location ? `${trainer.name}, ${trainer.location}` : trainer.name} />
+      )}
       <figcaption className="tr-nm">{trainer.name}</figcaption>
       <div className="tr-over">
         <b>{trainer.name}</b>
-        <span className="loc">{trainer.location}</span>
-        <span className="hz">{TRAINER_HORSES_PLACEHOLDER}</span>
-        <p className="bio">{TRAINER_BIO_PLACEHOLDER}</p>
+        {/*
+          Live data means any of these three can be absent, where the hardcoded
+          roster always had all of them. An element is omitted rather than
+          rendered empty: an empty `.hz` still draws its uppercase mono letter-
+          spacing and margin, and an empty `.bio` still reserves three lines
+          under the mask, both of which read as a rendering fault on the card.
+          No placeholder copy is substituted — ENG-730 deletes the "Horses to be
+          confirmed" / "Trainer bio to come from the stable." strings outright.
+        */}
+        {trainer.location && <span className="loc">{trainer.location}</span>}
+        {trainer.horses && <span className="hz">{trainer.horses}</span>}
+        {trainer.bio && <p className="bio">{trainer.bio}</p>}
         <span className="more">Read more</span>
       </div>
     </figure>

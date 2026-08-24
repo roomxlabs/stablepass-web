@@ -8,6 +8,7 @@ import Pricing from "./pricing";
 import SubscribersGet from "./subscribers-get";
 import TheApp from "./the-app";
 import TrainersStrip from "./trainers-strip";
+import type { Trainer } from "./trainers.data";
 import WhatIs from "./what-is";
 import Why from "./why";
 
@@ -55,13 +56,27 @@ import Why from "./why";
  * to the two `WaitlistForm` mounts. Both are optional, so `<HomeSections />`
  * with no props still renders — which is how the copy-fidelity tests mount it.
  * See page.tsx for why they are read server-side at all.
+ *
+ * ENG-730: `trainers` is the LIVE roster, read from `public_trainer` in
+ * `page.tsx` and passed straight through. It is a plain prop, and the read
+ * deliberately does NOT happen here: `test/marketing-home.test.tsx` bans both
+ * `lib/supabase` and a bare `fetch(` in every file directly under `sections/`,
+ * and this file staying a pure composition is what keeps that guard honest.
+ * Making it async would also break the copy-fidelity tests, which render it
+ * synchronously.
+ *
+ * It defaults to EMPTY, which renders no strip at all. That is the deliberate
+ * failure direction — `trainer.marketing_visible` defaults to false, so an empty
+ * roster is the real launch state rather than an error.
  */
 export default function HomeSections({
   joined,
   reason,
+  trainers = [],
 }: {
   joined?: string | null;
   reason?: string | null;
+  trainers?: Trainer[];
 } = {}) {
   return (
     <main>
@@ -72,7 +87,7 @@ export default function HomeSections({
       <SubscribersGet />
       <Pricing />
       <Why />
-      <TrainersStrip />
+      <TrainersStrip trainers={trainers} />
       <CtaBand joined={joined} reason={reason} />
       <Faq />
       <ForTrainers />

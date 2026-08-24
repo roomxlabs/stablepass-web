@@ -1,3 +1,5 @@
+import { getMarketingTrainers } from "@/lib/marketing/trainers";
+
 import HomeSections from "./sections";
 
 /**
@@ -39,20 +41,30 @@ import HomeSections from "./sections";
  * that hook forces a Suspense bailout whose fallback is exactly the blank the
  * no-JS visitor must not see.
  *
- * ── CONSEQUENCE FOR W4 (ENG-730), which is blocked on this ticket ────────────
- * W4's spec plans `export const revalidate = 300` on this page for the live
- * trainer read. Route-level ISR and a request-varying page are mutually
- * exclusive, so W4 must cache the DATA rather than the ROUTE — wrap the
- * `public_trainer` read in `unstable_cache(fn, keys, { revalidate: 300 })` (or
- * a `fetch` with `next: { revalidate: 300 }`). Same 5-minute freshness, and it
- * is the more precise tool anyway: it caches the thing that is expensive
- * instead of the whole document. Recorded on ENG-730.
+ * ── W4 (ENG-730) TOOK THAT CONSEQUENCE, AND HERE IS WHAT IT DID ──────────────
+ * This block used to end with a note to W4 saying its planned
+ * `export const revalidate = 300` would be a no-op here, because route-level ISR
+ * and a request-varying page are mutually exclusive. That was correct, and W4
+ * followed it: there is deliberately NO `revalidate` export on this route.
+ *
+ * The ROSTER is cached instead — `getMarketingTrainers` wraps the
+ * `public_trainer` read in `unstable_cache(..., { revalidate: 300 })`. Admin
+ * edits still reach the site within five minutes with no redeploy, the cache
+ * covers the expensive thing rather than the whole document, and it keeps
+ * working if `/` goes dynamic for some further reason later.
+ *
+ * The read NEVER throws: it degrades to an empty roster, and an empty roster
+ * renders no strip at all. So a deploy that lands ahead of ENG-765's view, or a
+ * database that is briefly unreachable, costs the trainer band and nothing else.
  */
 export default async function MarketingHome({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  // The roster read is independent of the query string, so start it before the
+  // searchParams await rather than after — they overlap instead of queueing.
+  const trainersPromise = getMarketingTrainers();
   const params = await searchParams;
 
   // `?joined=1&joined=0` is a repeated key, which Next hands over as an array.
@@ -60,5 +72,7 @@ export default async function MarketingHome({
   // not "1" or "0" — this layer decides nothing about meaning.
   const first = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value) ?? null;
 
-  return <HomeSections joined={first(params.joined)} reason={first(params.reason)} />;
+  return (
+    <HomeSections joined={first(params.joined)} reason={first(params.reason)} trainers={await trainersPromise} />
+  );
 }

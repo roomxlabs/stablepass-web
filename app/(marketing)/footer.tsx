@@ -1,4 +1,5 @@
 import { legalPath } from "@/lib/legal";
+import { getMarketingTrainers } from "@/lib/marketing/trainers";
 
 import { contactMailtoHref } from "./modals/contact-mailto";
 import FaqSheet from "./modals/faq-sheet";
@@ -48,7 +49,26 @@ const CONTACT_LINKS: ReadonlyArray<{ label: string; subject: string }> = [
   { label: "Trainer partnerships", subject: "Trainer partnerships" },
 ];
 
-export default function MarketingFooter() {
+export default async function MarketingFooter() {
+  // ENG-730: "Our Trainers" is an in-page anchor to `#stable-trainers`, and that
+  // section now disappears whenever no stable is published — which is the LAUNCH
+  // state, since `trainer.marketing_visible` defaults to false.
+  //
+  // ENG-589 flagged this exact link when it asserted the empty strip:
+  // "the footer links `#stable-trainers` unconditionally, so hiding the section
+  // leaves that link with no target... the fix belongs with whoever makes the
+  // list dynamic". That is this ticket, so the link is picked up here rather
+  // than left as a second dead anchor beside the one W3 already had to hide.
+  //
+  // The read is the SAME `unstable_cache` entry the page uses, so this costs no
+  // extra round trip — it is one cached roster shared by both components.
+  //
+  // It is a JSX condition rather than a CSS rule on purpose: `marketing.css` is
+  // W3's file and is diffed rule-for-rule against the mockup, so a new rule here
+  // would fail that guard, and W3's `.launch-only` hook is keyed to the waitlist
+  // MODE, which is a different question from whether any stable is published.
+  const hasTrainers = (await getMarketingTrainers()).length > 0;
+
   return (
     <footer>
       <div className="wrap">
@@ -80,9 +100,11 @@ export default function MarketingFooter() {
               <li className="launch-only">
                 <a href="#subscription">Subscription</a>
               </li>
-              <li>
-                <a href="#stable-trainers">Our Trainers</a>
-              </li>
+              {hasTrainers && (
+                <li>
+                  <a href="#stable-trainers">Our Trainers</a>
+                </li>
+              )}
               <li>
                 <a href="#trainers">For Trainers</a>
               </li>
