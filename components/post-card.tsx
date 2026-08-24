@@ -170,7 +170,14 @@ const PhotoGlyph = () => (
 
 /**
  * The caption, clamped to two lines with a "more" affordance (round 6 / ENG-761
- * item 2, matching mobile).
+ * item 2).
+ *
+ * NOT "matching mobile", despite the ticket's wording: as of `feature/round6-v1`
+ * mobile's post card has no caption clamp at all (no `numberOfLines` on the
+ * body) and its `.post-badge` pill is still retired. Web is AHEAD here, not in
+ * step. Said plainly because comments are this repo's decision record, and
+ * "matching mobile" would send the next reader to "fix" mobile toward behaviour
+ * it does not have.
  *
  * WHY A MEASUREMENT AND NOT A CHARACTER COUNT: how many lines a caption takes
  * depends on the rendered font, the column width and where the words break, so

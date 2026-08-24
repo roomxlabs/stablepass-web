@@ -777,6 +777,11 @@ a { color: inherit; text-decoration: none; }
    `-webkit-line-clamp` with `-webkit-box` is not legacy here — it is still the
    only cross-browser multi-line clamp (the standard `line-clamp` shorthand is
    not yet safe in the browsers this app supports). */
+/* A single unbreakable token — a pasted replay URL — otherwise lays ONE line box
+   wider than the column: `scrollHeight` never exceeds `clientHeight`, so no
+   "more" is offered, while `overflow: hidden` clips the tail. Wrapping it turns
+   that silent truncation into an ordinary clamped caption that expands. */
+.post-body-web .post-caption { overflow-wrap: anywhere; }
 .post-body-web .post-caption.clamped {
   display: -webkit-box;
   -webkit-line-clamp: 2;

@@ -690,3 +690,18 @@ name their columns one by one, and `saved-feed.tsx` uses `post:post_id(*)`.
 - **Do this:** when a ticket adds a `post` column that the card renders, list all four
   read paths and say explicitly which ones are in scope. "The feed carries it
   automatically" is true of exactly two of them.
+
+## `follow_no_duplicate` does NOT stop a second trainer follow (preserved from ENG-613)
+
+Recorded here because ENG-761 deleted the code this lesson lived in (the
+Following screen's `follow()` write path went with the Follow pill), and the
+constraint detail existed nowhere else.
+
+`follow_no_duplicate` is `unique (user_id, trainer_id, horse_id)`, and a TRAINER
+follow has `horse_id IS NULL`. **Postgres treats NULLs as distinct**, so that
+unique constraint does not prevent a second row. A fast double-click before the
+optimistic re-render writes two, and the Following rail then lists the trainer
+twice — a duplicate React key.
+- **Do this:** any new trainer-follow write needs its own in-flight guard (an
+  `useRef<Set<string>>` keyed by trainer id), not a reliance on the constraint.
+- Explore's `explore-feed.tsx` still has this pattern intact; copy it from there.

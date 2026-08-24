@@ -165,6 +165,16 @@ describe("ENG-761 item 2 — the caption clamps to two lines", () => {
   });
 });
 
+// A single unbreakable token (a pasted replay URL) lays ONE line box wider than
+// the column, so the clamp's vertical measurement sees no overflow and offers no
+// "more" — while `overflow: hidden` clips the tail. Wrapping is what keeps that
+// caption readable, so it is pinned rather than left to be "tidied" away.
+describe("ENG-761 item 2 — a long unbreakable token still wraps", () => {
+  it("sets overflow-wrap on the caption so a pasted URL cannot silently clip", () => {
+    expect(rule(".post-body-web .post-caption")).toContain("overflow-wrap: anywhere");
+  });
+});
+
 describe("ENG-761 item 3 — the photo chip mirrors the video duration chip", () => {
   it("sits in the same corner as the duration chip", () => {
     const chip = rule(".post-media-web .media-photo-chip");
