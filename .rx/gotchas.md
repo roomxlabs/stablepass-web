@@ -705,3 +705,47 @@ twice — a duplicate React key.
 - **Do this:** any new trainer-follow write needs its own in-flight guard (an
   `useRef<Set<string>>` keyed by trainer id), not a reliance on the constraint.
 - Explore's `explore-feed.tsx` still has this pattern intact; copy it from there.
+
+## Five surfaces re-declare `PostRow` + their own `FeedPost` mapper — a new `post` column needs FIVE edits
+Adding a column to `post` and rendering it in `components/post-card.tsx` is **not** enough
+for it to appear. Five member surfaces each carry their **own** local `PostRow` type and
+their **own** row→`FeedPost` mapper, and a column missing from either is dropped silently:
+`app/(member)/explore/explore-feed.tsx`, `following/following-screen.tsx`,
+`horses/[id]/horse-posts.tsx`, `trainers/[id]/trainer-posts.tsx`, `saved/saved-feed.tsx`.
+ENG-761 added `post.label` + the card render and shipped the pill broken on three of the
+five; ENG-772 fixed the two profile feeds, ENG-775 covers `/saved`. So a ticket that says
+"the card already renders it, this is purely the read path" is under-scoped by default —
+budget one edit per mapper, PLUS one per explicit projection. Symptom is invisible to
+`tsc` (every mapper input is `any`) and invisible to a route test (the route returns the
+column correctly; the screen throws it away one layer later). Do this: for any new `post`
+column, grep `FeedPost\[\]` and edit every hit, and cover it with a RENDER test through the
+real mapper, not only a projection assertion.
+
+## An explicit PostgREST projection is load-bearing in BOTH directions, and BOTH fail SILENTLY
+`select("a, b, c")` **rejects the whole query with `42703` / HTTP 400** if any named column
+is not deployed — unlike `select("*")`, which just omits it. So a projection breaks two
+ways: too narrow silently starves the UI (see above); too wide kills the entire result set
+against any project without the migration. **Neither shows up as a 500.** Measured, not
+assumed: `curl .../rest/v1/post?select=id,nonexistent_col` → `400 {"code":"42703"}`, and
+supabase-js turns that into `{ data: null, error }`. Our routes destructure **only** `data`
+(`const { data: posts } = await sb…`; no route in `app/api/{horses,trainers}/[id]/feed`
+inspects `error`), so `ok(posts ?? [])` returns a cheerful **200 `{"data":[]}`** and the
+screen renders its empty state. The screens' own `setError(true)` path is unreachable for
+this entire error class. Net effect of naming a column too early: a **silent total content
+blackout** that is indistinguishable from an empty stable. Treat "web names a new column"
+as a **deploy-order dependency on that column's migration**, not a cosmetic risk.
+`sb` is untyped, so `tsc` catches neither. Assert the
+**exact** projection string (`.toBe(...)`, not `.toContain(...)`) in the route's test —
+that is the only assertion that pins both directions — and before naming a new column,
+verify it is actually deployed on the base you are targeting, e.g.
+`docker exec supabase_db_stablepass psql -U postgres -d postgres -c "\d public.post"`.
+
+## The profile feeds CAN be e2e'd end to end; `/explore` and `/following` cannot
+The local `feed` edge function is a stub, so Explore/Following can only be component-tested
+with mocked routes. But `app/api/{horses,trainers}/[id]/feed` read `post` **directly** from
+local Postgres, so they drive the full stack for real — seed a trainer/horse/post with the
+admin API, sign in through `/signin`, assert on the live page (see
+`e2e/eng-772-profile-label-pill.spec.ts`). Prefer these two for real end-to-end evidence of
+anything card-related. Corollary, and the reason ENG-761's bug shipped: a screenshot of
+`/preview/components#round6` proves nothing about the read path — the gallery builds its
+`PostCard` props by hand and bypasses both the projection and the mapper.

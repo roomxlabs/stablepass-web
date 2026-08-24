@@ -35,6 +35,7 @@ const TEXT_ROW = {
   type: "text",
   title: "Where the team is up to",
   body: "Quiet week here.\n\nBanjo's Girl trials Tuesday.",
+  label: null,
   media_url: null,
   poster_url: null,
   aspect_ratio: null,
@@ -101,6 +102,18 @@ describe("HorsePosts — ENG-613 parity on the horse profile", () => {
     expect(actions).toBeGreaterThanOrEqual(0);
     expect(body).toBeGreaterThan(actions);
   });
+
+  // A data-layer projection test (test/horses-route.test.ts) cannot see a
+  // dropped mapper field, and this render test cannot see a wrong projection
+  // — ENG-772 needed both, because the bug lived in each layer.
+  it("renders the green label pill on a horse-profile card (ENG-772)", async () => {
+    feedRows = [{ ...TEXT_ROW, label: "Trackwork" }];
+
+    render(<HorsePosts horseId="h1" horseName="Mahogany" trainerName="Tom Alcott" viewerId={VIEWER_ID} />);
+
+    expect(await screen.findByText("Trackwork")).toBeInTheDocument();
+    expect(document.querySelector(".post-badge")!.textContent).toBe("Trackwork");
+  });
 });
 
 describe("TrainerPosts — ENG-613 parity on the trainer profile", () => {
@@ -133,5 +146,17 @@ describe("TrainerPosts — ENG-613 parity on the trainer profile", () => {
 
     expect(document.querySelector(".post-media-web")).not.toBeNull();
     expect(screen.queryByRole("button", { name: /^Follow / })).not.toBeInTheDocument();
+  });
+
+  // A data-layer projection test (test/trainers-route.test.ts) cannot see a
+  // dropped mapper field, and this render test cannot see a wrong projection
+  // — ENG-772 needed both, because the bug lived in each layer.
+  it("renders the green label pill on a trainer-profile card (ENG-772)", async () => {
+    feedRows = [{ ...TEXT_ROW, label: "Trackwork" }];
+
+    render(<TrainerPosts trainerId="t1" trainerName="Tom Alcott" viewerId={VIEWER_ID} />);
+
+    expect(await screen.findByText("Trackwork")).toBeInTheDocument();
+    expect(document.querySelector(".post-badge")!.textContent).toBe("Trackwork");
   });
 });
