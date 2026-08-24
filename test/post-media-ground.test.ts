@@ -56,15 +56,52 @@ describe("post media ground (ENG-612 rows 1 and 2)", () => {
   // selector in prose could attribute an unrelated rule's brand-green fill to
   // the media box. Strictly stricter about what counts as a rule; it can still
   // only ever fail on real CSS.
+  // ROUND 6 / ENG-762 — ONE sanctioned exception, named in full rather than
+  // pattern-matched, so adding a second one is a deliberate edit to this list
+  // and not a side effect of a selector that happens to fit.
+  //
+  // `.photo-dot.active` is the carousel's active page indicator: a 6px dot ON
+  // TOP of the media, which is foreground chrome in exactly the sense the
+  // `.media-play` carve-out above already describes — not the ground behind
+  // someone else's asset, which is the "green screen" this whole block exists
+  // to prevent. Brand green is the active-dot colour specified by BOTH ENG-762
+  // and mobile's ENG-757, so a local substitution here would buy nothing and
+  // cost cross-platform parity.
+  const SANCTIONED_GREEN_BACKGROUNDS = [".post-media-web .photo-dot.active"];
+
   it("leaves no brand-green BACKGROUND on any post-media rule, not just the base", () => {
     const css = GLOBALS.replace(/\/\*[\s\S]*?\*\//g, "");
     const rules = css.match(/\.post-media-web[^{]*\{[^}]*\}/g) ?? [];
     expect(rules.length).toBeGreaterThan(0);
 
-    const offenders = rules.filter((rule) =>
-      /background(-color)?:[^;}]*var\(--brand-green/.test(rule),
-    );
+    const offenders = rules.filter((rule) => {
+      if (!/background(-color)?:[^;}]*var\(--brand-green/.test(rule)) return false;
+      const selector = rule.slice(0, rule.indexOf("{")).trim();
+      return !SANCTIONED_GREEN_BACKGROUNDS.includes(selector);
+    });
     expect(offenders).toEqual([]);
+  });
+
+  // A sanction that no longer matches anything is a stale licence: it would sit
+  // in the list quietly permitting a selector nobody draws any more. Same rule
+  // the marketing stylesheet guard applies to its sanctioned prohibitions.
+  it("keeps every sanctioned green background a rule that actually exists", () => {
+    const css = GLOBALS.replace(/\/\*[\s\S]*?\*\//g, "");
+    const selectors = (css.match(/\.post-media-web[^{]*\{[^}]*\}/g) ?? []).map((rule) =>
+      rule.slice(0, rule.indexOf("{")).trim(),
+    );
+    for (const sanctioned of SANCTIONED_GREEN_BACKGROUNDS) {
+      expect(selectors, `sanctioned selector no longer present: ${sanctioned}`).toContain(sanctioned);
+    }
+  });
+
+  // The ground itself must STILL be neutral even with the exception above in
+  // place — the exception is scoped to one indicator, and this proves the scan
+  // it relaxes has not been relaxed for the box.
+  it("still rejects a brand-green ground on the media box itself", () => {
+    const base = GLOBALS.match(BASE_RULE)?.[0];
+    expect(base).toBeDefined();
+    expect(base).not.toMatch(/background(-color)?:[^;}]*var\(--brand-green/);
   });
 
   // Guardrail: marketing.css is a separate, frozen design system diffed

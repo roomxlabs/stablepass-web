@@ -142,6 +142,13 @@ export function PhotoCarousel({ photos, alt = "" }: PhotoCarouselProps) {
         ))}
       </div>
 
+      {/* The chip is rendered HERE rather than by the card because the index it
+          counts lives here. It is the same `MediaPhotoChip` the single-photo
+          card draws, in the same corner — one affordance, two states. It also
+          keeps the card's existing paint order (chip under the watermark
+          overlay, Follow pill on top) exactly as ENG-761 left it. */}
+      <MediaPhotoChip index={index} total={total} />
+
       <div className="photo-dots" data-testid="photo-dots">
         {photos.map((photo, i) => (
           <button

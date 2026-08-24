@@ -9,7 +9,8 @@ import type { CSSProperties } from "react";
 import { ReactionBar } from "./reaction-bar";
 import { PostOverlay } from "./post-overlay";
 import { FollowPill } from "./follow-pill";
-import type { FeedPost, PostMedia, ReactionEmoji } from "./types";
+import { MediaPhotoChip, PhotoCarousel } from "./photo-carousel";
+import type { FeedPost, PostMedia, PostPhoto, ReactionEmoji } from "./types";
 
 /**
  * The two post types that get the STABLE UPDATE treatment — pill, title and the
@@ -155,18 +156,21 @@ const More = () => (
 );
 
 /**
- * The photo chip — the still-image counterpart to `.media-duration`, in the
- * same corner with the same scrim (round 6 / ENG-761 item 3). A video says how
- * long it runs; a photo has no such number, so it says what it IS with a glyph.
- * That is the whole parity: at a glance the media box always declares its type.
+ * The photo chip moved to `photo-carousel.tsx` in round 6 (ENG-762) so the
+ * single-photo card and the carousel draw the SAME chip — the multi-photo state
+ * adds an `n/m` count to it, and two copies of that element would drift.
+ * `MediaPhotoChip` is imported above; the ENG-761 behaviour is unchanged.
  */
-const PhotoGlyph = () => (
-  <svg className="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2">
-    <rect x="3" y="5" width="18" height="14" rx="2" />
-    <circle cx="8.5" cy="10" r="1.5" />
-    <path d="m21 16-5-5L5 19" />
-  </svg>
-);
+
+/**
+ * More than one `post_media` row is what makes a post a carousel — not the post
+ * type, and not `media_url`. ENG-740 mirrors row 0 into `post.media_url`, so a
+ * one-row post is indistinguishable from a legacy single-photo post by design,
+ * and both take the plain `<img>` path they always did.
+ */
+export function carouselPhotos(post: FeedPost): PostPhoto[] {
+  return post.media.type === "photo" && post.photos && post.photos.length > 1 ? post.photos : [];
+}
 
 /**
  * The caption, clamped to two lines with a "more" affordance (round 6 / ENG-761
@@ -310,6 +314,10 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
   // (client, 18 Aug 2026: "it shouldnt look like 1:1 with the fullscreen").
   const isReel = isReelMedia(post.media);
   const mediaBox = mediaBoxProps(post.media.aspectRatio, { video: isVideo });
+  // Empty unless this post genuinely has 2+ photos, which is what keeps every
+  // pre-round-6 card on exactly the path it took before.
+  const photos = carouselPhotos(post);
+  const isCarousel = photos.length > 1;
 
   return (
     <article className="post-web">
@@ -342,7 +350,12 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
 
       {hasMedia && (
         <div {...mediaBox}>
-          {post.media.posterUrl ? (
+          {isCarousel ? (
+            // The carousel REPLACES the single poster image and brings its own
+            // chip + dots. The box, the Follow pill, the watermark overlay and
+            // the aspect ratio all stay exactly where they were.
+            <PhotoCarousel photos={photos} />
+          ) : post.media.posterUrl ? (
             // eslint-disable-next-line @next/next/no-img-element -- arbitrary Storage/Mux poster URL, cover-fit
             <img src={post.media.posterUrl} alt="" />
           ) : (
@@ -370,12 +383,10 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
             <button className="media-play" type="button" aria-label="Play video" onClick={onPlay}><Play /></button>
           )}
           {isVideo && post.media.duration && <div className="media-duration">{post.media.duration}</div>}
-          {/* The photo's answer to the duration chip: same corner, same scrim. */}
-          {post.media.type === "photo" && (
-            <div className="media-photo-chip" data-testid="media-photo-chip" role="img" aria-label="Photo">
-              <PhotoGlyph />
-            </div>
-          )}
+          {/* The photo's answer to the duration chip: same corner, same scrim.
+              A CAROUSEL draws its own chip (it owns the index the chip counts),
+              so the card only draws the plain one when there is no carousel. */}
+          {post.media.type === "photo" && !isCarousel && <MediaPhotoChip />}
           {post.watermarked && <PostOverlay viewerId={viewerId} />}
           {!isReel && canFollow && <FollowPill trainerName={post.trainerName} onFollow={onFollow} />}
         </div>

@@ -12,6 +12,7 @@ import { ReactionBar } from "@/components/reaction-bar";
 import { relativeTime } from "@/app/(member)/explore/explore-feed";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { signPhotoMap, POST_MEDIA_BUCKET, signedPosterFor } from "@/lib/storage/photos";
+import { readPostPhotos } from "@/lib/post-media";
 import type { FeedPost, PostMedia, ReactionEmoji } from "@/components/types";
 import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 
@@ -84,7 +85,12 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
         const mySet = new Set(((bookmarkRows ?? []) as BookmarkRow[]).map((b) => b.post_id));
         // `media_url` is a bare path in the PRIVATE `post-media` bucket — sign it
         // or the poster renders as a broken relative URL (absolute URLs pass through).
-        const postMedia = await signPhotoMap(sb, POST_MEDIA_BUCKET, rows.flatMap((r) => [r.poster_url, r.media_url]));
+        // Concurrent, not sequential: the carousel read is independent of the
+        // poster signing, so it costs no extra latency on the feed.
+        const [postMedia, photosByPost] = await Promise.all([
+          signPhotoMap(sb, POST_MEDIA_BUCKET, rows.flatMap((r) => [r.poster_url, r.media_url])),
+          readPostPhotos(sb, rows.map((r) => r.id)),
+        ]);
 
         const mapped: FeedPost[] = rows.map((r) => {
           const horse = one(r.horse);
@@ -120,6 +126,9 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
               duration: null,
               aspectRatio: typeof r.aspect_ratio === "number" ? r.aspect_ratio : null,
             },
+            // ENG-762. Like `label` above, this screen's own mapper has to copy
+            // it or the BFF's work is thrown away one layer later (ENG-772).
+            photos: photosByPost.get(r.id) ?? [],
             watermarked: r.watermarked,
             count: r.like_count,
             reacted: myReaction.get(r.id) ?? null,
