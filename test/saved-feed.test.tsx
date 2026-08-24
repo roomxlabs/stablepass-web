@@ -278,6 +278,35 @@ describe("SavedFeed", () => {
     });
   });
 
+  // ENG-775. A RENDER assertion, deliberately not a data-layer one: this screen's
+  // projection is `post:post_id(*)`, so `label` always arrives from the database —
+  // the drop was in the screen's own row→FeedPost mapper. Asserting on the
+  // `.select()` string (the ENG-772 shape) would therefore pass with the bug
+  // present. This fails unless the mapper actually copies `label` through to the card.
+  it("renders the green label pill on a saved card (ENG-775)", async () => {
+    // Deliberately NOT "Trackwork": the default fixture's body is "Trackwork.",
+    // so that value would be one full stop away from matching the CAPTION, and a
+    // reader could not tell the assertion apart from a false positive at a glance.
+    // "Jockey Comments" (also an ENG-738 preset) appears nowhere else in the DOM.
+    bookmarkData = [{ ...BOOKMARKS[0], post: { ...BOOKMARKS[0].post, label: "Jockey Comments" } }];
+
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Nature Strip");
+
+    expect(document.querySelector(".post-badge")!.textContent).toBe("Jockey Comments");
+  });
+
+  // The negative control pins `null` explicitly rather than leaning on the
+  // fixture's ABSENT key: the column is nullable, so `null` is the shape the
+  // database actually produces for an unlabelled post.
+  it("renders no label pill on an unlabelled saved card (ENG-775)", async () => {
+    bookmarkData = [{ ...BOOKMARKS[0], post: { ...BOOKMARKS[0].post, label: null } }];
+
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Nature Strip");
+
+    expect(document.querySelector(".post-badge")).toBeNull();
+  });
 });
 
 // ===========================================================================
@@ -325,7 +354,8 @@ describe("SavedFeed — ENG-613 view model", () => {
 
     render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
 
-    // 18 Aug: neither the pill nor the title renders — the panel is the card's face.
+    // The panel is the card's face here, so no title renders; and this fixture
+    // carries no `label`, so no pill either (the pill itself returned in ENG-761).
     expect(await screen.findByText("Quiet week here.")).toBeInTheDocument();
     expect(document.querySelector(".post-title")).toBeNull();
     expect(document.querySelector(".post-badge")).toBeNull();
