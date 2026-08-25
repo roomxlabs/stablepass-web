@@ -626,8 +626,10 @@ describe("marketing home — copy matches the frozen fixture", () => {
    *   - nothing may be SUBSTITUTED except these eleven. An unpinned src change
    *     survives untouched into `expected` and breaks the same equality.
    *   - the list cannot go stale. Every pinned substitution must actually fire,
-   *     or `fired` and `pinned` disagree and this fails — so a slot that is
-   *     later re-cut again cannot leave a dead entry behind here.
+   *     or `fired` and `pinned` disagree and this fails — that is what catches
+   *     a KEY that no longer matches the fixture. A slot re-cut a second time
+   *     (a changed VALUE) is caught by the equality instead, since the new src
+   *     no longer matches what the map says the fixture becomes.
    *
    * Keyed by block, not globally, because two of the mockup's files were each
    * used in two different slots and their replacements are distinct: the hero
@@ -638,7 +640,8 @@ describe("marketing home — copy matches the frozen fixture", () => {
    * NOT in this list, deliberately: the four client photographs in `#members`
    * and the hero's own photograph. They are the client's supplied photography,
    * not app screenshots, and they are out of this ticket's scope entirely — the
-   * confinement test below is what stops one being swapped in here quietly.
+   * confinement test below checks them as both keys AND values, so neither
+   * re-cutting one away nor promoting one into an app slot passes quietly.
    */
   const APP_SCREEN_SUBSTITUTIONS: Record<string, Record<string, string>> = {
     "header#top.hero": {
@@ -719,8 +722,15 @@ describe("marketing home — copy matches the frozen fixture", () => {
     expect(replacements).toHaveLength(11);
     expect(new Set(replacements).size, "two slots were pointed at the same file").toBe(11);
 
-    // The client's photography is OUT of scope and must never appear as a
-    // substitution key: the four `#members` tiles and the hero photograph.
+    // The client's photography is OUT of scope, in BOTH directions. A key would
+    // mean a photograph was re-cut away; a VALUE would mean a photograph was
+    // promoted into an app-screenshot slot. Checking only keys is what an
+    // earlier draft of this test did, and it was wrong: swapping `a65c5702`
+    // (the hero photograph) into the Stable-updates slot left this entire file
+    // green, because it fires a substitution, keeps the count at eleven
+    // distinct, and satisfies the positional equality. Only the separate asset
+    // equality in `marketing-shell.test.tsx` caught it, in a different file,
+    // for an incidental reason — the displaced screen going unreferenced.
     const PHOTOGRAPHY = [
       "/marketing/f10610fb.jpg",
       "/marketing/6ec6412f.jpg",
@@ -729,8 +739,14 @@ describe("marketing home — copy matches the frozen fixture", () => {
       "/marketing/a65c5702.jpg",
     ];
     for (const photo of PHOTOGRAPHY) {
-      const swapped = Object.values(APP_SCREEN_SUBSTITUTIONS).some((swaps) => photo in swaps);
-      expect(swapped, `${photo} is client photography and must not be re-cut`).toBe(false);
+      const asKey = Object.values(APP_SCREEN_SUBSTITUTIONS).some((swaps) => photo in swaps);
+      expect(asKey, `${photo} is client photography and must not be re-cut away`).toBe(false);
+
+      const asValue = Object.values(APP_SCREEN_SUBSTITUTIONS).some((swaps) =>
+        Object.values(swaps).includes(photo),
+      );
+      expect(asValue, `${photo} is client photography and must not be promoted into an app slot`).toBe(false);
+
       // ...and it is still on the RENDERED page. Asserting this against the
       // fixture instead would be a tautology — the fixture is a constant, so it
       // could never fail and would quietly claim cover it does not give.

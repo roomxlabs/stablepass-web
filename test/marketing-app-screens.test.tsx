@@ -177,11 +177,16 @@ describe("subscribers-get section", () => {
    * shows the horse's career stats tile — starts, wins, places, prizemoney —
    * above the post-race card. No price, no odds, no bookmaker anything.
    *
-   * This assertion is RE-TARGETED at the new hash, never relaxed: it still says
-   * "this exact vetted image, and no other, is what the post-race slot serves".
-   * Pointing it at a looser predicate (any image, or merely "not the old one")
-   * would leave the slot free to pick up an unvetted screenshot later, which is
-   * precisely the failure the original test was written to stop.
+   * This assertion is RE-TARGETED at the new hash, never relaxed — it keeps the
+   * original's exact shape, naming one vetted file that must be among the
+   * screens the carousel serves. Relaxing it to a looser predicate (any image,
+   * or merely "not the old one") would leave the slot free to pick up an
+   * unvetted screenshot later, which is the failure it exists to stop.
+   *
+   * Scope, stated honestly: `toContain` proves the vetted file is PRESENT, not
+   * that it sits in the post-race position. Position is enforced elsewhere, by
+   * the frozen-fixture equality in `test/marketing-home.test.tsx`. Both halves
+   * are needed and neither claims the other's job.
    */
   it("serves the vetted post-race asset, which carries a stats tile and no market price", () => {
     const { container } = render(<SubscribersGet />);

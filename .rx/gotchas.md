@@ -158,8 +158,23 @@ photography altogether.
 What was NOT acceptable was odds rendered as our own product UI. The v2.6 app screen
 `f70905af.jpg` had a third stat tile reading `$4.60 / STARTING`, contradicting the
 page's own "Important note" and its "Is stablepass. a betting service? No" FAQ entry.
-Re-cut as `57.5kg / WEIGHT` in v2.7 (`3334430f.jpg`), matching the sibling screen's
-"Weight 57.5kg" for the same horse and race.
+It was re-cut as `57.5kg / WEIGHT` in v2.7, and again by ENG-732.
+
+UPDATED 25 Aug 2026 (ENG-732), because the three exemplars above were DELETED by that
+ticket — `4a5f34ce.jpg`, `daa70248.jpg` and the v2.7 post-race asset are gone, so do
+not go looking for them. Current state:
+  * the post-race slot is now `626b12ea.jpg`, a career-stats tile
+    (starts / wins / places / prizemoney). No price. Pinned by name in BOTH
+    `test/marketing-app-screens.test.tsx` and `test/marketing-home.test.tsx`.
+  * `f70905af.jpg` stays pinned NEGATIVELY in `test/marketing-home.test.tsx` forever —
+    it is the withdrawn odds asset and must never return, however often the slot is
+    re-cut.
+  * the accepted-signage call was RE-CONFIRMED on ENG-732 (25 Aug 2026): the real
+    Eagle Farm jumpout footage carries `Ladbrokes` barrier stalls and a `THE STAR`
+    rail, and it appears in the hero, the laptop portal and the trackwork slot. Same
+    reasoning as 16 Aug: the rule is scoped to odds and market prices, NOT trackside
+    advertising. Unbranded drop-in replacements exist at
+    `10-marketing-site/real-screens/alt/` if that call is ever reversed.
 The lesson stands regardless: **a grep-over-source guardrail test is structurally blind
 to image content**, so any ticket that commits imagery needs a human to eyeball the
 assets. State the guardrail as "look at the pictures", not "grep the diff".
@@ -954,3 +969,37 @@ Two traps found doing that:
   test asserting "invalid address redirects to `?joined=0&reason=email`" will
   time out waiting for a navigation that correctly never happens. Exercise the
   route's validation branch by posting directly instead.
+
+## A dev server left behind flips a build-gated test from skipped to FAILING (ENG-732)
+`test/marketing-marquee.test.ts`'s "ships no confirmation copy in the built output
+either" is `it.skipIf(!existsSync(".next"))`. Run `npm run dev` for a screenshot
+capture and you leave a DEV `.next` behind; the test then runs, finds no
+`server/`/`static/` bundles, and fails — looking exactly like a regression you caused.
+Symptom to recognise: the SKIP COUNT DROPS at the same moment a failure appears.
+Fix: `rm -rf .next && npm run build`, then re-run (852 passed / 0 skipped). Do not just
+delete `.next` and call it green — the build IS the documented gate
+(`typecheck && lint && build && test`), so run it and let the test earn its keep.
+
+## public/marketing asset renames: a deleted hash in a CODE COMMENT breaks the suite
+`test/marketing-shell.test.tsx` greps the WHOLE `app/(marketing)/` source text for
+`/marketing/<hash>.<ext>` and asserts `referenced === assets` as a set equality. So a
+comment mentioning the file you just deleted ("replaces 3334430f") counts as a live
+reference and fails. Describe an old asset in prose, never by hash. Same trap in
+reverse: a file added but not referenced fails too.
+
+## The mockup extraction `--check` reports strays on STDERR, not stdout
+`scripts/extract-marketing-assets.py --check` prints one stdout line per mockup image
+(`ok`/`MISSING`/`DIFFERS`) but sends "stray file not produced by this script" to
+STDERR, where the test's `execFileSync` stdout capture never sees it. If you add files
+the mockup did not produce, pin them by deriving the mockup's own set from the stdout
+report and diffing against `readdirSync`. Don't assume the check fails on strays, and
+don't trust its exit code — it is already non-zero for the intended MISSING files and
+the test catches the throw.
+
+## Alt text on the marketing page is pinned by NOTHING — check it by hand
+The copy fixture stores text runs and image srcs only; `marketing-app-screens.test.tsx`
+asserts alts against its own local stub. So a stale alt survives the whole suite
+forever. ENG-732 found two: a laptop screenshot still described as a horse ("Mahogany")
+that no longer exists, and a trackwork alt promising "the morning's gallop times" when
+the app has no gallop-times UI at all and no real capture can show one. When you swap
+an image, READ its alt against the new picture — nothing else will.
