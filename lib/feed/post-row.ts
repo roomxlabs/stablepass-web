@@ -1,5 +1,5 @@
 import { signedPosterFor } from "@/lib/storage/photos";
-import type { FeedPost, PostMedia, PostPhoto, ReactionEmoji } from "@/components/types";
+import type { FeedPost, PostMedia, ReactionEmoji } from "@/components/types";
 
 /**
  * post-row — the ONE place a `post` column becomes a card field (ENG-794).
@@ -35,7 +35,7 @@ import type { FeedPost, PostMedia, PostPhoto, ReactionEmoji } from "@/components
  * The exact `post` projection every explicitly-projected feed read shares.
  *
  * Pinned as a constant for the same reason `ACCESS_COLUMNS` and
- * `POST_MEDIA_COLUMNS` are: `sb` is untyped, so `tsc` can never catch a
+ * the be's own projection constants are: `sb` is untyped, so `tsc` can never catch a
  * too-narrow `.select()`, and this projection is load-bearing in BOTH
  * directions. Too narrow silently starves the card (that is exactly how `label`
  * went missing on both profile feeds). Too wide names a column that is not
@@ -89,7 +89,7 @@ export type PostIntrinsicKey =
   | "body"
   | "label"
   | "media"
-  | "photos"
+  | "slideCount"
   | "watermarked"
   | "count"
   | "reacted";
@@ -97,7 +97,7 @@ export type PostIntrinsicKey =
 /**
  * `Required<...>` is load-bearing, and is strictly stronger than the ENG-785
  * trick it generalises. Several of these keys are OPTIONAL on `FeedPost`
- * (`title?`, `body?`, `photos?`), so a plain `Pick` would let `postIntrinsics()`
+ * (`title?`, `body?`, `slideCount?`), so a plain `Pick` would let `postIntrinsics()`
  * quietly omit one and still compile — the exact failure ENG-785 fixed for
  * `label` alone by dropping its `?`. Requiring every key here makes a forgotten
  * line a compile error for ALL ten, without forcing the view model to mark
@@ -114,10 +114,17 @@ export type PostIntrinsics = Required<Pick<FeedPost, PostIntrinsicKey>>;
  * takes one; the other two are read-only here.
  */
 export type PostIntrinsicsContext = {
-  /** `value -> signed URL`, from `signPhotoMap` over poster_url + media_url. */
+  /**
+   * `post id -> minted url`, from `resolvePostDisplayUrls`. An absolute value
+   * (an already-public URL) is keyed by itself instead — see `signedPosterFor`,
+   * which this module calls to resolve either shape.
+   */
   signedMedia: Map<string, string>;
-  /** `post id -> ordered, signed post_media rows`, from `readPostPhotos`. */
-  photosByPost: ReadonlyMap<string, PostPhoto[]>;
+  /**
+   * `post id -> slideCount`, from the page's batch mint. Absent is the legacy
+   * single-photo case.
+   */
+  slideCountByPost: ReadonlyMap<string, number>;
   /** `post id -> the VIEWER's own reaction`, from the batched `reaction` read. */
   reactionByPost: ReadonlyMap<string, ReactionEmoji>;
 };
@@ -168,7 +175,9 @@ export function postIntrinsics(row: PostIntrinsicRow, ctx: PostIntrinsicsContext
       duration: null,
       aspectRatio: typeof row.aspect_ratio === "number" ? row.aspect_ratio : null,
     },
-    photos: ctx.photosByPost.get(row.id) ?? [],
+    // `?? 1` is the legacy no-rows case, which the be also reports as
+    // `slideCount: 1` (ENG-809 decision 3).
+    slideCount: ctx.slideCountByPost.get(row.id) ?? 1,
     watermarked: row.watermarked,
     count: row.like_count,
     reacted: ctx.reactionByPost.get(row.id) ?? null,

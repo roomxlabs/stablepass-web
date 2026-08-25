@@ -15,24 +15,6 @@ export interface PostMedia {
   aspectRatio?: number | null;
 }
 
-/**
- * One row of `post_media` (ENG-740), signed. The be's table is
- * `(post_id, sort_order, media_url)` with `UNIQUE (post_id, sort_order)` and
- * `CHECK (sort_order >= 0 AND sort_order <= 9)` — so a post carries at most 10
- * photos and the order is a 0-based integer the admin controls, NOT insertion
- * or filename order. Verified against the deployed table, not the ticket prose.
- */
-export interface PostPhoto {
-  /**
-   * The signed URL, or `null` when signing failed for THIS photo. Null is a
-   * real state, not a type-level convenience: `signPhotoMap` degrades per key,
-   * so one dead object must leave the other slides renderable.
-   */
-  url: string | null;
-  /** `post_media.sort_order`, carried through so the order is the be's, not the array's. */
-  sort: number;
-}
-
 export interface FeedPost {
   id: string;
   horseId: string;
@@ -70,16 +52,23 @@ export interface FeedPost {
   body?: string | null;
   media: PostMedia;
   /**
-   * The post's `post_media` rows, signed and already ordered by `sort_order`.
-   * Empty or absent for every legacy post (nothing is backfilled), which is what
-   * keeps a single-photo card byte-identical to what it drew before round 6:
-   * fewer than two photos and no carousel exists.
+   * How many slides this post carries, from the batch mint's `slideCount`
+   * (ENG-809 / ENG-815). 1 — or absent, on a surface that resolved no count —
+   * is a single-photo post and draws no carousel, which is every legacy post
+   * since ENG-740 ships no backfill.
    *
-   * NAMED `photos`, NOT `media` as ENG-762's prose has it — `media` is already
-   * taken on this type by the `PostMedia` view model above, and the ticket was
-   * written without that in hand. Flagged on the issue.
+   * IT IS A COUNT, NOT AN ARRAY OF PHOTOS, and that is the point: it arrives in
+   * the same response as slide 0, so the dots and the `n/m` chip are correct
+   * before any further slide has been minted. ENG-762 carried a resolved
+   * `PostPhoto[]` here instead, which meant a client island had to read and sign
+   * every slide up front — the path ENG-800 revoked.
+   *
+   * The be derives it as HIGHEST `sort_order` + 1, not a row count, so it is an
+   * upper bound: a non-contiguous `{0, 2}` reports 3 and index 1 mints to
+   * nothing. The carousel draws that as a blank slide, which is a gap rather
+   * than the silently-dropped photo a row count would produce.
    */
-  photos?: PostPhoto[];
+  slideCount?: number;
   watermarked: boolean;
   raceBadge?: { text: string; kind?: "race-day" | "result" } | null;
   count: number; // post.like_count

@@ -34,20 +34,6 @@ vi.mock("@/lib/supabase/client", () => ({
   supabaseBrowser: () => ({ from: fromMock }),
 }));
 
-// ENG-762 — the multi-photo carousel read. Mocked at the module boundary
-// rather than faked through the PostgREST chain: `readPostPhotos` owns its
-// own query + signing round trip and carries its own unit coverage
-// (lib/post-media.ts). `photosMock` starts empty (reset in the beforeEach
-// below) so every PRE-EXISTING test in this file — none of which touches it
-// — renders exactly as it did before ENG-762.
-import { readPostPhotos } from "@/lib/post-media";
-
-let photosMock = new Map<string, { url: string | null; sort: number }[]>();
-
-vi.mock("@/lib/post-media", () => ({
-  readPostPhotos: vi.fn(() => Promise.resolve(photosMock)),
-}));
-
 // Generic chainable builder (subscription gate + horse/reaction enrichment).
 function chainable(result: { data: unknown; error: unknown }) {
   const obj: Record<string, unknown> = {};
@@ -80,8 +66,6 @@ beforeEach(() => {
   bookmarkData = BOOKMARKS;
   bookmarkError = null;
   bookmarkDeleteError = null;
-  photosMock = new Map();
-  vi.mocked(readPostPhotos).mockClear();
   fromMock.mockReset();
   upsertMock.mockClear();
   orderMock.mockClear();
@@ -96,6 +80,32 @@ beforeEach(() => {
     }
     return chainable({ data: [], error: null });
   });
+  global.fetch = vi.fn((input: string | URL) => {
+    const url = String(input);
+    if (url === "/api/posts/media" || url.startsWith("/api/posts/media?")) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            items: [
+              { postId: "p1", mediaUrl: "https://sb.local/p1?token=abc" },
+              { postId: "p2", mediaUrl: "https://sb.local/p2?token=abc" },
+            ],
+            expiresAt: "2026-08-01T00:00:00.000Z",
+          },
+        }),
+      });
+    }
+    if (url.includes("/playback?posterOnly=1")) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { posterUrl: "https://sb.local/poster?token=abc", expiresAt: "2026-08-01T00:00:00.000Z" } }),
+      });
+    }
+    return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+  }) as unknown as typeof fetch;
 });
 
 describe("SavedFeed", () => {
@@ -374,22 +384,145 @@ describe("SavedFeed — ENG-613 view model", () => {
 });
 
 // ===========================================================================
-// ENG-762 — the multi-photo carousel, rendered through SavedFeed's REAL
-// mapper. Not a hand-built FeedPost/PostCard render: bypassing the mapper is
-// exactly the bug class ENG-772 exists to catch.
+// ENG-799 — post-media mint via BFF (no client createSignedUrls)
+// ===========================================================================
+describe("SavedFeed — ENG-799 post-media mint", () => {
+  it("makes exactly one POST /api/posts/media for a photo page", async () => {
+    bookmarkData = [
+      {
+        created_at: "2026-07-12T00:00:00.000Z",
+        post: {
+          id: "p1",
+          horse_id: "h1",
+          type: "photo",
+          body: "Trackwork.",
+          media_url: "media/p1.jpg",
+          poster_url: null,
+          watermarked: false,
+          like_count: 3,
+          published_at: "2026-07-10T00:00:00.000Z",
+        },
+      },
+    ];
+    const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
+
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Nature Strip");
+
+    const mediaCalls = fetchMock.mock.calls.filter((c) => String(c[0]) === "/api/posts/media");
+    expect(mediaCalls).toHaveLength(1);
+    expect(JSON.parse(String(mediaCalls[0][1]?.body))).toEqual({ postIds: ["p1"] });
+  });
+
+  it("omitted mint id → placeholder, not an error", async () => {
+    bookmarkData = [
+      {
+        created_at: "2026-07-12T00:00:00.000Z",
+        post: {
+          id: "p1",
+          horse_id: "h1",
+          type: "photo",
+          body: "Trackwork.",
+          media_url: "media/draft.jpg",
+          poster_url: null,
+          watermarked: false,
+          like_count: 3,
+          published_at: "2026-07-10T00:00:00.000Z",
+        },
+      },
+    ];
+    global.fetch = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url === "/api/posts/media") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { items: [], expiresAt: "2026-08-01T00:00:00.000Z" } }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    }) as unknown as typeof fetch;
+
+    const { container } = render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Nature Strip");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(container.querySelector(".post-media-web img")).toBeNull();
+  });
+});
+
+// ===========================================================================
+// ENG-762 / ENG-815 — the multi-photo carousel, rendered through SavedFeed's
+// REAL mapper. Not a hand-built FeedPost/PostCard render: bypassing the mapper
+// is exactly the bug class ENG-772 exists to catch. `slideCount` now rides in
+// on the SAME /api/posts/media batch the ENG-799 mint tests above already
+// stub, and slides 1+ mint one at a time by `{ postId, slideIndex }` through
+// that same route (ENG-809 decision 2) — there is no more client-side
+// `post_media` read to mock.
 // ===========================================================================
 describe("SavedFeed — ENG-762 multi-photo carousel", () => {
-  it("renders the multi-photo carousel (ENG-762)", async () => {
-    photosMock = new Map([
-      [
-        "p1",
-        [
-          { url: "https://signed.test/p1-0.jpg", sort: 0 },
-          { url: "https://signed.test/p1-1.jpg", sort: 1 },
-          { url: "https://signed.test/p1-2.jpg", sort: 2 },
-        ],
-      ],
-    ]);
+  function fetchWithCarousel(slideCount: number) {
+    bookmarkData = [
+      {
+        created_at: "2026-07-12T00:00:00.000Z",
+        post: {
+          id: "p1",
+          horse_id: "h1",
+          type: "photo",
+          body: "Trackwork.",
+          media_url: "media/p1.jpg",
+          poster_url: null,
+          watermarked: false,
+          like_count: 3,
+          published_at: "2026-07-10T00:00:00.000Z",
+        },
+      },
+    ];
+    return vi.fn((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/posts/media") {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        if ("postId" in body) {
+          // Slide N minted by index (usePostSlides), never a batch of ids.
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              data: {
+                postId: body.postId,
+                slideIndex: body.slideIndex,
+                mediaUrl: `https://sb.local/${body.postId}-${body.slideIndex}.jpg`,
+                expiresAt: "2026-08-01T00:00:00.000Z",
+              },
+            }),
+          });
+        }
+        // `slideCount` rides in on the SAME batch as slide 0's url, which is
+        // what lets the dots be right before any further slide is minted.
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              items: [{ postId: "p1", mediaUrl: "https://sb.local/p1-0.jpg", slideCount }],
+              expiresAt: "2026-08-01T00:00:00.000Z",
+            },
+          }),
+        });
+      }
+      if (url.includes("/playback?posterOnly=1")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { posterUrl: "https://sb.local/poster?token=abc", expiresAt: "2026-08-01T00:00:00.000Z" } }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    });
+  }
+
+  it("renders the multi-photo carousel (ENG-762 / ENG-815)", async () => {
+    const fetchMock = fetchWithCarousel(3);
+    global.fetch = fetchMock as unknown as typeof fetch;
 
     render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
     await screen.findByText("Nature Strip");
@@ -398,16 +531,17 @@ describe("SavedFeed — ENG-762 multi-photo carousel", () => {
     expect(screen.getByTestId("photo-dots").querySelectorAll("button")).toHaveLength(3);
     expect(screen.getByTestId("media-photo-count")).toHaveTextContent("1/3");
 
-    // WHICH IDS the screen actually asked for. Without this the call could be
-    // `readPostPhotos(sb, [])` and every assertion above would still pass — the
-    // mock ignores its arguments — while the carousel died on every real feed.
-    // That is the ENG-772 silent-drop class moved one layer up, and the e2e is
-    // explicitly not the guard for `app/(member)/**` reads (.rx/gotchas.md).
-    expect(vi.mocked(readPostPhotos)).toHaveBeenCalledWith(expect.anything(), ["p1", "p2"]);
+    // WHICH IDS the screen actually asked for, on the SAME batch that carries
+    // slideCount — the ENG-772 silent-drop class, moved onto the mint path.
+    const mediaCalls = fetchMock.mock.calls.filter((c) => String(c[0]) === "/api/posts/media");
+    const batch = mediaCalls
+      .map((c) => JSON.parse(String(c[1]?.body)))
+      .find((b) => "postIds" in b);
+    expect(batch).toEqual({ postIds: ["p1"] });
   });
 
-  it("renders no carousel for a single-photo post (ENG-762)", async () => {
-    photosMock = new Map([["p1", [{ url: "https://signed.test/p1-0.jpg", sort: 0 }]]]);
+  it("renders no carousel for a single-photo post (ENG-762 / ENG-815)", async () => {
+    global.fetch = fetchWithCarousel(1) as unknown as typeof fetch;
 
     render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
     await screen.findByText("Nature Strip");

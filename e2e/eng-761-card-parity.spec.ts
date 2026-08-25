@@ -105,7 +105,11 @@ test("ENG-761 PRIZEMONEY holds one line at 360px and (AUS) is stripped from the 
       sire: "Snitzel",
       dam: "Polar Success",
       sex: "gelding",
-      foaling_year: new Date().getFullYear() - 5,
+      // A LITERAL year, not `new Date().getFullYear() - n` (ENG-815). Age is
+      // derived in Postgres and ENG-617's guard greps the whole repo — e2e
+      // included — for date arithmetic, so a seed that computes a foaling year
+      // from an age trips it. Nothing here asserts on the rendered age.
+      foaling_year: 2021,
       training_status: "racing",
       status: "active",
       starts: 24,

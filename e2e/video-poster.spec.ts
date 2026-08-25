@@ -2,8 +2,9 @@ import { test, expect } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
 
 // End-to-end proof of the poster seam: BE bakes poster_url into the private
-// post-media bucket → the BFF selects it → the screen signs it → the card renders a
-// real frame instead of the empty box over dark green that members were seeing.
+// post-media bucket → list render mints via playback?posterOnly=1 (no stream)
+// → the card renders a real frame instead of the empty box over dark green.
+// Play still hits /api/posts/:id/playback without posterOnly to mint the stream.
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "http://127.0.0.1:54321";
 const SERVICE_ROLE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY ??
@@ -65,6 +66,15 @@ test("a video post with a baked poster renders the frame, not an empty box", asy
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL("**/explore");
 
+    const muxOrStreamMint: string[] = [];
+    page.on("request", (req) => {
+      const u = req.url();
+      if (u.includes("stream.mux.com")) muxOrStreamMint.push(u);
+      if (u.includes("/api/posts/") && u.includes("/playback") && !u.includes("posterOnly")) {
+        muxOrStreamMint.push(u);
+      }
+    });
+
     await page.goto(`/horses/${horse.id}`);
     const media = page.locator(".post-web .post-media-web").first();
     await expect(media).toBeVisible();
@@ -80,6 +90,8 @@ test("a video post with a baked poster renders the frame, not an empty box", asy
 
     // ...and it is still a video, so the play affordance stays.
     await expect(media.getByRole("button", { name: "Play video" })).toBeVisible();
+    // List render must not mint a Mux stream (playback without posterOnly).
+    expect(muxOrStreamMint).toEqual([]);
 
     // Capture the card itself — it sits below the profile header, so a viewport
     // screenshot would show the hero rather than the thing under review.

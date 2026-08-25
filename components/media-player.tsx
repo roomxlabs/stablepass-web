@@ -5,6 +5,7 @@
 // URL via the BFF (`POST /api/posts/:id/playback` — re-gated, W5) and swaps the
 // poster for a native <video>. No polling, no autoplay-on-mount.
 import { useState } from "react";
+import { PostMediaImage } from "./post-media-image";
 
 const Play = () => (
   <svg className="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16l13-8Z" fill="currentColor" stroke="none" /></svg>
@@ -53,12 +54,7 @@ export function MediaPlayer({ postId, posterUrl, duration }: MediaPlayerProps) {
 
   return (
     <div className="post-media-web">
-      {posterUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={posterUrl} alt="" />
-      ) : (
-        <div style={{ width: "100%", height: "100%" }} />
-      )}
+      <PostMediaImage postId={postId} src={posterUrl} video />
       <button
         className="media-play"
         type="button"

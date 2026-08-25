@@ -17,11 +17,11 @@ import {
   type PostIntrinsics,
   type PostIntrinsicsContext,
 } from "@/lib/feed/post-row";
-import type { PostPhoto, ReactionEmoji } from "@/components/types";
+import type { ReactionEmoji } from "@/components/types";
 
 // ── Type-level guard, the same trick as ENG-785's `LabelIsRequired` ──────────
 // `PostIntrinsics` is `Required<Pick<FeedPost, …>>`, and the `Required` is the
-// whole mechanism: three of those keys (`title?`, `body?`, `photos?`) are
+// whole mechanism: three of those keys (`title?`, `body?`, `slideCount?`) are
 // OPTIONAL on `FeedPost`, so a plain `Pick` would let the shared mapper quietly
 // omit one and still compile — exactly the bug class this ticket removes.
 // `T extends Required<T>` holds only when no key of T is optional, so relaxing
@@ -37,7 +37,7 @@ const INTRINSIC_KEYS = [
   "id",
   "label",
   "media",
-  "photos",
+  "slideCount",
   "postedAgo",
   "reacted",
   "title",
@@ -64,7 +64,7 @@ function row(over: Partial<PostIntrinsicRow> = {}): PostIntrinsicRow {
 function ctx(over: Partial<PostIntrinsicsContext> = {}): PostIntrinsicsContext {
   return {
     signedMedia: new Map<string, string>([["p1/original", "https://signed/p1"]]),
-    photosByPost: new Map<string, PostPhoto[]>(),
+    slideCountByPost: new Map<string, number>(),
     reactionByPost: new Map<string, ReactionEmoji>(),
     ...over,
   };
@@ -148,22 +148,21 @@ describe("postIntrinsics", () => {
     expect(postIntrinsics(nan, ctx()).media.aspectRatio).toBeNull();
   });
 
-  it("defaults photos to an empty array and reacted to null", () => {
+  it("defaults slideCount to 1 (the legacy no-rows case) and reacted to null", () => {
     const out = postIntrinsics(row(), ctx());
-    expect(out.photos).toEqual([]);
+    expect(out.slideCount).toBe(1);
     expect(out.reacted).toBeNull();
   });
 
-  it("reads photos and the viewer's own reaction from the batched maps", () => {
-    const photos: PostPhoto[] = [{ url: "https://signed/a", sort: 0 }];
+  it("reads slideCount and the viewer's own reaction from the batched maps", () => {
     const out = postIntrinsics(
       row(),
       ctx({
-        photosByPost: new Map([["p1", photos]]),
+        slideCountByPost: new Map([["p1", 4]]),
         reactionByPost: new Map<string, ReactionEmoji>([["p1", "clap"]]),
       }),
     );
-    expect(out.photos).toEqual(photos);
+    expect(out.slideCount).toBe(4);
     expect(out.reacted).toBe("clap");
   });
 

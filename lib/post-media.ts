@@ -1,117 +1,141 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
-import { POST_MEDIA_BUCKET, signPhotoMap } from "./storage/photos";
-import type { PostPhoto } from "@/components/types";
+"use client";
 
 /**
- * post-media — the multi-photo read (round 6 / ENG-762), the web twin of
- * mobile's `lib/post-media.ts` (ENG-757). One file, so the five member surfaces
- * that each carry their own row type and mapper share ONE definition of how
- * `post_media` is read and signed instead of five that drift.
+ * post-media — how a carousel gets its slides (round 6 / ENG-762, repointed by
+ * ENG-815 onto the mint helper this file used to bypass).
  *
- * WHY A SEPARATE TABLE READ AND NOT A WIDER `post` PROJECTION. Two reasons, and
- * the second is the load-bearing one:
+ * WHAT THIS FILE USED TO DO, AND WHY IT COULD NOT SURVIVE THE MERGE. ENG-762
+ * read `post_media` directly from a client island under RLS and signed each
+ * slide with `signPhotoMap(sb, POST_MEDIA_BUCKET, …)`. ENG-800 then revoked
+ * member SELECT on that bucket and ENG-799 routed every post-media byte through
+ * `POST /api/posts/media`, so `signPhotoMap` is now deny-by-construction for
+ * `post-media` and returns an empty map. Keeping the old body across the merge
+ * would therefore have compiled, type-checked and rendered — as a carousel whose
+ * every slide is `null`. That is the "signs a revoked bucket" half of ENG-815.
  *
- * 1. It is the contract's own instruction (ENG-740's api-contract): "One batched
- *    read per feed page, direct PostgREST under RLS ... Do not query per post."
+ * WHAT IT DOES NOW. Slides are addressed as `{ postId, slideIndex }` and minted
+ * one at a time by the server (ENG-809 decision 2). NO STORAGE PATH IS EVER
+ * CONSTRUCTED OR SENT from here — that property, not the secrecy of a path, is
+ * what stops a member minting another post's or a draft's objects, because the
+ * server resolves the path itself under the caller's own RLS.
  *
- * 2. `post_media` is NOT deployed on `stablepass-be` main — it exists only on
- *    `feature/round6-v1`. An explicit PostgREST projection naming a column that
- *    is not deployed fails `42703`/HTTP 400, and because our reads destructure
- *    only `data`, that surfaces as a cheerful empty result — a SILENT total
- *    content blackout, not an error (.rx/gotchas.md). Widening the `post`
- *    projection would therefore blank the entire feed anywhere the migration has
- *    not landed. Isolated in its own query, the same failure costs only the
- *    carousel: `readPostPhotos` returns an empty map, every card falls back to
- *    `post.media_url`, and the feed renders exactly as it does today.
+ * PREFETCH ONE AHEAD (ENG-809 decision 1). Slide 0 is never requested here: it
+ * arrives in the feed page's existing batch, alongside the `slideCount` that
+ * draws the dots. This hook mints the ACTIVE slide and the one after it, so a
+ * mounted carousel costs one extra URL and a swipe costs one more — roughly two
+ * per post rather than the ten an eager mint would burn, ~190 of which per feed
+ * page nobody ever looks at.
  *
- * WHERE THIS RUNS — stated plainly, because the ticket's prose says otherwise.
- * ENG-762 describes the BFF signing "server-side per house pattern". It does not:
- * all five call sites are `"use client"` islands passing `supabaseBrowser()`, so
- * both the select AND the signing happen in the browser, and the bare object path
- * (`<postId>/original`) is visible to browser JS in between. That is the EXISTING
- * house pattern — `lib/storage/photos.ts` is already called exactly this way for
- * `post.media_url` and `poster_url` on every one of those screens — so this
- * follows it rather than inventing a second mechanism beside it.
- *
- * The boundary is RLS, not secrecy of the path, and it was checked against the
- * running stack rather than assumed:
- *   - bucket `post-media` is PRIVATE, so an unsigned path fetches nothing;
- *   - `post_media_select_sub` requires the parent post be `status = 'published'`
- *     AND `has_content_access(auth.uid())`;
- *   - `storage.objects` policy `media gated read` requires
- *     `has_content_access(auth.uid()) OR is_admin(auth.uid())` to mint a URL.
- * A lapsed or signed-out viewer can therefore neither read the rows nor sign a
- * path. What must never happen is a raw path reaching an `<img src>` in place of
- * a signed URL — that is what the unit tests and the e2e actually assert.
+ * "Once the post is on screen" is approximated by MOUNT, deliberately. A
+ * carousel only mounts for a post with 2+ slides, which is rare, and this app
+ * has no IntersectionObserver anywhere (nor does jsdom, like `ResizeObserver` —
+ * see `PostCaption`). Mount-time is therefore the honest reading of the locked
+ * decision's intent — "roughly 2 URLs per post" — without inventing a second
+ * visibility mechanism beside the one the card already lacks.
  */
+import { useEffect, useRef, useState } from "react";
+import { fetchPostMediaSlide } from "@/lib/api/post-media";
 
 /**
- * The exact projection. Pinned as an exported constant because a test asserting
- * it with `.toBe(...)` is the only thing that catches BOTH failure directions —
- * too narrow silently starves the carousel, too wide silently blanks the read —
- * and `sb` is untyped, so `tsc` catches neither.
+ * The highest addressable slide ordinal. Mirrors the be's own bound — the
+ * `post_media_sort_order_range check (sort_order between 0 and 9)` that
+ * `supabase/functions/post-media/index.ts` re-states as `MAX_SLIDE_INDEX` — so
+ * this client never asks for an index the server would reject as malformed.
+ * Restated here rather than imported: web and be are separate codebases and a
+ * "see the other repo" reference is how they drift.
  */
-export const POST_MEDIA_COLUMNS = "post_id, sort_order, media_url";
+export const MAX_SLIDE_INDEX = 9;
 
-type PostMediaRow = {
-  post_id: string;
-  sort_order: number;
-  media_url: string | null;
-};
+/** One more than `MAX_SLIDE_INDEX`: the most slides a post can carry. */
+export const MAX_SLIDE_COUNT = MAX_SLIDE_INDEX + 1;
 
 /**
- * Batched: ONE select and ONE signing round trip for a whole page of posts.
+ * The batch's `slideCount`, made safe to draw with.
  *
- * Returns a map keyed by post id. A post with no rows is simply absent — which
- * is every legacy post, since ENG-740 ships no backfill. The contract is
- * explicit that "0 rows" and "1 photo" are the SAME rendering case (no dots, no
- * pager), because `post.media_url` mirrors the `sort_order = 0` row; deciding
- * that is the card's job, so this returns whatever the table holds.
+ * The value arrives over the wire from an untyped JSON body, and the be derives
+ * it as HIGHEST ORDINAL + 1 rather than a row count — deliberately, so a
+ * non-contiguous `{0, 2}` reports 3 and the client skips a gap instead of losing
+ * a photo. That means it is an upper bound, not a promise that every index
+ * resolves: index 1 of `{0, 2}` comes back `null` and draws a blank slide. The
+ * floor is 1 because "no `post_media` rows" and "one photo" are the same
+ * rendering case (ENG-809 decision 3) — `post.media_url` mirrors slide 0.
  */
-export async function readPostPhotos(
-  sb: SupabaseClient,
-  postIds: ReadonlyArray<string>,
-): Promise<Map<string, PostPhoto[]>> {
-  const out = new Map<string, PostPhoto[]>();
-  const ids = Array.from(new Set(postIds.filter(Boolean)));
-  if (ids.length === 0) return out;
+export function clampSlideCount(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 1;
+  const whole = Math.floor(value);
+  if (whole < 1) return 1;
+  return Math.min(MAX_SLIDE_COUNT, whole);
+}
 
-  // `error` is deliberately inspected rather than dropped: an undeployed table
-  // reads back as `{ data: null, error }`, and treating that as "no photos" is
-  // the correct degrade — but silently, so the feed still renders.
-  const { data, error } = await sb
-    .from("post_media")
-    .select(POST_MEDIA_COLUMNS)
-    .in("post_id", ids)
-    .order("post_id", { ascending: true })
-    .order("sort_order", { ascending: true });
+/**
+ * The slides minted so far, keyed by index. Absent means "not minted": either
+ * not asked for yet, or asked and refused. Those two are deliberately the SAME
+ * rendering state — a blank slide — because distinguishing them on screen is
+ * exactly how a draft's existence would leak.
+ *
+ * Slide 0 is NOT in this map. It comes from the page batch and is passed to the
+ * carousel separately, so the two sources can never disagree about index 0.
+ */
+export type MintedSlides = ReadonlyMap<number, string>;
 
-  if (error || !data) return out;
+/**
+ * Mint the active slide and the next one, once each.
+ *
+ * `asked` is a ref, not state: an index must be marked before its request is
+ * awaited or a re-render between the two fires a second identical mint. A slide
+ * that comes back `null` STAYS asked and is never retried — a draft, a gap in
+ * `sort_order`, or a gated slide must cost one refusal, not one per scroll.
+ * Recovery from a genuinely EXPIRED slide is not this hook's job: that is the
+ * `<img>`'s own `onError` (ENG-813), which re-mints by index through
+ * `PostMediaImage`.
+ */
+export function usePostSlides(postId: string, slideCount: number, active: number): MintedSlides {
+  const total = clampSlideCount(slideCount);
+  const [minted, setMinted] = useState<MintedSlides>(() => new Map());
+  const asked = useRef<Set<number>>(new Set());
 
-  const rows = data as unknown as PostMediaRow[];
-
-  // One signing round trip for every path on the page. `signPhotoMap` dedupes
-  // and degrades per key, so a single unsignable object costs its own slide and
-  // nothing else.
-  const signed = await signPhotoMap(sb, POST_MEDIA_BUCKET, rows.map((r) => r.media_url));
-
-  for (const row of rows) {
-    if (!row?.post_id) continue;
-    const list = out.get(row.post_id) ?? [];
-    list.push({
-      // `null` when this one object failed to sign. The slide draws the media
-      // ground and its siblings still render.
-      url: row.media_url ? signed.get(row.media_url) ?? null : null,
-      sort: row.sort_order,
-    });
-    out.set(row.post_id, list);
+  // Reset when this element is reused for a DIFFERENT post. Defensive rather
+  // than currently exercised — every carousel mounts under a post-keyed card —
+  // but a stale slide map is a photo from the wrong horse, so it is cheap
+  // insurance. Same "adjust state on a prop change" shape as `PostMediaImage`:
+  // the setState pair happens in render, the REF mutation in the effect below,
+  // because mutating a ref during render is unsound (`react-hooks/refs`).
+  const [seenPost, setSeenPost] = useState(postId);
+  if (postId !== seenPost) {
+    setSeenPost(postId);
+    setMinted(new Map());
   }
+  useEffect(() => {
+    asked.current = new Set();
+  }, [seenPost]);
 
-  // Re-sort in memory rather than trusting the wire order. PostgREST honours the
-  // `order` above today, but the ORDER is the product behaviour here — the admin
-  // chose it — and `sort_order` is documented as possibly NON-CONTIGUOUS
-  // (`{0,3,7}` is legal), so nothing may infer position from array index.
-  for (const list of out.values()) list.sort((a, b) => a.sort - b.sort);
+  useEffect(() => {
+    // Index 0 is excluded BY CONSTRUCTION, not by luck: it is already minted in
+    // the page batch, and re-requesting it here would double every feed page's
+    // mint traffic for no new pixel.
+    const wanted = [active, active + 1].filter(
+      (i) => i >= 1 && i < total && i <= MAX_SLIDE_INDEX && !asked.current.has(i),
+    );
+    if (wanted.length === 0) return;
+    for (const i of wanted) asked.current.add(i);
 
-  return out;
+    let cancelled = false;
+    void Promise.all(
+      wanted.map(async (i) => {
+        const url = await fetchPostMediaSlide(postId, i);
+        if (cancelled || !url) return;
+        setMinted((prev) => {
+          if (prev.get(i) === url) return prev;
+          const next = new Map(prev);
+          next.set(i, url);
+          return next;
+        });
+      }),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [postId, seenPost, active, total]);
+
+  return minted;
 }
