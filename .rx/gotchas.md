@@ -235,14 +235,28 @@ slash once the element is a `<Link>` — mutate to an ABSOLUTE url
 failure mode anyway.
 
 ## Converting an anchor to `<Link>` is not behaviour-neutral — it adds prefetch
-`<Link>` prefetches on viewport entry in a production build. Measured on `/start`
-(ENG-598): loading the page fires RSC requests with `Next-Router-Prefetch: 1` for
-every linked route. Harmless for a prerendered `●` route, but `/signin` is `ƒ`
-dynamic and its server component calls `supabaseServer()` + `auth.getUser()`, and
-there are no `loading.tsx` boundaries anywhere in `app/` — so each view of the
-signup page now costs an extra Supabase round-trip it did not before. If a ticket
-claims "no behaviour change" for an anchor→Link swap, that is true of the markup
-and false of the network. `prefetch={false}` restores strict parity.
+`<Link>` prefetches on viewport entry in a production build, so an anchor→Link
+swap is behaviour-neutral in the MARKUP and not in the NETWORK. Measured on
+`/start` (ENG-598, `next start` + Playwright counting requests carrying
+`Next-Router-Prefetch: 1`): the page fired prefetches for all three linked
+routes.
+
+**Decide per link, by route type — the split is the point.**
+- `●` prerendered (here `/legal/[slug]`): leave the default on. The prefetch is a
+  static payload and genuinely speeds the tap.
+- `ƒ` dynamic (here `/signin`): its server component awaits `supabaseServer()`
+  then `auth.getUser()`, and there is NO `loading.tsx` anywhere under `app/` for
+  the prefetch to stop at, so the default renders the whole page server-side and
+  spends a Supabase round-trip on every view of the page holding the link.
+
+**Done in ENG-598:** `prefetch={false}` on the `/signin` link only, with an
+in-file comment explaining the asymmetry so nobody normalises it away. Measured
+before/after on the same build: `/signin` prefetches 2 → 0 while `/legal/*` kept
+prefetching (4 and 7). Verified `prefetch={false}` does NOT downgrade the click
+to a full page load — a `window` marker set on `/start` survives the navigation
+to `/signin`, i.e. it is still a soft client-side nav; only the speculative fetch
+is gone. `prefetch` is also not an attribute, so the rendered DOM stays
+byte-identical (1832 chars) and an href-asserting test is untouched by it.
 
 ## A source-grep guardrail cannot see the layout chain — assert the build instead
 "These routes stay static" greped over the route's own directory passes happily

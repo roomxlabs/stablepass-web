@@ -282,8 +282,25 @@ export function TrialStartForm() {
         <Link href="/legal/privacy">Privacy Policy</Link>.
       </div>
 
+      {/*
+        prefetch={false} on THIS link only, deliberately — do not "tidy" it into
+        consistency with the two legal links above.
+
+        The asymmetry tracks the route type. `/legal/[slug]` builds as `●`
+        (prerendered via generateStaticParams), so prefetching it costs a static
+        payload and genuinely speeds up the Terms/Privacy tap. `/signin` builds
+        as `ƒ` (dynamic): its server component awaits `supabaseServer()` and then
+        `auth.getUser()`, and there is no `loading.tsx` anywhere under `app/` to
+        give the prefetch a static shell to stop at. So the default viewport
+        prefetch would render the whole page server-side and spend a Supabase
+        round-trip on EVERY view of the signup form — the highest-intent page on
+        the site — for a navigation most visitors here never make.
+
+        This keeps ENG-598 what it says it is: a lint fix, with no behaviour
+        change at the network layer either.
+      */}
       <div className="auth-foot">
-        Already a member? <Link href="/signin">Sign in</Link>
+        Already a member? <Link href="/signin" prefetch={false}>Sign in</Link>
       </div>
     </form>
   );
