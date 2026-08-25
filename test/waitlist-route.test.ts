@@ -34,9 +34,16 @@ const RPC_NAME = "waitlist_join";
 const rpcMock = vi.fn((_fn?: string, _args?: { p_email: string }) => rpcResolution({ error: null }));
 
 // `from` is still exposed on the mocked client — and it THROWS. Since ENG-802
-// the route must never reach the table again; if it ever did, this makes the
-// test fail loudly (a rejected POST) instead of silently passing because
-// `from` happened to return something plausible-looking.
+// the route must never reach the table again, and a throwing stub means a
+// regression cannot pass merely because `from` returned something
+// plausible-looking.
+//
+// Be precise about HOW it fails, because it is not what you would assume: the
+// throw happens INSIDE the route's own try/catch (the one guarding client
+// construction), so the POST does NOT reject — it resolves as a generic 500.
+// The belt therefore holds, but via the explicit assertions in each test, not
+// via an unhandled rejection. Test 12 is the braces: it asserts
+// `fromMock` was never called at all.
 const fromMock = vi.fn((_table?: string) => {
   throw new Error("route must not touch the table directly");
 });
@@ -387,13 +394,22 @@ describe("POST /api/waitlist — JSON dialect (caller sends Accept: application/
   });
 
   it("11. never chains .select() off the RPC — waitlist_join returns void, so there is nothing to project", async () => {
-    // The function returns `void`, so there is nothing to project: `?select=*`
-    // still answers 204, and naming a column raises 42703. Note explicitly:
-    // the familiar 42501 "RETURNING needs a SELECT policy" trap is real, but
-    // it belongs to the DIRECT-TABLE path — a SECURITY DEFINER body is not
-    // gated by the caller's RLS at all. An earlier draft of the BE contract
-    // asserted otherwise and was corrected; do not carry that reasoning here.
-    await POST(jsonReq({ email: "a@b.co" }));
+    const res = await POST(jsonReq({ email: "a@b.co" }));
+
+    // Positive assertions FIRST. This test used to be all-negative, which the
+    // repo has a documented trap for (.rx/gotchas.md): a lone
+    // `expect(selectMock).not.toHaveBeenCalled()` passes just as happily if the
+    // route 400s on this address, or stops calling the RPC altogether, in which
+    // case it proves nothing at all.
+    expect(res.status).toBe(200);
+    expect(rpcMock).toHaveBeenCalledWith(RPC_NAME, { p_email: "a@b.co" });
+
+    // MEASURED on the live stack, so the reason here is not folklore:
+    // `?select=*` -> 204 with no body; `?select=id` -> 400 42703 "column
+    // waitlist_join.id does not exist". So chaining .select() is POINTLESS
+    // rather than dangerous. The familiar 42501 "RETURNING needs a SELECT
+    // policy" wall belongs to the DIRECT-TABLE path and does not transfer: a
+    // SECURITY DEFINER body is not gated by the caller's RLS at all.
     expect(selectMock).not.toHaveBeenCalled();
   });
 
@@ -453,6 +469,40 @@ describe("POST /api/waitlist — JSON dialect (caller sends Accept: application/
     expect(JSON.stringify(body)).not.toContain("Failing row");
     expect(JSON.stringify(body)).not.toContain("018f0f34");
     expect(JSON.stringify(body)).not.toContain("marketing");
+  });
+
+  // ENG-802 deleted the 23505 -> success mapping, and a source-grep test now
+  // bans the literal from route.ts. That turns "what happens if a unique
+  // violation reaches this route?" from an implementation detail into an
+  // unexamined absence, so this case records the answer rather than leaving it
+  // to be rediscovered.
+  //
+  // It falls through to the generic 500. That is acceptable ONLY because the
+  // function cannot produce it: `waitlist_join` absorbs the conflict in its own
+  // body with an UNTARGETED `on conflict do nothing`, measured 204-on-repeat.
+  // Note what that means, though — anti-enumeration is now a DATABASE
+  // invariant, not a route one. If that function ever gained a conflict TARGET,
+  // duplicates would arrive here as 23505, answer 500 where a fresh join
+  // answers 200, and the oracle this epic exists to close would be back — and
+  // after ENG-803 this route is the only signup path, so it would be the whole
+  // oracle. Nothing in THIS repo can catch that; ENG-770's RLS tests own it.
+  // This test exists to make that boundary explicit and to fail loudly if the
+  // route's handling of the code is ever changed without revisiting the above.
+  it("15. a unique violation is no longer expected, and is recorded as falling to the generic 500", async () => {
+    rpcMock.mockImplementationOnce(() => rpcResolution({ error: { code: "23505" } }));
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await POST(jsonReq({ email: "dupe@example.co" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body).toEqual({
+      error: { code: "waitlist_failed", message: "Something went wrong. Please try again." },
+    });
+    // Still no leak of the SQLSTATE to the caller.
+    expect(JSON.stringify(body)).not.toContain("23505");
+
+    consoleErrorSpy.mockRestore();
   });
 });
 

@@ -14,8 +14,24 @@
  * ── THIS ROUTE DEVIATES FROM THE ENG-726 TICKET IN THREE PLACES ──────────────
  * The ticket was written before ENG-723 landed and was never updated. The
  * authoritative contract is stablepass-be `docs/specs/api-contract.md`
- * § Waitlist, whose "What the route must implement (ENG-726)" table this file
- * implements. The three deviations, all deliberate:
+ * § Waitlist -- specifically its "The waitlist_join function (ENG-770)"
+ * subsection, which is what this file now implements.
+ *
+ * READ THE RIGHT SECTION. That document still carries an older
+ * "What the route must implement (ENG-726)" table whose rows say `201`/`409`
+ * and map a duplicate unique violation to success. Those rows describe it as it
+ * was BEFORE this change, and the contract says so itself, immediately above
+ * them: "Once ENG-802 repoints it at `waitlist_join`, both collapse to a single
+ * `204` and the duplicate row disappears. Do not implement the table below and
+ * the section above at the same time." This file implements the section above.
+ *
+ * One genuinely stale heading is left over there: "### Insert idiom -- the only
+ * supported one", plus the `409` duplicate column of the `waitlist` row,
+ * both of which predate ENG-770 and are not covered by that note. Correcting
+ * them is a stablepass-be edit, so it is filed as a follow-up rather than done
+ * from this repo.
+ *
+ * The three deviations from the TICKET, all deliberate:
  *
  *   1. IDIOM   — ticket says `.upsert(…)`; the write now goes through the
  *                `waitlist_join` RPC (ENG-802). See below.
@@ -43,10 +59,12 @@
  *     `PGRST202` ("no function matches the given name and argument types"),
  *     which would fall through to the 500 branch — not a silent no-op.
  *   * No `.select()`. The function returns `void`, so there is nothing to
- *     project: `?select=*` still answers `204`, and naming a column raises
- *     `42703`. (The familiar `42501` "RETURNING needs a SELECT policy" trap is
- *     real, but it belongs to the DIRECT-TABLE path — a SECURITY DEFINER body is
- *     not gated by the caller's RLS at all. Do not carry that reasoning here.)
+ *     project. MEASURED on the live stack, not inferred:
+ *     `POST /rest/v1/rpc/waitlist_join?select=*` -> `204` with no body, and
+ *     `?select=id` -> `400 42703` "column waitlist_join.id does not exist".
+ *     (The familiar `42501` "RETURNING needs a SELECT policy" trap is real, but
+ *     it belongs to the DIRECT-TABLE path — a SECURITY DEFINER body is not
+ *     gated by the caller's RLS at all. Do not carry that reasoning here.)
  *
  * This is the MIGRATE step of an expand → migrate → contract sequence. ENG-770
  * added the function additively and deliberately left `anon` INSERT in place, so
@@ -105,8 +123,9 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * 22P05 "unsupported Unicode escape sequence" — which is not the CHECK
  * violation below (nor, before ENG-802, the unique violation), so it would fall
  * through to the generic 500 branch and let an unauthenticated caller
- * manufacture server errors and log lines with a one-character payload. A control character is never part of a real address;
- * reject it here as ordinary bad input, with the ordinary 400.
+ * manufacture server errors and log lines with a one-character payload. A
+ * control character is never part of a real address; reject it here as
+ * ordinary bad input, with the ordinary 400.
  */
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/;
 
