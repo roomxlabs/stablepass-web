@@ -17,37 +17,69 @@
  * § Waitlist, whose "What the route must implement (ENG-726)" table this file
  * implements. The three deviations, all deliberate:
  *
- *   1. IDIOM   — ticket says `.upsert(…)`; contract says a bare `.insert()`.
+ *   1. IDIOM   — ticket says `.upsert(…)`; the write now goes through the
+ *                `waitlist_join` RPC (ENG-802). See below.
  *   2. STATUS  — ticket says `201 {data:{joined:true}}`; contract says
  *                `200 {data:{ok:true}}`.
  *   3. CODE    — ticket says `validation_failed`; contract says `invalid_email`.
  *
- * ── WHY THE INSERT IDIOM IS LOAD-BEARING ─────────────────────────────────────
- * A bare `.insert({ email })`. No `.select()`, and NO `.upsert()`.
+ * ── THE WRITE PATH IS THE `waitlist_join` RPC (ENG-802) ──────────────────────
+ * `supabase.rpc("waitlist_join", { p_email })`. NOT `.from("waitlist").insert()`,
+ * not `.upsert()`, and no `.select()` chained off it.
  *
- * ENG-723 measured the upsert against local PostgREST and it does not work — it
- * fails on EVERY insert, not just duplicates:
+ * ENG-770 added `public.waitlist_join(p_email text) returns void` — SECURITY
+ * DEFINER, `search_path` pinned, EXECUTE granted to `anon` — whose body does an
+ * UNTARGETED `on conflict do nothing`. That single change moves dedupe from this
+ * route into the database:
  *
- *   * With no `onConflict`, supabase-js sends `Prefer: resolution=ignore-
- *     duplicates` and PostgREST aims the ON CONFLICT arbiter at the table's
- *     PRIMARY KEY. A *targeted* arbiter requires SELECT-checkable visibility
- *     under row security, which `anon` deliberately does not have on `waitlist`,
- *     so it raises 42501 even for a brand-new address.
- *   * `onConflict: "email"` raises 42P10: `idx_waitlist_email` is an EXPRESSION
- *     index on `lower(email)`, not a plain unique constraint, and PostgREST's
- *     `on_conflict` takes a column list that cannot name the expression at all.
- *   * `.select()` after an insert becomes INSERT … RETURNING, whose returned row
- *     must also satisfy a SELECT policy the caller has none of — 42501 on an
- *     otherwise successful write. (That trap is documented in **stablepass-be**'s
- *     `.rx/gotchas.md`, not this repo's.)
+ *   * A duplicate is swallowed INSIDE the function and never surfaces as an
+ *     error at all. PostgREST answers `204` for a fresh join and a repeat join
+ *     alike, so there is no longer a unique-violation code for this route to
+ *     map — that mapping was deleted rather than left as dead code. The literal
+ *     SQLSTATE is deliberately absent from this whole file; a source-grep test
+ *     pins that, so the dead branch cannot creep back in.
+ *   * The argument name is `p_email`, NOT `email`. PostgREST matches the JSON
+ *     body's keys to the function's parameter NAMES; a wrong key raises
+ *     `PGRST202` ("no function matches the given name and argument types"),
+ *     which would fall through to the 500 branch — not a silent no-op.
+ *   * No `.select()`. The function returns `void`, so there is nothing to
+ *     project: `?select=*` still answers `204`, and naming a column raises
+ *     `42703`. (The familiar `42501` "RETURNING needs a SELECT policy" trap is
+ *     real, but it belongs to the DIRECT-TABLE path — a SECURITY DEFINER body is
+ *     not gated by the caller's RLS at all. Do not carry that reasoning here.)
+ *
+ * This is the MIGRATE step of an expand → migrate → contract sequence. ENG-770
+ * added the function additively and deliberately left `anon` INSERT in place, so
+ * both paths work right now; ENG-803 then revokes the direct grant, which is
+ * what actually closes the enumeration channel. Do not revoke anything here.
+ *
+ * ── NEVER FORWARD `error.details` ────────────────────────────────────────────
+ * Measured in ENG-770: because the definer body runs as its OWNER (`postgres`,
+ * which holds BYPASSRLS), Postgres no longer suppresses the failing-row DETAIL
+ * the way it does on the direct-table path. A `23514` through this RPC comes
+ * back with `"details": "Failing row contains (…, not-an-email, null, …)"` —
+ * the table's whole column list and order, echoed to an anonymous caller. The
+ * `error` binding below is deliberately typed as `{ code?: string }` and nothing
+ * else, so `details` and `message` cannot be read without first widening that
+ * type. Treat the type as the FIRST barrier, not the only one -- widening it is
+ * a one-word edit that typechecks cleanly, so the real guard is the test: case 9
+ * in test/waitlist-route.test.ts drives the 500 branch with a populated
+ * `details` and asserts the failing row reaches neither the body nor the log.
+ *
+ * Note WHICH branch that is. The 23514 path answers through `rejectEmail()`,
+ * whose envelope is a fixed literal, so nothing can escape there even
+ * deliberately; every OTHER error, including a definer-unmasked `details`,
+ * arrives at the generic 500 below. That is the branch worth guarding.
  *
  * ── NO ENUMERATION THROUGH THIS ROUTE ────────────────────────────────────────
- * A duplicate answers byte-identically to a fresh insert, and the DB CHECK
- * (23514) answers byte-identically to our own validation rejection. Any
- * distinguishable branch would turn this into an "is this address already signed
- * up?" oracle. (ENG-770 records that a caller holding the publishable anon key
- * can still membership-test directly against PostgREST via 201-vs-409; that is
- * accepted pre-launch risk and is NOT closable here.)
+ * A duplicate answers byte-identically to a fresh join — now because the
+ * function swallows the conflict rather than because this route maps a code —
+ * and the DB CHECK (23514) answers byte-identically to our own validation
+ * rejection. Any distinguishable branch would turn this into an "is this address
+ * already signed up?" oracle. (Until ENG-803 lands, a caller holding the
+ * publishable anon key can still membership-test by POSTing DIRECTLY to the
+ * table over PostgREST, where `201`-vs-`409` still differ. That path is not
+ * closable from here; closing it is exactly what ENG-803 does.)
  */
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse } from "next/server";
@@ -70,10 +102,10 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /**
  * C0/C1 controls and DEL. `\s` does NOT match most of these (NUL and BEL both
  * sail through `EMAIL_RE`), and a NUL specifically is rejected by Postgres with
- * 22P05 "unsupported Unicode escape sequence" — which is neither 23505 nor
- * 23514, so it would fall through to the generic 500 branch and let an
- * unauthenticated caller manufacture server errors and log lines with a
- * one-character payload. A control character is never part of a real address;
+ * 22P05 "unsupported Unicode escape sequence" — which is not the CHECK
+ * violation below (nor, before ENG-802, the unique violation), so it would fall
+ * through to the generic 500 branch and let an unauthenticated caller
+ * manufacture server errors and log lines with a one-character payload. A control character is never part of a real address;
  * reject it here as ordinary bad input, with the ordinary 400.
  */
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/;
@@ -91,8 +123,16 @@ const ZERO_WIDTH = /[\u200b-\u200d\u2060\ufeff]/g;
 /** RFC 5321 caps a forward path at 254 characters; longer is never a real address. */
 const MAX_EMAIL_LENGTH = 254;
 
-/** Postgres SQLSTATEs, as surfaced by PostgREST through supabase-js. */
-const UNIQUE_VIOLATION = "23505";
+/**
+ * Postgres SQLSTATE, as surfaced by PostgREST through supabase-js.
+ *
+ * Only ONE remains. The unique-violation code used to be mapped to success here
+ * because a duplicate reached this route as an error; since ENG-802 the
+ * `waitlist_join` function absorbs the conflict in its own body, so a duplicate
+ * never surfaces at all and that mapping was deleted rather than kept as dead
+ * code. `23514` still reaches us: `on conflict do nothing` swallows unique
+ * violations ONLY, never a CHECK violation.
+ */
 const CHECK_VIOLATION = "23514";
 
 /**
@@ -259,7 +299,7 @@ export async function POST(req: Request) {
 
   let error: { code?: string } | null = null;
   try {
-    ({ error } = await waitlistClient().from("waitlist").insert({ email: normalised }));
+    ({ error } = await waitlistClient().rpc("waitlist_join", { p_email: normalised }));
   } catch (cause) {
     // Client construction or transport threw outright (e.g. the public env vars
     // are missing). Without this the framework returns a bodyless 500 and the
@@ -271,18 +311,23 @@ export async function POST(req: Request) {
   }
 
   if (error) {
-    // Already on the list. Indistinguishable from a fresh join, by design.
-    if (error.code === UNIQUE_VIOLATION) return success();
+    // NOTE: there is deliberately no duplicate branch here any more. A repeat
+    // address is absorbed inside `waitlist_join` and arrives as `error === null`
+    // — the same value a first-time join produces — so "indistinguishable from a
+    // fresh join" is now a property of the write path itself rather than
+    // something this handler reconstructs after the fact.
 
-    // The table's own shape CHECK. This route is strictly stricter than that
-    // constraint (see EMAIL_RE), so it is unreachable in practice — and it
-    // answers exactly as our own validation does, because a distinguishable
-    // branch here would reintroduce the oracle the 23505 mapping closes.
+    // The table's own shape CHECK, which the function does NOT swallow. This
+    // route is strictly stricter than that constraint (see EMAIL_RE), so it is
+    // unreachable in practice — and it answers exactly as our own validation
+    // does, because a distinguishable branch here would reintroduce the oracle.
     if (error.code === CHECK_VIOLATION) return rejectEmail();
 
-    // Never forward the PostgREST error to the caller. The code alone is logged
-    // — never the address, which is the only PII this endpoint touches.
-    console.error("waitlist insert failed", error.code);
+    // Never forward the PostgREST error to the caller — and through a definer
+    // RPC that means `error.details` specifically, which carries the whole
+    // failing row (see the header). The code alone is logged, never the address,
+    // which is the only PII this endpoint touches.
+    console.error("waitlist join failed", error.code);
     return json
       ? fail("waitlist_failed", "Something went wrong. Please try again.", 500)
       : seeOther(NOT_JOINED_SERVER);

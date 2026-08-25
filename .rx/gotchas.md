@@ -900,3 +900,57 @@ overwrites XFH so it is not live in production. Case is the other carve-out:
 everything here is case-sensitive, so `/API/…` is contained by Next's router, not by
 middleware. State the guarantee as "every request whose PUBLIC HOST resolves to
 marketing" — never as unqualified "total".
+
+## Running the e2e suite REWRITES 57 tracked PNGs under `.rx/review/` (ENG-802)
+**Symptom:** you run `npx playwright test`, then `git status` shows ~57 modified
+`.rx/review/*.png` you never touched. Commit blindly (`git add -A`) and your PR
+sprawls far outside its declared surface, which is exactly what the collision
+rule exists to prevent.
+
+**Cause:** `e2e/screenshots.spec.ts` writes its artefacts straight into the
+tracked `.rx/review/` directory rather than a gitignored one, so every full e2e
+run regenerates all of them — the bytes differ even when nothing visual changed.
+
+**Do this:** after any full e2e run, `git checkout -- .rx/review/` before
+staging, and always `git add` explicit paths rather than `-A`. If your ticket
+genuinely produces screenshot evidence, add only the PNGs it names.
+
+## `next dev` refuses a second server in the SAME directory — it kills the e2e run (ENG-802)
+**Symptom:** `npx playwright test` dies instantly with `Process from
+config.webServer was not able to start. Exit code: 1`, and the WebServer log
+says `Another next dev server is already running.` naming a PID and *your own
+worktree*.
+
+**Cause:** the port-ownership scheme in `playwright.config.ts` derives a port per
+checkout, so a manually-started `npm run dev -- --port <other>` in the SAME
+worktree does not collide on the PORT — but Next still refuses to run two dev
+servers from one directory, whatever the ports.
+
+**Do this:** kill your own dev server before running e2e in that worktree. If you
+need a hand-driven server AND the e2e suite, put the manual one in a second
+worktree.
+
+## macOS has no `timeout(1)` (ENG-802)
+`timeout 900 npx playwright test` fails with `command not found: timeout` and
+exit 127 — which looks like the test command failing rather than the wrapper
+missing. Use `gtimeout` (coreutils) if installed, or just omit it and run in the
+background.
+
+## Verifying a no-JS route path: the existing funnel spec stubs the ROUTE (ENG-802)
+`e2e/marketing-funnel.spec.ts` intercepts `**/api/waitlist` and fulfils a canned
+`303`, so it proves the BROWSER's half only — it stays green even if the route
+handler is broken. To verify a change to the handler itself under
+`javaScriptEnabled: false`, drive the real route and let it reach a real (or
+stubbed-at-PostgREST) backend instead.
+
+Two traps found doing that:
+- **`page.evaluate` is NOT a valid "is JS disabled" probe.** Playwright runs it
+  over the debugger protocol, so it succeeds even with
+  `javaScriptEnabled: false`. The honest discriminator is behavioural: capture
+  the actual `/api/waitlist` response status — `303` means the native form POST
+  ran, `200` means the client component's `fetch` path did.
+- **The email field is `type="email" required`,** so the browser's own
+  constraint validation blocks an invalid address before it ever posts. A no-JS
+  test asserting "invalid address redirects to `?joined=0&reason=email`" will
+  time out waiting for a navigation that correctly never happens. Exercise the
+  route's validation branch by posting directly instead.
