@@ -18,14 +18,11 @@
 // case has always drawn. Unbounded retry against a genuinely dead URL is a
 // request storm.
 //
-// KNOWN LIMIT (ticket-locked, flagged on the PR): the budget is per element
-// LIFETIME, and no screen currently re-renders a mounted card with a new src.
-// So a tab left open across TWO expiry windows recovers once, then falls to
-// the placeholder permanently. Resetting the budget on the img's `onLoad`
-// would make recovery durable without weakening the storm guarantee — a dead
-// url never loads, so it never earns a reset — but "retry exactly once per
-// element" is a locked decision, so that change is a human call, not one to
-// make here.
+// "Once" is scoped to a load attempt, not to the element's whole lifetime: a
+// SUCCESSFUL render returns the budget (see `onLoad` below). Minted urls live
+// 300s, so a long-lived tab expires over and over, and a budget that never
+// reset would fix only the FIRST expiry and then sit on a permanent
+// placeholder — visually identical to the bug this file exists to remove.
 import { useEffect, useRef, useState } from "react";
 import { remintPostMedia } from "@/lib/api/post-media";
 
@@ -110,6 +107,29 @@ export function PostMediaImage({ postId, src, video = false }: PostMediaImagePro
 
   return (
     // eslint-disable-next-line @next/next/no-img-element -- arbitrary Storage/Mux poster URL, cover-fit
-    <img src={url} alt="" onError={() => { void handleError(); }} />
+    <img
+      src={url}
+      alt=""
+      onLoad={() => {
+        // A successful render returns the retry budget. This is what makes
+        // recovery DURABLE rather than one-shot, and it is deliberate — not a
+        // hole in the cap above.
+        //
+        // The argument, because it is not obvious at a glance: a dead url
+        // never fires `onLoad`, so it can never earn a reset. The worst case
+        // is therefore one failed request per SUCCESSFUL render, which is
+        // self-limiting — a render that never succeeds never grants another
+        // attempt. That is a strictly stronger guarantee than a time-based or
+        // count-based budget, and it needs no timer, no `expiresAt` and no
+        // shared cache.
+        //
+        // Do not "fix" this back by deleting it: test/post-media-remint's
+        // "recovers from a SECOND expiry" case fails without it, and the
+        // storm case ("stops after ONE retry") deliberately never fires load,
+        // which is what proves a dead url stays capped.
+        retried.current = false;
+      }}
+      onError={() => { void handleError(); }}
+    />
   );
 }

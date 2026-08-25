@@ -86,6 +86,9 @@ describe("PostMediaImage — ENG-813 onError re-mint", () => {
     await waitFor(() => expect(container.querySelector("img")?.getAttribute("src")).toBe("https://cdn/fresh.jpg"));
     expect(global.fetch).toHaveBeenCalledTimes(1);
 
+    // Deliberately NO fireEvent.load between the two errors. That is the point:
+    // a url that never renders never returns the budget, so a genuinely dead
+    // url stays capped at one retry no matter how long the element lives.
     const second = container.querySelector("img")!;
     fireEvent.error(second);
 
@@ -404,5 +407,72 @@ describe("MediaPlayer — ENG-813 re-mint wiring", () => {
     expect(global.fetch).toHaveBeenCalledWith("/api/posts/post-9/playback?posterOnly=1", {
       cache: "no-store",
     });
+  });
+});
+
+// Recovery has to survive REPEATED expiry, not just the first one. A minted url
+// lives 300s, so a tab left open long enough expires over and over; a budget
+// that never came back would fix minute 5 and then sit on a permanent
+// placeholder — the same empty box the ticket set out to remove.
+describe("PostMediaImage — durability across repeated expiry", () => {
+  it("recovers from a SECOND expiry, not just the first", async () => {
+    let minted = 0;
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: { items: [{ postId: "p1", mediaUrl: `https://cdn/mint-${++minted}.jpg` }] },
+      }),
+    })) as unknown as typeof fetch;
+
+    const { container } = render(<PostMediaImage postId="p1" src="https://cdn/expired-0.jpg" />);
+
+    // Minute 5 — the page's url expires and is recovered.
+    fireEvent.error(container.querySelector("img")!);
+    await waitFor(() =>
+      expect(container.querySelector("img")?.getAttribute("src")).toBe("https://cdn/mint-1.jpg"),
+    );
+    // The recovered image actually paints. THIS is what returns the budget.
+    fireEvent.load(container.querySelector("img")!);
+
+    // Minute 10 — the re-minted url expires too. It must recover again.
+    fireEvent.error(container.querySelector("img")!);
+    await waitFor(() =>
+      expect(container.querySelector("img")?.getAttribute("src")).toBe("https://cdn/mint-2.jpg"),
+    );
+    fireEvent.load(container.querySelector("img")!);
+
+    // Minute 15 — still recovering. Durable, not one-shot.
+    fireEvent.error(container.querySelector("img")!);
+    await waitFor(() =>
+      expect(container.querySelector("img")?.getAttribute("src")).toBe("https://cdn/mint-3.jpg"),
+    );
+
+    expect(global.fetch).toHaveBeenCalledTimes(3);
+    expect(container.querySelector("img")).not.toBeNull();
+  });
+
+  it("a url that renders then dies for good still stops after ONE retry", async () => {
+    // The storm guarantee, restated against the reset: painting once returns
+    // the budget, but the url that replaces it never paints, so it spends that
+    // budget once and terminates. One failed request per successful render.
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { items: [{ postId: "p1", mediaUrl: "https://cdn/dead.jpg" }] } }),
+    })) as unknown as typeof fetch;
+
+    const { container } = render(<PostMediaImage postId="p1" src="https://cdn/painted.jpg" />);
+    fireEvent.load(container.querySelector("img")!);
+
+    fireEvent.error(container.querySelector("img")!);
+    await waitFor(() =>
+      expect(container.querySelector("img")?.getAttribute("src")).toBe("https://cdn/dead.jpg"),
+    );
+
+    // The replacement never loads. Every further error must be terminal.
+    fireEvent.error(container.querySelector("img")!);
+    await waitFor(() => expect(container.querySelector("img")).toBeNull());
+    expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 });
