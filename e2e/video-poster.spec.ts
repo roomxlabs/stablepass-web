@@ -2,8 +2,9 @@ import { test, expect } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
 
 // End-to-end proof of the poster seam: BE bakes poster_url into the private
-// post-media bucket → the BFF selects it → the screen signs it → the card renders a
-// real frame instead of the empty box over dark green that members were seeing.
+// post-media bucket → list render mints via playback?posterOnly=1 (no stream)
+// → the card renders a real frame instead of the empty box over dark green.
+// Play still hits /api/posts/:id/playback without posterOnly to mint the stream.
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "http://127.0.0.1:54321";
 const SERVICE_ROLE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY ??

@@ -11,7 +11,8 @@ import { PostCard, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { relativeTime } from "@/app/(member)/explore/explore-feed";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { signPhotoMap, POST_MEDIA_BUCKET, signedPosterFor } from "@/lib/storage/photos";
+import { signedPosterFor } from "@/lib/storage/photos";
+import { PostMediaError, resolvePostDisplayUrls } from "@/lib/api/post-media";
 import type { FeedPost, PostMedia, ReactionEmoji } from "@/components/types";
 
 type PostRow = {
@@ -74,9 +75,18 @@ export function HorsePosts({ horseId, horseName, trainerName, stableName = null,
         ]);
         const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
         const mySet = new Set(((bookmarkRows ?? []) as BookmarkRow[]).map((b) => b.post_id));
-        // `media_url` is a bare path in the PRIVATE `post-media` bucket — sign it
-        // or the poster renders as a broken relative URL (absolute URLs pass through).
-        const postMedia = await signPhotoMap(sb, POST_MEDIA_BUCKET, rows.flatMap((r) => [r.poster_url, r.media_url]));
+        // Photos via POST /api/posts/media; video posters via playback?posterOnly=1.
+        let postMedia: Map<string, string>;
+        try {
+          postMedia = await resolvePostDisplayUrls(rows);
+        } catch (e) {
+          if (e instanceof PostMediaError && e.reason === "gated") {
+            // Profile pages already wall at the page level; mid-session 402 → error.
+            if (!cancelled) setError(true);
+            return;
+          }
+          postMedia = new Map();
+        }
 
         const mapped: FeedPost[] = rows.map((r) => ({
           id: r.id,

@@ -56,9 +56,28 @@ function followBuilder() {
 }
 
 function fetchImpl() {
-  return vi.fn((input: string | URL) => {
+  return vi.fn((input: string | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.startsWith("/api/feed/seen")) return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
+    if (url === "/api/posts/media" || url.startsWith("/api/posts/media?")) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            items: [{ postId: "p1", mediaUrl: "https://sb.local/p1?token=abc" }],
+            expiresAt: "2026-08-01T00:00:00.000Z",
+          },
+        }),
+      });
+    }
+    if (url.includes("/playback?posterOnly=1")) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { posterUrl: "https://sb.local/poster?token=abc", expiresAt: "2026-08-01T00:00:00.000Z" } }),
+      });
+    }
     if (url.startsWith("/api/feed/following")) {
       if (feedStatus === 402) return Promise.resolve({ ok: false, status: 402, json: async () => ({ error: { code: "subscription_required" } }) });
       return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: feedPosts, meta: { nextCursor: null, hasMore: false } }) });
@@ -258,5 +277,48 @@ describe("FollowingScreen — ENG-613 view model + Follow pill", () => {
 
     expect(document.querySelector("article.post-web")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Follow / })).not.toBeInTheDocument();
+  });
+});
+
+describe("FollowingScreen — ENG-799 post-media mint", () => {
+  it("makes exactly one POST /api/posts/media for a photo page", async () => {
+    feedPosts = [
+      { id: "p1", horse_id: "fh1", type: "photo", body: "Trackwork.", media_url: "media/p1.jpg", poster_url: null, watermarked: false, like_count: 3, published_at: "2026-07-10T00:00:00.000Z" },
+    ];
+    const fetchMock = fetchImpl();
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    const mediaCalls = fetchMock.mock.calls.filter((c) => String(c[0]) === "/api/posts/media");
+    expect(mediaCalls).toHaveLength(1);
+    expect(JSON.parse(String(mediaCalls[0][1]?.body))).toEqual({ postIds: ["p1"] });
+  });
+
+  it("omitted mint id → placeholder, not an error", async () => {
+    feedPosts = [
+      { id: "p1", horse_id: "fh1", type: "photo", body: "Trackwork.", media_url: "media/draft.jpg", poster_url: null, watermarked: false, like_count: 3, published_at: "2026-07-10T00:00:00.000Z" },
+    ];
+    global.fetch = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/feed/seen")) return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
+      if (url === "/api/posts/media") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { items: [], expiresAt: "2026-08-01T00:00:00.000Z" } }),
+        });
+      }
+      if (url.startsWith("/api/feed/following")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: feedPosts, meta: { nextCursor: null, hasMore: false } }) });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    }) as unknown as typeof fetch;
+
+    const { container } = render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(container.querySelector(".post-media-web img")).toBeNull();
   });
 });

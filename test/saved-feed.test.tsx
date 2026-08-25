@@ -80,6 +80,32 @@ beforeEach(() => {
     }
     return chainable({ data: [], error: null });
   });
+  global.fetch = vi.fn((input: string | URL) => {
+    const url = String(input);
+    if (url === "/api/posts/media" || url.startsWith("/api/posts/media?")) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            items: [
+              { postId: "p1", mediaUrl: "https://sb.local/p1?token=abc" },
+              { postId: "p2", mediaUrl: "https://sb.local/p2?token=abc" },
+            ],
+            expiresAt: "2026-08-01T00:00:00.000Z",
+          },
+        }),
+      });
+    }
+    if (url.includes("/playback?posterOnly=1")) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { posterUrl: "https://sb.local/poster?token=abc", expiresAt: "2026-08-01T00:00:00.000Z" } }),
+      });
+    }
+    return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+  }) as unknown as typeof fetch;
 });
 
 describe("SavedFeed", () => {
@@ -324,5 +350,69 @@ describe("SavedFeed — ENG-613 view model", () => {
 
     expect(document.querySelector("article.post-web")).not.toBeNull();
     expect(screen.queryByRole("button", { name: /^Follow / })).not.toBeInTheDocument();
+  });
+});
+
+describe("SavedFeed — ENG-799 post-media mint", () => {
+  it("makes exactly one POST /api/posts/media for a photo page", async () => {
+    bookmarkData = [
+      {
+        created_at: "2026-07-12T00:00:00.000Z",
+        post: {
+          id: "p1",
+          horse_id: "h1",
+          type: "photo",
+          body: "Trackwork.",
+          media_url: "media/p1.jpg",
+          poster_url: null,
+          watermarked: false,
+          like_count: 3,
+          published_at: "2026-07-10T00:00:00.000Z",
+        },
+      },
+    ];
+    const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
+
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Nature Strip");
+
+    const mediaCalls = fetchMock.mock.calls.filter((c) => String(c[0]) === "/api/posts/media");
+    expect(mediaCalls).toHaveLength(1);
+    expect(JSON.parse(String(mediaCalls[0][1]?.body))).toEqual({ postIds: ["p1"] });
+  });
+
+  it("omitted mint id → placeholder, not an error", async () => {
+    bookmarkData = [
+      {
+        created_at: "2026-07-12T00:00:00.000Z",
+        post: {
+          id: "p1",
+          horse_id: "h1",
+          type: "photo",
+          body: "Trackwork.",
+          media_url: "media/draft.jpg",
+          poster_url: null,
+          watermarked: false,
+          like_count: 3,
+          published_at: "2026-07-10T00:00:00.000Z",
+        },
+      },
+    ];
+    global.fetch = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url === "/api/posts/media") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { items: [], expiresAt: "2026-08-01T00:00:00.000Z" } }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    }) as unknown as typeof fetch;
+
+    const { container } = render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Nature Strip");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(container.querySelector(".post-media-web img")).toBeNull();
   });
 });

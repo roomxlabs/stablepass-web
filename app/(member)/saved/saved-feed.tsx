@@ -11,7 +11,8 @@ import { AccessWall } from "@/components/access-wall";
 import { PostCard, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { signPhotoMap, POST_MEDIA_BUCKET, signedPosterFor } from "@/lib/storage/photos";
+import { signedPosterFor } from "@/lib/storage/photos";
+import { PostMediaError, resolvePostDisplayUrls } from "@/lib/api/post-media";
 import type { FeedPost, PostMedia, ReactionEmoji } from "@/components/types";
 
 const LIMIT = 10;
@@ -133,9 +134,18 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
 
       const horseById = new Map(((horseRows ?? []) as HorseRow[]).map((h) => [h.id, h]));
       const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
-      // `media_url` is a bare path in the PRIVATE `post-media` bucket — sign it
-      // or the poster renders as a broken relative URL (absolute URLs pass through).
-      const postMedia = await signPhotoMap(sb, POST_MEDIA_BUCKET, postRows.flatMap((p) => [p.poster_url, p.media_url]));
+      // Photos via POST /api/posts/media; video posters via playback?posterOnly=1.
+      // Absolute URLs pass through. A 402 surfaces the AccessWall (guardrail 3).
+      let postMedia: Map<string, string>;
+      try {
+        postMedia = await resolvePostDisplayUrls(postRows);
+      } catch (e) {
+        if (e instanceof PostMediaError && e.reason === "gated") {
+          setGated(true);
+          return;
+        }
+        postMedia = new Map();
+      }
 
       const mapped: FeedPost[] = postRows.map((r) => {
         const horse = horseById.get(r.horse_id);
