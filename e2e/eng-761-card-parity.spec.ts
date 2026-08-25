@@ -104,7 +104,13 @@ test("ENG-761 PRIZEMONEY holds one line at 360px and (AUS) is stripped from the 
       racing_name: "CANNONBROOK (AUS)",
       sire: "Snitzel",
       dam: "Polar Success",
-      sex: "gelding",
+      // `sex` is male/female plus a separate `is_gelded` flag since ENG-304, and
+      // the deployed `horse_sex_check` REJECTS the old `sex: "gelding"` seed with
+      // 23514 — which throws at the `if (horseError)` below, before a single
+      // assertion runs. That migration arrived on this branch with ENG-815's
+      // merge of main; `e2e/screenshots.spec.ts` already carried the fix.
+      sex: "male",
+      is_gelded: true,
       // A LITERAL year, not `new Date().getFullYear() - n` (ENG-815). Age is
       // derived in Postgres and ENG-617's guard greps the whole repo — e2e
       // included — for date arithmetic, so a seed that computes a foaling year

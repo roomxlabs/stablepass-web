@@ -868,8 +868,12 @@ returns an empty map and every card falls back to `post.media_url`.
   never infer position from array index.
 - `post.media_url` MIRRORS row 0, so **0 rows and 1 photo are the same rendering
   case**. Anything that draws dots at `length >= 1` is wrong; the test is `> 1`.
-- Web named the view-model field `photos`, NOT `media` — `FeedPost.media` is
-  already the `PostMedia` view model.
+- **SUPERSEDED BY ENG-815 (25 Aug 2026).** The view-model field was `photos:
+  PostPhoto[]`, resolved client-side. It is now `slideCount: number` from the
+  batch mint, and the client never sees `sort_order` at all — the server
+  resolves ordinals. The contiguity point above still matters, but it is now the
+  BE's problem: `slideCount` is HIGHEST ORDINAL + 1, not a row count, so `{0,2}`
+  reports 3 and the client draws a blank middle slide instead of losing photo 2.
 
 ## e2e here is timing-sensitive on a COLD Next dev server — budget for the compile
 **(2026-08-24, ENG-762)** `e2e/eng-772-profile-label-pill.spec.ts` uses default
@@ -1101,7 +1105,7 @@ renders needs `lib/feed/post-row.ts` (row type + projection + key + mapper) and
 screen for real reasons. Don't widen the helper to cover them.
 
 The return type is `Required<Pick<FeedPost, PostIntrinsicKey>>` on purpose:
-`title?`, `body?` and `photos?` are optional on `FeedPost`, so a plain `Pick`
+`title?`, `body?` and `slideCount?` are optional on `FeedPost`, so a plain `Pick`
 would let the shared mapper drop one and still compile.
 
 ## `<img>` recovery: the HTTP cache makes expiry bugs look unreproducible (ENG-813, 25 Aug 2026)
@@ -1144,3 +1148,61 @@ worktree. Serialise them, and before committing always `git status --porcelain` 
 subagent's transcript file stays at 179 bytes and its mtime does NOT update while it works, so
 mtime is not a liveness signal; and an agent you spawned may not be stoppable via TaskStop
 ("owned by" error).
+
+## A revoked bucket does not throw — it renders a carousel of nulls (ENG-815, 25 Aug 2026)
+
+**Symptom:** after merging `main` into `feature/round6-v1`, the multi-photo
+carousel compiles, type-checks, passes `tsc`, renders its dots and its `n/m`
+chip, and shows no photograph past the first. No error anywhere.
+
+**Cause:** ENG-799 made `signPhoto` / `signPhotoMap` **deny-by-construction** for
+`POST_MEDIA_BUCKET` — they `return null` / `return out` early rather than
+throwing (`lib/storage/photos.ts`). Round 6's `lib/post-media.ts` still called
+`signPhotoMap(sb, POST_MEDIA_BUCKET, …)`, and that file did not conflict during
+the merge because it exists only on one side. Git kept it silently, and a
+mechanical resolution therefore ships dead code that looks alive.
+
+- **Do this:** after any merge that crosses a cutover, list the files that exist
+  on ONE side only and read them against the other side's new invariants. The
+  conflicting files are the ones you will look at anyway; the non-conflicting
+  ones are where the silent regression hides.
+- The general shape: a guard that degrades quietly is the right call at runtime
+  and a trap at merge time. Grep for callers of anything that became
+  deny-by-construction, not just for compile errors.
+
+## The web carousel e2e needs the be on `feature/round6-v1`, not `main` (ENG-815, 25 Aug 2026)
+
+`e2e/eng-762-photo-carousel.spec.ts` drives slides through
+`POST /api/posts/media` → the be `post-media` edge function. The
+`{ postId, slideIndex }` mode and `slideCount` landed on the be's
+`feature/round6-v1` (`af68205`) and are NOT on be `main`.
+
+- **Symptom if the local edge runtime serves the wrong branch:** every post reads
+  as single-photo (no dots), or `post.label` comes back `PGRST204 Could not find
+  the 'label' column`. Both look like web regressions and are not.
+- **Check first:** `docker inspect supabase_edge_runtime_stablepass` shows which
+  be worktree is bind-mounted; `git -C <that worktree> branch --show-current`
+  names the branch actually being served.
+- The stack is SHARED across all be worktrees (see the BE loop-serialization
+  rule), so a web worker must not repoint it to suit itself.
+
+**Degradation is safe, and that was verified rather than assumed:** web running
+against a be without the slide mode gets `slideCount: undefined` → 1 → no
+carousel, and a `{postId, slideIndex}` request 400s → `null` → blank slide. No
+crash and no wrong photo, so the web PR can land before the be one.
+
+## `horse.sex` is male/female + `is_gelded` — old e2e seeds die at the fixture (ENG-815, 25 Aug 2026)
+
+ENG-304's `horse_sex_check` is `sex IS NULL OR sex = ANY('{male,female}')`, with
+gelding moved to a separate `is_gelded` boolean. Every pre-ENG-304 e2e seed says
+`sex: "gelding"` (or `"mare"`), which now fails with `23514` at the `if
+(horseError) throw horseError` line — **before a single assertion runs**, so the
+spec reports as a product failure.
+
+- **Do this:** when a merge brings a schema migration onto a branch that carries
+  its own e2e specs, grep the specs for every column that migration touched.
+  `main`'s `e2e/screenshots.spec.ts` already had the fix; three round-6 specs did
+  not, and only one commit separated them.
+- Same class as the `foaling_year: new Date().getFullYear() - 5` seeds, which
+  ENG-617's repo-wide "no date arithmetic" guard flags in `e2e/` too. Use an
+  absolute year in fixtures.

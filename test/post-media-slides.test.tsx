@@ -184,6 +184,18 @@ describe("ENG-815 — the dots come from slideCount, before any slide is minted"
     expect(document.querySelectorAll(".photo-track img")).toHaveLength(1);
   });
 
+  it("an over-cap count clamps to the schema's ten, not whatever the wire said", () => {
+    // `readSlideCount` in the api client floors the value but does not cap it,
+    // so the ceiling is enforced HERE, on the way to the dots. The DB's
+    // `sort_order between 0 and 9` makes 11+ impossible today; this is the
+    // defence-in-depth, and an untested defence is not one.
+    global.fetch = vi.fn(() => new Promise(() => {})) as unknown as typeof fetch;
+    render(<PhotoCarousel postId="p1" slideCount={99} firstUrl="https://sb.local/p1-0.jpg" />);
+    expect(screen.getAllByTestId("photo-slide")).toHaveLength(10);
+    expect(screen.getByTestId("photo-dots").querySelectorAll("button")).toHaveLength(10);
+    expect(screen.getByTestId("media-photo-count")).toHaveTextContent("1/10");
+  });
+
   it("a nonsense count degrades to one slide rather than an empty track", () => {
     global.fetch = vi.fn(() => new Promise(() => {})) as unknown as typeof fetch;
     render(

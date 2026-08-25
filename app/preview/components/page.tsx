@@ -206,7 +206,15 @@ const FIXTURE_SLIDES: Record<string, (index: number) => string | null> = {
     slide(i % 2 ? "#F1ECE3" : "#1A1A1A", i % 2 ? "#1A1A1A" : "#FAF7F2", i + 1),
 };
 
-if (typeof window !== "undefined" && !("__previewMint" in window)) {
+// The `NODE_ENV` guard is belt-and-braces: this module is only evaluated on
+// `/preview/components`, which is unlinked and a dev aid. It is here because the
+// patch is never removed once installed, so it would survive a client-side
+// navigation off this route in a production build.
+if (
+  process.env.NODE_ENV !== "production" &&
+  typeof window !== "undefined" &&
+  !("__previewMint" in window)
+) {
   (window as unknown as Record<string, unknown>).__previewMint = true;
   const realFetch = window.fetch.bind(window);
   window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

@@ -85,9 +85,23 @@ export type MintedSlides = ReadonlyMap<number, string>;
  * awaited or a re-render between the two fires a second identical mint. A slide
  * that comes back `null` STAYS asked and is never retried — a draft, a gap in
  * `sort_order`, or a gated slide must cost one refusal, not one per scroll.
+ *
  * Recovery from a genuinely EXPIRED slide is not this hook's job: that is the
  * `<img>`'s own `onError` (ENG-813), which re-mints by index through
  * `PostMediaImage`.
+ *
+ * ONE CASE FALLS BETWEEN THE TWO, stated plainly because the sentence above
+ * would otherwise imply it is covered. The three refusals named are permanent,
+ * but a TRANSIENT network failure on the prefetch also returns `null`
+ * (`fetchPostMediaSlide` catches and returns null), and it is treated the same:
+ * marked asked, never retried. The `onError` path cannot pick it up either,
+ * because with no url `PostMediaImage` renders the placeholder and there is no
+ * `<img>` to fail. So that slide stays blank for the life of the mount, and
+ * heals on the next navigation. Slide 0 is unaffected — it paints an `<img>`
+ * from the batch and therefore does have an `onError`. Accepted rather than
+ * fixed: a retry here needs a backoff to avoid becoming the request storm
+ * ENG-813's cap exists to prevent, and a blank slide beside its siblings is a
+ * far smaller defect than a feed that re-requests on every scroll.
  */
 export function usePostSlides(postId: string, slideCount: number, active: number): MintedSlides {
   const total = clampSlideCount(slideCount);
