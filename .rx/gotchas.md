@@ -745,3 +745,44 @@ the shared card changes — it was still previewing the pre-round-5 card.
 their aside/rail. Derive the Follow pill from those rather than adding a query,
 and model the state as `Set<string> | null` where `null` is "not known yet" —
 conflating it with "follows nobody" flashes a pill on every card and retracts it.
+
+## `<img>` recovery: the HTTP cache makes expiry bugs look unreproducible (ENG-813, 25 Aug 2026)
+
+**Symptom:** a minted-URL expiry bug "cannot be reproduced" by clicking through the app.
+**Cause:** an already-painted image survives the HTTP cache, so nothing re-requests it. The
+break only appears when something DOES re-request after the TTL — a tab left open, a bfcache
+restore, a re-mount.
+**Do this:** never try to wait out a real TTL in a test. Drive `fireEvent.error(img)` against a
+mocked fetch. The element's `onError` is both the production mechanism and the test hook.
+
+Two related traps on the same ticket:
+
+1. **A cached GET silently no-ops a re-mint.** The video poster re-mint hits the SAME
+   `/api/posts/:id/playback?posterOnly=1` URL the initial page resolve already fetched. Without
+   `cache: "no-store"` a cached 200 returns the poster that just failed — the single retry
+   becomes a guaranteed no-op AND the server's re-gate is skipped. `ok()` in
+   `lib/api/envelope.ts` sets no `Cache-Control`, so this is one header away from real.
+2. **`react-hooks/refs` errors on a ref mutation during render.** The documented "adjust state
+   on a prop change" pattern (render-phase `setState`) is fine, but a `ref.current = x` beside
+   it is a lint ERROR, not a warning. Move just that line into a `useEffect` keyed on the same
+   tracked prop.
+
+**Test-strength note:** a presentational component's *wiring* is easy to leave untested. Every
+media case in `test/post-card.test.tsx` uses `posterUrl: null`, which short-circuits before an
+`<img>` exists, and `components/media-player.tsx` has no test file at all. A wrong `postId`
+there leaks nothing (the BFF re-authorises) but silently kills the feature in production with a
+green suite. Mutation-check the wiring, not just the logic.
+
+## Subagents sharing a worktree corrupt each other's test runs (25 Aug 2026)
+
+**Symptom:** intermittent single-test failures and test COUNTS that change between back-to-back
+`npm test` runs in the same tree (53 files/789 → 54 files/796).
+**Cause:** a review subagent working in the same worktree was writing scratch/probe test files
+(`test/zz-*.test.tsx`) and temporarily mutating source to prove a test's strength. A concurrent
+`npm test` sees the tree mid-mutation.
+**Do this:** never run the verification suite while a reviewer/labour agent is live in the same
+worktree. Serialise them, and before committing always `git status --porcelain` and delete any
+`test/zz-*` scratch files — they will otherwise be staged and inflate the diff. A stalled
+subagent's transcript file stays at 179 bytes and its mtime does NOT update while it works, so
+mtime is not a liveness signal; and an agent you spawned may not be stoppable via TaskStop
+("owned by" error).

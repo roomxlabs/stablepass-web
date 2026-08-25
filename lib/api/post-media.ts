@@ -127,3 +127,47 @@ export async function resolvePostDisplayUrls(
 
   return out;
 }
+
+/**
+ * Re-mint the display URL for ONE post — the recovery path behind an <img>
+ * onError (ENG-813). A minted URL lives 300s; the element failing to load IS
+ * the expiry signal, so nothing here consults a clock. Requests only `postId`,
+ * never the page.
+ *
+ * Returns null on any failure, INCLUDING 402: a lapsed subscription must fall
+ * back to the placeholder, never to gated bytes (guardrail 3). The screen's own
+ * gate — not an <img> — owns the reactivate wall.
+ */
+export async function remintPostMedia(
+  postId: string,
+  opts?: { video?: boolean },
+): Promise<string | null> {
+  if (!postId) return null;
+  if (opts?.video) {
+    try {
+      // `cache: "no-store"` is load-bearing, not hygiene. This is the SAME URL
+      // the page's initial resolve already fetched, so a cached 200 would hand
+      // back the very poster that just failed — turning the one retry into a
+      // guaranteed no-op AND skipping the server's re-gate. The whole bug is
+      // that expired bytes survive in the HTTP cache; do not re-introduce it
+      // on the recovery path.
+      const res = await fetch(
+        `/api/posts/${encodeURIComponent(postId)}/playback?posterOnly=1`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) return null;
+      const json = await res.json().catch(() => null);
+      const posterUrl = json?.data?.posterUrl;
+      return typeof posterUrl === "string" && posterUrl.length > 0 ? posterUrl : null;
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const minted = await fetchPostMedia([postId]);
+    return minted.get(postId) ?? null;
+  } catch {
+    // PostMediaError('gated') included — placeholder, never gated bytes.
+    return null;
+  }
+}
