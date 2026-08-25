@@ -17,7 +17,7 @@ vi.mock("@/lib/api/edge", () => ({
   edgeFetch: edgeFetchMock,
 }));
 
-import { GET } from "@/app/api/posts/[id]/playback/route";
+import { GET, POST } from "@/app/api/posts/[id]/playback/route";
 
 function fakeRes(status: number, body: unknown) {
   return { status, ok: status >= 200 && status < 300, json: async () => body };
@@ -27,7 +27,7 @@ function params(id: string) {
   return { params: Promise.resolve({ id }) };
 }
 
-describe("GET /api/posts/:id/playback", () => {
+describe("/api/posts/:id/playback", () => {
   beforeEach(() => {
     getUserMock.mockReset();
     edgeFetchMock.mockReset();
@@ -44,25 +44,112 @@ describe("GET /api/posts/:id/playback", () => {
     expect(edgeFetchMock).not.toHaveBeenCalled();
   });
 
-  it("delegates to the be playback fn and returns its data on success", async () => {
+  it("delegates to the be playback fn and returns its data on success (GET)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
     edgeFetchMock.mockResolvedValue(
-      fakeRes(200, { data: { playbackUrl: "https://stream.mux.com/x.m3u8?token=y", expiresAt: "2026-08-01T00:00:00.000Z" } }),
+      fakeRes(200, {
+        data: {
+          playbackUrl: "https://stream.mux.com/x.m3u8?token=y",
+          posterUrl: "https://sb.local/poster?token=z",
+          expiresAt: "2026-08-01T00:00:00.000Z",
+        },
+      }),
     );
 
     const res = await GET(new Request("http://localhost/api/posts/p1/playback"), params("p1"));
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body.data).toEqual({ playbackUrl: "https://stream.mux.com/x.m3u8?token=y", expiresAt: "2026-08-01T00:00:00.000Z" });
-    expect(edgeFetchMock).toHaveBeenCalledWith(expect.anything(), "playback", { method: "POST", body: { postId: "p1" } });
+    expect(body.data).toEqual({
+      playbackUrl: "https://stream.mux.com/x.m3u8?token=y",
+      posterUrl: "https://sb.local/poster?token=z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+    });
+    expect(edgeFetchMock).toHaveBeenCalledWith(expect.anything(), "playback", {
+      method: "POST",
+      body: { postId: "p1" },
+    });
   });
 
-  it("returns 402 when the edge fn reports subscription_required", async () => {
+  it("POST without body still mints playbackUrl (media-player)", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    edgeFetchMock.mockResolvedValue(
+      fakeRes(200, {
+        data: { playbackUrl: "https://stream.mux.com/x.m3u8?token=y", expiresAt: "2026-08-01T00:00:00.000Z" },
+      }),
+    );
+
+    const res = await POST(new Request("http://localhost/api/posts/p1/playback", { method: "POST" }), params("p1"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.playbackUrl).toBe("https://stream.mux.com/x.m3u8?token=y");
+    expect(edgeFetchMock).toHaveBeenCalledWith(expect.anything(), "playback", {
+      method: "POST",
+      body: { postId: "p1" },
+    });
+  });
+
+  it("forwards posterOnly=1 on GET and returns posterUrl without requiring playbackUrl", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    edgeFetchMock.mockResolvedValue(
+      fakeRes(200, {
+        data: { posterUrl: "https://sb.local/poster?token=z", expiresAt: "2026-08-01T00:00:00.000Z" },
+      }),
+    );
+
+    const res = await GET(
+      new Request("http://localhost/api/posts/p1/playback?posterOnly=1"),
+      params("p1"),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data).toEqual({
+      posterUrl: "https://sb.local/poster?token=z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+    });
+    expect(body.data.playbackUrl).toBeUndefined();
+    expect(edgeFetchMock).toHaveBeenCalledWith(expect.anything(), "playback", {
+      method: "POST",
+      body: { postId: "p1", posterOnly: true },
+    });
+  });
+
+  it("forwards posterOnly: true on POST body", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    edgeFetchMock.mockResolvedValue(
+      fakeRes(200, {
+        data: { posterUrl: "https://sb.local/poster?token=z", expiresAt: "2026-08-01T00:00:00.000Z" },
+      }),
+    );
+
+    const res = await POST(
+      new Request("http://localhost/api/posts/p1/playback", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ posterOnly: true }),
+      }),
+      params("p1"),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.posterUrl).toBe("https://sb.local/poster?token=z");
+    expect(edgeFetchMock).toHaveBeenCalledWith(expect.anything(), "playback", {
+      method: "POST",
+      body: { postId: "p1", posterOnly: true },
+    });
+  });
+
+  it("returns 402 when the edge fn reports subscription_required (incl. posterOnly)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
     edgeFetchMock.mockResolvedValue(fakeRes(402, {}));
 
-    const res = await GET(new Request("http://localhost/api/posts/p1/playback"), params("p1"));
+    const res = await GET(
+      new Request("http://localhost/api/posts/p1/playback?posterOnly=1"),
+      params("p1"),
+    );
     const body = await res.json();
 
     expect(res.status).toBe(402);

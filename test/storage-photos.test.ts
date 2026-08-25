@@ -57,6 +57,21 @@ describe("signPhoto", () => {
     const { sb } = makeSb({ signed: null });
     expect(await signPhoto(sb, TRAINER_PHOTO_BUCKET, "gone.jpg")).toBeNull();
   });
+
+  it("never signs a post-media path — deny-by-construction (ENG-799)", async () => {
+    const { sb, createSignedUrl, from } = makeSb();
+    expect(await signPhoto(sb, POST_MEDIA_BUCKET, "media/p1.jpg")).toBeNull();
+    expect(createSignedUrl).not.toHaveBeenCalled();
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it("still passes absolute URLs on post-media without createSignedUrl", async () => {
+    const { sb, createSignedUrl } = makeSb();
+    expect(await signPhoto(sb, POST_MEDIA_BUCKET, "https://placehold.co/800x450")).toBe(
+      "https://placehold.co/800x450",
+    );
+    expect(createSignedUrl).not.toHaveBeenCalled();
+  });
 });
 
 describe("signPhotoMap", () => {
@@ -70,12 +85,14 @@ describe("signPhotoMap", () => {
     expect(map.get("b.jpg")).toBe("https://sb.local/b.jpg?token=abc");
   });
 
-  it("maps absolute URLs to themselves and never sends them to storage", async () => {
-    const { sb, createSignedUrls } = makeSb();
+  it("maps absolute URLs on post-media and never signs paths (ENG-799)", async () => {
+    const { sb, createSignedUrls, from } = makeSb();
     const map = await signPhotoMap(sb, POST_MEDIA_BUCKET, ["https://placehold.co/800x450", "real-path.jpg"]);
 
-    expect(createSignedUrls).toHaveBeenCalledWith(["real-path.jpg"], PHOTO_SIGN_TTL);
+    expect(createSignedUrls).not.toHaveBeenCalled();
+    expect(from).not.toHaveBeenCalled();
     expect(map.get("https://placehold.co/800x450")).toBe("https://placehold.co/800x450");
+    expect(map.has("real-path.jpg")).toBe(false);
   });
 
   it("skips storage entirely when there is nothing to sign", async () => {
@@ -90,5 +107,12 @@ describe("signPhotoMap", () => {
     const map = await signPhotoMap(sb, HORSE_PHOTO_BUCKET, ["ok.jpg", "denied.jpg"]);
     expect(map.get("ok.jpg")).toBeTruthy();
     expect(map.has("denied.jpg")).toBe(false);
+  });
+
+  it("still signs horse and trainer buckets directly", async () => {
+    const { sb, from, createSignedUrls } = makeSb();
+    await signPhotoMap(sb, TRAINER_PHOTO_BUCKET, ["t.jpg"]);
+    expect(from).toHaveBeenCalledWith(TRAINER_PHOTO_BUCKET);
+    expect(createSignedUrls).toHaveBeenCalledWith(["t.jpg"], PHOTO_SIGN_TTL);
   });
 });

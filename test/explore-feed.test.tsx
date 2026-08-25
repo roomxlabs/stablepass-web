@@ -62,6 +62,31 @@ function fetchImpl(feedStatus: 200 | 402) {
     if (url.startsWith("/api/feed/seen")) {
       return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
     }
+    if (url === "/api/posts/media" || url.startsWith("/api/posts/media?")) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            items: [
+              { postId: "p1", mediaUrl: "https://sb.local/p1?token=abc" },
+              { postId: "p2", mediaUrl: "https://sb.local/p2?token=abc" },
+            ],
+            expiresAt: "2026-08-01T00:00:00.000Z",
+          },
+        }),
+      });
+    }
+    if (url.includes("/playback?posterOnly=1")) {
+      const id = url.match(/\/posts\/([^/]+)\/playback/)?.[1] ?? "unknown";
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: { posterUrl: `https://sb.local/posters/${id}.jpg?token=abc`, expiresAt: "2026-08-01T00:00:00.000Z" },
+        }),
+      });
+    }
     if (url.startsWith("/api/feed")) {
       if (feedStatus === 402) {
         return Promise.resolve({ ok: false, status: 402, json: async () => ({ error: { code: "subscription_required" } }) });
@@ -185,6 +210,13 @@ describe("ExploreFeed", () => {
         if (url.startsWith("/api/feed/seen")) {
           return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
         }
+        if (url === "/api/posts/media" || url.startsWith("/api/posts/media?")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ data: { items: [], expiresAt: "2026-08-01T00:00:00.000Z" } }),
+          });
+        }
         if (url.startsWith("/api/feed")) {
           return Promise.resolve({
             ok: true,
@@ -253,6 +285,20 @@ describe("ExploreFeed — ENG-613 view model + Follow pill", () => {
     return vi.fn((input: string | URL) => {
       const url = String(input);
       if (url.startsWith("/api/feed/seen")) return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
+      if (url === "/api/posts/media" || url.startsWith("/api/posts/media?")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { items: [], expiresAt: "2026-08-01T00:00:00.000Z" } }),
+        });
+      }
+      if (url.includes("/playback?posterOnly=1")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { posterUrl: "https://sb.local/poster?token=abc", expiresAt: "2026-08-01T00:00:00.000Z" } }),
+        });
+      }
       if (url.startsWith("/api/feed")) {
         return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: rows, meta: { nextCursor: null, hasMore: false } }) });
       }
@@ -461,5 +507,128 @@ describe("ExploreFeed — ENG-613 view model + Follow pill", () => {
 
     // Once the read says "follows nobody", the pill appears.
     expect(await screen.findByRole("button", { name: "Follow Chris Waller" })).toBeInTheDocument();
+  });
+});
+
+// ===========================================================================
+// ENG-799 — post-media mint via BFF (no client createSignedUrls)
+// ===========================================================================
+describe("ExploreFeed — ENG-799 post-media mint", () => {
+  beforeEach(() => {
+    fromMock.mockReset();
+    fromMock.mockImplementation((table: string) => {
+      if (table === "horse") return chainable({ data: HORSES, error: null });
+      return chainable({ data: [], error: null });
+    });
+  });
+
+  it("makes exactly one POST /api/posts/media for a photo page and zero storage signs", async () => {
+    const photoPosts = [
+      { ...POSTS[0], media_url: "media/p1.jpg", poster_url: null },
+      { ...POSTS[1], media_url: "media/p2.jpg", poster_url: null },
+    ];
+    const fetchMock = vi.fn((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/feed/seen")) {
+        return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
+      }
+      if (url === "/api/posts/media") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              items: [
+                { postId: "p1", mediaUrl: "https://sb.local/p1?token=abc" },
+                { postId: "p2", mediaUrl: "https://sb.local/p2?token=abc" },
+              ],
+              expiresAt: "2026-08-01T00:00:00.000Z",
+            },
+          }),
+        });
+      }
+      if (url.startsWith("/api/feed")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ data: photoPosts, meta: { nextCursor: null, hasMore: false } }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    const mediaCalls = fetchMock.mock.calls.filter((c) => String(c[0]) === "/api/posts/media");
+    expect(mediaCalls).toHaveLength(1);
+    expect(mediaCalls[0][1]?.method).toBe("POST");
+    expect(JSON.parse(String(mediaCalls[0][1]?.body))).toEqual({ postIds: ["p1", "p2"] });
+
+    // No supabase.storage usage on the browser client mock.
+    expect(fromMock.mock.calls.every((c) => c[0] !== "post-media")).toBe(true);
+  });
+
+  it("omitted mint id → null poster (placeholder), not an error", async () => {
+    const photoPosts = [{ ...POSTS[0], media_url: "media/draft.jpg", poster_url: null }];
+    global.fetch = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/feed/seen")) {
+        return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
+      }
+      if (url === "/api/posts/media") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          // Server omits the draft id from items.
+          json: async () => ({ data: { items: [], expiresAt: "2026-08-01T00:00:00.000Z" } }),
+        });
+      }
+      if (url.startsWith("/api/feed")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ data: photoPosts, meta: { nextCursor: null, hasMore: false } }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    }) as unknown as typeof fetch;
+
+    const { container } = render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(container.querySelector(".post-media-web img")).toBeNull();
+    expect(container.querySelector(".post-media-web")).not.toBeNull();
+  });
+
+  it("renders the reactivate wall when the mint returns 402", async () => {
+    const photoPosts = [{ ...POSTS[0], media_url: "media/p1.jpg", poster_url: null }];
+    global.fetch = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/feed/seen")) {
+        return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
+      }
+      if (url === "/api/posts/media") {
+        return Promise.resolve({
+          ok: false,
+          status: 402,
+          json: async () => ({ error: { code: "subscription_required" } }),
+        });
+      }
+      if (url.startsWith("/api/feed")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ data: photoPosts, meta: { nextCursor: null, hasMore: false } }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    }) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={true} />);
+    expect(await screen.findByText(/your access has paused/i)).toBeInTheDocument();
+    expect(screen.queryByText("Mahogany")).not.toBeInTheDocument();
   });
 });

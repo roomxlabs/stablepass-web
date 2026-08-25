@@ -14,6 +14,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 // supabaseBrowser in client islands) — never the service role. The backend
 // policy `media gated read` (authenticated AND has_content_access) is the real
 // boundary, so a lapsed member cannot mint a URL for gated media.
+//
+// After ENG-799, post-media BYTES are minted by `lib/api/post-media.ts` (BFF →
+// edge). `signPhoto` / `signPhotoMap` keep serving horse-photos and
+// trainer-photos; post-media paths are deny-by-construction (absolute URLs
+// still passthrough).
 export const HORSE_PHOTO_BUCKET = "horse-photos";
 export const TRAINER_PHOTO_BUCKET = "trainer-photos";
 export const POST_MEDIA_BUCKET = "post-media";
@@ -37,6 +42,8 @@ export async function signPhoto(
 ): Promise<string | null> {
   if (!value) return null;
   if (isAbsoluteUrl(value)) return value;
+  // Deny-by-construction: post-media paths are minted via /api/posts/media.
+  if (bucket === POST_MEDIA_BUCKET) return null;
   const { data } = await sb.storage.from(bucket).createSignedUrl(value, ttl);
   return data?.signedUrl ?? null;
 }
@@ -44,7 +51,8 @@ export async function signPhoto(
 // A post's display image: the baked video poster if one exists, otherwise the
 // photo. `poster_url` is written by the backend's mux-webhook on video.asset.ready
 // (BE migration 20260728120000) and, like `media_url`, is a bare object path in the
-// private `post-media` bucket — so both are signed through the same signPhotoMap.
+// private `post-media` bucket — minted via the post-media BFF for photos, or
+// playback?posterOnly=1 for video posters.
 //
 // Before this existed a video post had NOTHING to show: `media_url` is the
 // photo/voice path and is null for video, so every video card fell through to an
@@ -55,13 +63,17 @@ export function postPosterKey(
   return row.poster_url ?? row.media_url ?? null;
 }
 
-/** Resolve a post row to its signed poster URL using an already-built sign map. */
+/** Resolve a post row to its signed poster URL using an already-built sign map.
+ * Lookup: absolute key passthrough; post-id key (post-media mint); else path key
+ * (horse/trainer maps). */
 export function signedPosterFor(
-  row: { poster_url?: string | null; media_url?: string | null },
+  row: { id?: string; poster_url?: string | null; media_url?: string | null },
   signed: Map<string, string>,
 ): string | null {
   const key = postPosterKey(row);
-  return key ? signed.get(key) ?? null : null;
+  if (key && isAbsoluteUrl(key)) return signed.get(key) ?? key;
+  if (row.id && signed.has(row.id)) return signed.get(row.id) ?? null;
+  return key ? (signed.get(key) ?? null) : null;
 }
 
 // Batch variant: one round-trip for a list. Returns a `value -> signed URL` map
@@ -81,6 +93,8 @@ export async function signPhotoMap(
     else if (!out.has(v) && !paths.includes(v)) paths.push(v);
   }
   if (paths.length === 0) return out;
+  // Deny-by-construction: post-media bytes are minted by lib/api/post-media.ts.
+  if (bucket === POST_MEDIA_BUCKET) return out;
   const { data } = await sb.storage.from(bucket).createSignedUrls(paths, ttl);
   for (const item of data ?? []) {
     if (item.path && item.signedUrl) out.set(item.path, item.signedUrl);
