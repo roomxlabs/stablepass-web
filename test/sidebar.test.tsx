@@ -70,10 +70,35 @@ describe("Sidebar nav icons", () => {
     }
   });
 
+  it("includes Shares in the primary nav (ENG-831)", () => {
+    const { container } = render(<Sidebar user={USER} />);
+    const shares = container.querySelector('a[href="/shares"]');
+    expect(shares).toBeTruthy();
+    expect(shares?.querySelector(".nav-label")?.textContent).toBe("Shares");
+    expect(shares?.getAttribute("title")).toBe("Shares");
+  });
+
+  it("gives Shares a tag icon distinct from Following's heart", () => {
+    const { container } = render(<Sidebar user={USER} />);
+    const shares = container.querySelector('a[href="/shares"] svg.ic');
+    const following = container.querySelector('a[href="/following"] svg.ic');
+    expect(shares?.querySelectorAll("path").length).toBe(1);
+    expect(shares?.querySelectorAll("circle").length).toBe(1);
+    expect(following?.querySelectorAll("path").length).toBe(1);
+    expect(following?.querySelectorAll("circle").length).toBe(0);
+  });
+
   it("marks the active route with aria-current", () => {
     pathname = "/horses";
     const { container } = render(<Sidebar user={USER} />);
     expect(container.querySelector('a[href="/horses"]')?.getAttribute("aria-current")).toBe("page");
+    expect(container.querySelector('a[href="/explore"]')?.getAttribute("aria-current")).toBeNull();
+  });
+
+  it("marks Shares active when on /shares", () => {
+    pathname = "/shares";
+    const { container } = render(<Sidebar user={USER} />);
+    expect(container.querySelector('a[href="/shares"]')?.getAttribute("aria-current")).toBe("page");
     expect(container.querySelector('a[href="/explore"]')?.getAttribute("aria-current")).toBeNull();
   });
 });

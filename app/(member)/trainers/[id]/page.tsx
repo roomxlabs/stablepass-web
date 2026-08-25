@@ -74,7 +74,8 @@ export default async function TrainerProfilePage({ params }: { params: Promise<{
   const coverUrl = await signPhoto(sb, TRAINER_PHOTO_BUCKET, t.photo_url);
 
   const [{ data: horseRows }, { count: updates }, { data: followRow }, { data: notifyRow }] = await Promise.all([
-    sb.from("horse").select("id, display_name, racing_name, wins").eq("trainer_id", id).eq("status", "active").order("display_name"),
+    // ENG-831: for-sale horses are Shares-only — omit from the stable grid.
+    sb.from("horse").select("id, display_name, racing_name, wins").eq("trainer_id", id).eq("status", "active").eq("shares_for_sale", false).order("display_name"),
     sb.from("post").select("id", { count: "exact", head: true }).eq("source_trainer_id", id).eq("status", "published"),
     sb.from("follow").select("id").eq("user_id", userId).eq("trainer_id", id).maybeSingle(),
     sb.from("notify_optin").select("id").eq("user_id", userId).eq("trainer_id", id).maybeSingle(),

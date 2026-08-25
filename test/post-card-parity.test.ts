@@ -69,12 +69,14 @@ describe("ENG-613 row 4 — the caption sits below the reaction bar", () => {
 
   // The reorder is global to `.post-web`, which is exactly why the horse- and
   // trainer-profile feeds inherit it without being touched (scope decision 7).
-  it("orders head, media/panel, reactions, caption", () => {
+  it("orders head, media/panel, reactions, contact CTA, caption", () => {
     expect(rule(".post-head-web")).toContain("order: -3");
     expect(rule(".post-media-web")).toContain("order: -2");
     expect(rule(".post-panel")).toContain("order: -2");
     expect(rule(".post-actions-web")).toContain("order: 1");
-    expect(rule(".post-body-web")).toContain("order: 2");
+    // ENG-831: Shares Contact-trainer CTA sits between reactions and caption.
+    expect(rule(".post-contact-cta")).toContain("order: 2");
+    expect(rule(".post-body-web")).toContain("order: 3");
   });
 
   // An uncaptioned post must be spaced like a captioned one. The old rules were

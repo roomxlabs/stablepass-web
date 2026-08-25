@@ -27,6 +27,11 @@ export interface FeedPost {
    * do not offer the pill and so never resolve it.
    */
   trainerId?: string | null;
+  /**
+   * Public `trainer.website_url` — Shares Contact-trainer CTA only (ENG-831).
+   * Never owner/vendor PII; never a price. Optional on every other surface.
+   */
+  websiteUrl?: string | null;
   /** `trainer.stable_name` — the STABLE UPDATE panel footer. Not owner identity. */
   stableName?: string | null;
   /** `trainer.location` — the other half of the panel footer. */

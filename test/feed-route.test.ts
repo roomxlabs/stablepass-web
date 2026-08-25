@@ -38,6 +38,7 @@ vi.mock("@/lib/api/edge", () => ({
 import { GET } from "@/app/api/feed/route";
 import { POST } from "@/app/api/feed/seen/route";
 import { GET as followingGET } from "@/app/api/feed/following/route";
+import { GET as sharesGET } from "@/app/api/feed/shares/route";
 
 function req(url: string) {
   return new Request(url);
@@ -166,6 +167,22 @@ describe("GET /api/feed", () => {
 
     expect(subSelectMock).toHaveBeenCalledWith("status,trial_ends_at,current_period_end");
   });
+
+  it("never forwards shares= to the edge fn (Explore omits for-sale posts)", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    singleMock.mockResolvedValue({ data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } });
+    edgeFetchMock.mockResolvedValue(
+      fakeRes(200, { data: [], meta: { nextCursor: null, hasMore: false } }),
+    );
+
+    // Even a hostile client query must not opt Explore into Shares.
+    await GET(req("http://localhost/api/feed?shares=true&limit=10"));
+
+    expect(edgeFetchMock).toHaveBeenCalledTimes(1);
+    const path = edgeFetchMock.mock.calls[0][1] as string;
+    expect(path.startsWith("feed?")).toBe(true);
+    expect(path).not.toMatch(/shares=true/);
+  });
 });
 
 describe("GET /api/feed/following", () => {
@@ -247,6 +264,71 @@ describe("GET /api/feed/following", () => {
     );
 
     await followingGET(req("http://localhost/api/feed/following"));
+
+    expect(subSelectMock).toHaveBeenCalledWith("status,trial_ends_at,current_period_end");
+  });
+});
+
+describe("GET /api/feed/shares", () => {
+  beforeEach(() => {
+    getUserMock.mockReset();
+    singleMock.mockReset();
+    insertMock.mockReset();
+    edgeFetchMock.mockReset();
+    fromMock.mockClear();
+    subSelectMock.mockClear();
+  });
+
+  it("returns 401 with the error envelope when there is no session", async () => {
+    getUserMock.mockResolvedValue({ data: { user: null } });
+
+    const res = await sharesGET(req("http://localhost/api/feed/shares"));
+    const body = await res.json();
+
+    expect(res.status).toBe(401);
+    expect(body.error.code).toBe("unauthorized");
+    expect(edgeFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 402 when the subscription has lapsed, without calling the edge fn", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    singleMock.mockResolvedValue({ data: { status: "lapsed", trial_ends_at: null, current_period_end: null } });
+
+    const res = await sharesGET(req("http://localhost/api/feed/shares"));
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body.error.code).toBe("subscription_required");
+    expect(edgeFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards shares=true to the be feed fn", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    singleMock.mockResolvedValue({ data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } });
+    edgeFetchMock.mockResolvedValue(
+      fakeRes(200, { data: [{ id: "sale-post" }], meta: { nextCursor: null, hasMore: false } }),
+    );
+
+    const res = await sharesGET(req("http://localhost/api/feed/shares?limit=10"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data).toEqual([{ id: "sale-post" }]);
+    expect(edgeFetchMock).toHaveBeenCalledTimes(1);
+    const path = edgeFetchMock.mock.calls[0][1] as string;
+    expect(path).toContain("shares=true");
+    expect(path).toContain("limit=10");
+    expect(path).not.toContain("following=true");
+  });
+
+  it("selects the expiry columns, not just status", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    singleMock.mockResolvedValue({ data: { status: "active", trial_ends_at: null, current_period_end: null } });
+    edgeFetchMock.mockResolvedValue(
+      fakeRes(200, { data: [], meta: { nextCursor: null, hasMore: false } }),
+    );
+
+    await sharesGET(req("http://localhost/api/feed/shares"));
 
     expect(subSelectMock).toHaveBeenCalledWith("status,trial_ends_at,current_period_end");
   });

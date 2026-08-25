@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
@@ -17,9 +17,10 @@ import type { FeedPost } from "@/components/types";
 // whole point of that ticket: it is what turns a mapper that forgets a column
 // into a compile error instead of a pill nobody notices is missing for weeks.
 // Nothing stopped a future edit from quietly putting the `?` back, so this line
-// is the guard on the guard. `{} extends T` holds only when every key of T is
-// optional, so `label?:` collapses this to `never` and fails the build.
-type LabelIsRequired<T> = {} extends T ? never : true;
+// is the guard on the guard. `Record<string, never> extends T` holds only when
+// every key of T is optional, so `label?:` collapses this to `never` and fails
+// the build.
+type LabelIsRequired<T> = Record<string, never> extends T ? never : true;
 const _labelStaysRequired: LabelIsRequired<Pick<FeedPost, "label">> = true;
 void _labelStaysRequired;
 
@@ -353,6 +354,101 @@ describe("PostCard — row 5, the Follow pill", () => {
     render(<PostCard post={TEXT_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} canFollow />);
 
     expect(screen.queryByRole("button", { name: /^Follow / })).not.toBeInTheDocument();
+  });
+});
+
+describe("PostCard — Shares variant (ENG-831)", () => {
+  const SHARES_POST: FeedPost = {
+    ...BASE,
+    trainerId: "3f1c9b2e-5a4d-4c8b-9e7a-1d2b3c4d5e6f",
+    websiteUrl: "https://wallerracing.example",
+  };
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 204 })));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("never shows Follow even when canFollow is true", () => {
+    render(
+      <PostCard
+        post={SHARES_POST}
+        viewerId={VIEWER_ID}
+        onReact={noop}
+        onBookmark={noop}
+        canFollow
+        variant="shares"
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /^Follow / })).not.toBeInTheDocument();
+  });
+
+  it("renders the green Contact-trainer CTA to the public website_url", () => {
+    render(
+      <PostCard post={SHARES_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} variant="shares" />,
+    );
+    const cta = screen.getByRole("link", { name: "Contact trainer" });
+    expect(cta).toHaveAttribute("href", "https://wallerracing.example");
+    expect(cta).toHaveAttribute("target", "_blank");
+    expect(cta).toHaveAttribute("rel", "noopener noreferrer");
+    expect(cta).toHaveClass("btn", "btn-primary");
+  });
+
+  it("keeps react and save on the Shares card", () => {
+    render(
+      <PostCard post={SHARES_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} variant="shares" />,
+    );
+    expect(screen.getByRole("button", { name: "Like" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Bookmark" })).toBeInTheDocument();
+  });
+
+  it("omits the CTA when website_url is missing or not absolute http(s)", () => {
+    for (const websiteUrl of [null, "", "   ", "wallerracing.com.au", "javascript:alert(1)"]) {
+      const { unmount } = render(
+        <PostCard
+          post={{ ...SHARES_POST, websiteUrl }}
+          viewerId={VIEWER_ID}
+          onReact={noop}
+          onBookmark={noop}
+          variant="shares"
+        />,
+      );
+      expect(screen.queryByRole("link", { name: "Contact trainer" })).not.toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("GUARDRAIL: CTA href is only website_url — never owner/contact PII or a price", () => {
+    const { container } = render(
+      <PostCard post={SHARES_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} variant="shares" />,
+    );
+    const text = container.textContent ?? "";
+    expect(text).not.toMatch(/owner/i);
+    expect(text).not.toMatch(/\$\d/);
+    expect(text).not.toMatch(/odds|bet|bookmaker/i);
+    expect(screen.getByRole("link", { name: "Contact trainer" }).getAttribute("href")).toBe(
+      "https://wallerracing.example",
+    );
+  });
+
+  it("logs the ENG-274 website-click on CTA click", async () => {
+    render(
+      <PostCard post={SHARES_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} variant="shares" />,
+    );
+    await userEvent.click(screen.getByRole("link", { name: "Contact trainer" }));
+    expect(fetch).toHaveBeenCalledWith(
+      `/api/trainers/${SHARES_POST.trainerId}/website-click`,
+      expect.objectContaining({ method: "POST", keepalive: true }),
+    );
+  });
+
+  it("does not render the CTA on the default Explore variant even with websiteUrl set", () => {
+    render(
+      <PostCard post={SHARES_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />,
+    );
+    expect(screen.queryByRole("link", { name: "Contact trainer" })).not.toBeInTheDocument();
   });
 });
 

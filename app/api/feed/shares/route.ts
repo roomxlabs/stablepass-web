@@ -3,8 +3,10 @@ import { ok, UNAUTH, GATED, fail } from "@/lib/api/envelope";
 import { hasAccess, ACCESS_COLUMNS } from "@/lib/api/access";
 import { edgeFetch } from "@/lib/api/edge";
 
-// GET /api/feed?cursor=&limit= — ranked (like-weight + recency + unseen-first).
-// RLS returns only published + gated rows; ranking + impressions via be `feed` fn.
+// GET /api/feed/shares?cursor=&limit= — ranked feed of for-sale-horse posts only
+// (ENG-831 / ENG-828). Forwards `shares=true` so the be `feed` fn calls
+// feed_page / feed_page_seen with `p_shares => true`. Members-only (gate below);
+// BE also enforces has_content_access.
 export async function GET(req: Request) {
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
@@ -14,9 +16,7 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const cursor = url.searchParams.get("cursor");
   const limit = Math.min(Number(url.searchParams.get("limit") ?? 20), 50);
-  // Explore never opts into Shares — for-sale posts are served only by
-  // /api/feed/shares (ENG-831). Do not forward a client `shares=` here.
-  const query = new URLSearchParams({ ...(cursor ? { cursor } : {}), limit: String(limit) });
+  const query = new URLSearchParams({ shares: "true", ...(cursor ? { cursor } : {}), limit: String(limit) });
   const res = await edgeFetch(sb, `feed?${query}`);
   if (res.status === 402) return GATED();
   if (res.status === 400) return fail("invalid_cursor", "Invalid cursor.", 400);

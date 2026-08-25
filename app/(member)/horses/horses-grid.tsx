@@ -58,6 +58,8 @@ export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; eve
         .from("horse")
         .select("id, display_name, racing_name, trainer:trainer_id(name)")
         .eq("status", "active")
+        // ENG-831: for-sale horses live only on Shares — never in Horses browse.
+        .eq("shares_for_sale", false)
         .order("display_name");
 
       if (cancelled) return;
