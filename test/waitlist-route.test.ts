@@ -258,8 +258,10 @@ describe("POST /api/waitlist — JSON dialect (caller sends Accept: application/
     // Built with String.fromCharCode so no literal control character sits in
     // the source. NUL is the one that matters most: unrejected, it reaches
     // Postgres and raises 22P05 "unsupported Unicode escape sequence" — a
-    // SQLSTATE that is neither 23505 nor 23514, so it would fall through to
-    // the generic 500 branch and let an unauthenticated caller manufacture
+    // SQLSTATE the route does not special-case (it is not the 23514 CHECK, and
+    // since ENG-802 no unique violation reaches the route at all), so it would
+    // fall through to the generic 500 branch and let an unauthenticated caller
+    // manufacture
     // server errors (and log lines) with a one-character payload. Newline and
     // tab were already rejected before this change (JS `\s` catches them via
     // EMAIL_RE); NUL, BEL and DEL are the genuinely new coverage — verified
@@ -337,18 +339,42 @@ describe("POST /api/waitlist — JSON dialect (caller sends Accept: application/
     expect(dbBody).toEqual(INVALID_EMAIL_BODY);
   });
 
-  it("9. any other DB error maps to a generic 500 and never leaks the PostgREST code", async () => {
-    rpcMock.mockImplementationOnce(() => rpcResolution({ error: { code: "08006" } }));
+  // This is the branch where a leak is actually POSSIBLE, so it carries the
+  // hostile payload. Test 14 below covers `details` on the 23514 path, but that
+  // path answers through `rejectEmail()`, whose envelope is a fixed literal --
+  // nothing can escape there even deliberately. EVERY other Postgres error,
+  // including a definer-unmasked `details`, arrives here instead. Pinning only
+  // the 23514 path would leave the reachable one unguarded: widening the
+  // `error` type and passing `error.details` as the message below typechecks
+  // cleanly and would ship a verbatim failing row in a 500 body.
+  it("9. any other DB error maps to a generic 500 and leaks neither the code NOR the failing row", async () => {
+    rpcMock.mockImplementationOnce(() =>
+      rpcResolution({
+        error: {
+          code: "08006",
+          details:
+            "Failing row contains (018f0f34-0000-7000-8000-000000000000, victim@example.co, null, null, 2026-08-24 00:00:00+00, marketing).",
+        },
+      }),
+    );
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const res = await POST(jsonReq({ email: "good@example.co" }));
     const body = await res.json();
 
+    // Positive assertions first -- an all-negative test passes vacuously.
     expect(res.status).toBe(500);
     expect(body).toEqual({
       error: { code: "waitlist_failed", message: "Something went wrong. Please try again." },
     });
     expect(JSON.stringify(body)).not.toContain("08006");
+    expect(JSON.stringify(body)).not.toContain("Failing row");
+    expect(JSON.stringify(body)).not.toContain("victim@example.co");
+
+    // Nor may the address or the row reach the log line -- the code alone.
+    const logged = consoleErrorSpy.mock.calls.flat().join(" ");
+    expect(logged).not.toContain("Failing row");
+    expect(logged).not.toContain("victim@example.co");
 
     consoleErrorSpy.mockRestore();
   });
@@ -454,6 +480,14 @@ describe("POST /api/waitlist — form dialect (browser Accept: text/html — the
     expect(secondRes.headers.get("location")).toBe("/?joined=1");
     expect(secondRes.headers.get("location")).toBe(firstRes.headers.get("location"));
     expect(rpcMock).toHaveBeenCalledTimes(2);
+    // Same per-call argument assertion its JSON twin carries. Without it this
+    // case catches "never called the RPC" but NOT "called it with the wrong
+    // argument name" -- measured: under a p_email -> email mutation the JSON
+    // duplicate case failed and this one stayed green.
+    expect(rpcMock.mock.calls.map((c) => c[1])).toEqual([
+      { p_email: "dup@b.co" },
+      { p_email: "dup@b.co" },
+    ]);
   });
 
   it("3. an invalid email 303s to /?joined=0&reason=email", async () => {
@@ -620,10 +654,26 @@ describe("guardrails — the cookie-free client claim is enforced, not just asse
   });
 
   it("passes the anon key, never a service-role key, as the second argument", async () => {
-    await POST(jsonReq({ email: "a@b.co" }));
+    // Asserted against a SENTINEL, not against `process.env.X` on both sides.
+    // Nothing sets these vars for a vitest run (no .env file, and neither
+    // vitest.config.ts nor a setup file defines them), so the old form compared
+    // `undefined` to `undefined` and passed vacuously -- it would have passed
+    // just as happily if the route had read a service-role key from some other
+    // variable. Pinning the literal is what makes this a real guardrail test.
+    const sentinel = "anon-key-sentinel-eng802";
+    const previous = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = sentinel;
+    try {
+      await POST(jsonReq({ email: "a@b.co" }));
 
-    const [, key] = createServerClientMock.mock.calls.at(-1)!;
-    expect(key).toBe(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+      const [url, key] = createServerClientMock.mock.calls.at(-1)!;
+      expect(key).toBe(sentinel);
+      expect(String(key)).not.toMatch(/service[_-]?role/i);
+      expect(String(url)).not.toMatch(/service[_-]?role/i);
+    } finally {
+      if (previous === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      else process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = previous;
+    }
   });
 
   it("the route no longer references the unique-violation SQLSTATE anywhere (ENG-802)", () => {
