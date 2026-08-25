@@ -17,7 +17,8 @@ type TrainerRow = {
   display_name: string | null;
   stable_name: string | null;
   location: string | null;
-  horses: { count: number }[] | null;
+  // ENG-831: count non-sale horses only — for-sale horses are Shares-only.
+  horses: { id: string; shares_for_sale: boolean }[] | null;
 };
 type TrainerCardVM = { id: string; title: string; subtitle: string; horseCount: number };
 
@@ -58,11 +59,11 @@ export function TrainersGrid({ viewerId, everSubscribed }: { viewerId: string; e
         return;
       }
 
-      // horse:trainer_id(count) returns the trainer's active horse count via RLS
-      // (horse_select_sub gates the join to active + content-access rows).
+      // horse:trainer_id returns the trainer's horses via RLS. We count only
+      // shares_for_sale=false (ENG-831) so for-sale horses never inflate browse.
       const { data, error: fetchError } = await sb
         .from("trainer")
-        .select("id, name, display_name, stable_name, location, horses:horse!trainer_id(count)")
+        .select("id, name, display_name, stable_name, location, horses:horse!trainer_id(id, shares_for_sale)")
         .order("name");
 
       if (cancelled) return;
@@ -72,7 +73,7 @@ export function TrainersGrid({ viewerId, everSubscribed }: { viewerId: string; e
         id: t.id,
         title: t.display_name || t.name,
         subtitle: [t.stable_name, t.location].filter(Boolean).join(" · "),
-        horseCount: t.horses?.[0]?.count ?? 0,
+        horseCount: (t.horses ?? []).filter((h) => !h.shares_for_sale).length,
       }));
       setTrainers(mapped);
       setLoading(false);

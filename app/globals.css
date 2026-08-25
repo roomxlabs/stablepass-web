@@ -613,7 +613,8 @@ a { color: inherit; text-decoration: none; }
 .post-media-web   { order: -2; }
 .post-panel       { order: -2; }
 .post-actions-web { order: 1; }
-.post-body-web    { order: 2; }
+.post-contact-cta { order: 2; margin: 0 22px 14px; }
+.post-body-web    { order: 3; }
 .post-head-web { display: flex; align-items: center; gap: 12px; padding: 16px 22px 14px; }
 .post-avatar-web {
   width: 44px; height: 44px; border-radius: 50%;

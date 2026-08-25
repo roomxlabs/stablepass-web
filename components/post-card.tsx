@@ -305,12 +305,62 @@ export interface PostCardProps {
    * noise, and on the surfaces that hold no follow state at all.
    *
    * There is no "Following" variant: a followed trainer simply gets no pill.
+   *
+   * Shares (ENG-831) never offers Follow — pass `variant="shares"` instead of
+   * relying on this flag alone.
    */
   canFollow?: boolean;
   onFollow?: () => void;
+  /**
+   * `shares` — Explore layout minus Follow, plus the green Contact-trainer CTA
+   * that opens `post.websiteUrl` (public trainer website only; no owner PII,
+   * no prices). React/save stay. Default is the Explore card.
+   */
+  variant?: "default" | "shares";
 }
 
-export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollow = false, onFollow }: PostCardProps) {
+/**
+ * Only absolute http(s) URLs are linkable. Mirrors WebsiteLink (ENG-274):
+ * `trainer.website_url` is unconstrained text, so a bare domain must not become
+ * a relative in-app href. Validate with `URL`, return the original trimmed
+ * string (do not write back `url.href` — it normalises).
+ */
+export function safeWebsiteHref(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  try {
+    const { protocol } = new URL(trimmed);
+    return protocol === "http:" || protocol === "https:" ? trimmed : null;
+  } catch {
+    return null;
+  }
+}
+
+function logWebsiteClick(trainerId: string) {
+  // Fire-and-forget — same contract as WebsiteLink / ENG-274. Never block nav.
+  void fetch(`/api/trainers/${trainerId}/website-click`, {
+    method: "POST",
+    keepalive: true,
+  }).catch(() => {
+    /* best-effort */
+  });
+}
+
+export function PostCard({
+  post,
+  viewerId,
+  onReact,
+  onBookmark,
+  onPlay,
+  canFollow = false,
+  onFollow,
+  variant = "default",
+}: PostCardProps) {
+  const isShares = variant === "shares";
+  // Shares never offers Follow (grilled Q3 / ENG-831), even if a screen passes canFollow.
+  const offerFollow = !isShares && canFollow;
+  const contactHref = isShares ? safeWebsiteHref(post.websiteUrl) : null;
   const isVideo = post.media.type === "video";
   const hasMedia = post.media.type === "video" || post.media.type === "photo";
   // text / news get the STABLE UPDATE anatomy: pill, title, the inset panel in
@@ -415,7 +465,7 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
                   <span className="by-trainer">{post.trainerName}</span> · {post.postedAgo}
                 </div>
               </div>
-              {canFollow && <FollowPill trainerName={post.trainerName} onFollow={onFollow} />}
+              {offerFollow && <FollowPill trainerName={post.trainerName} onFollow={onFollow} />}
             </div>
           )}
           {isVideo && (
@@ -427,7 +477,7 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
               so the card only draws the plain one when there is no carousel. */}
           {post.media.type === "photo" && !isCarousel && <MediaPhotoChip />}
           {post.watermarked && <PostOverlay viewerId={viewerId} />}
-          {!isReel && canFollow && <FollowPill trainerName={post.trainerName} onFollow={onFollow} />}
+          {!isReel && offerFollow && <FollowPill trainerName={post.trainerName} onFollow={onFollow} />}
         </div>
       )}
 
@@ -452,6 +502,24 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
         onReact={onReact}
         onBookmark={onBookmark}
       />
+
+      {/* Shares Contact-trainer CTA (ENG-831): green primary, public website_url
+          only. Absent when the trainer has no absolute http(s) URL — same gate
+          as WebsiteLink. Click logging reuses ENG-274's BFF. */}
+      {contactHref && post.trainerId && (
+        <a
+          className="btn btn-primary btn-block post-contact-cta"
+          href={contactHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={() => logWebsiteClick(post.trainerId!)}
+          onAuxClick={(e) => {
+            if (e.button === 1) logWebsiteClick(post.trainerId!);
+          }}
+        >
+          Contact trainer
+        </a>
+      )}
 
       {/* The caption renders LAST in the DOM and is placed below the reaction bar
           by `order` in globals.css — Instagram's ordering, decided 5 Aug. An

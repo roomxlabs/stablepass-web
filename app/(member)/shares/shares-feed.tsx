@@ -1,13 +1,15 @@
 "use client";
 
-// ExploreFeed — the Explore screen (06-explore.html). Composes the W4 shared
-// components (PostCard/ReactionBar/RaceDayBand/TrainerCard) against the W5 BFF
-// (`/api/feed`, `/api/feed/seen`, `/api/posts/:id/playback`). The followed feed now
-// lives on the dedicated /following screen (W13), so Explore is a single view.
+// SharesFeed — for-sale-horse posts only (ENG-831). Reuses the Explore layout
+// (topbar + feed grid + race-day aside) but calls `/api/feed/shares` and renders
+// PostCard with `variant="shares"` (no Follow; Contact-trainer CTA).
 //
-// DATA REALITY: the be `feed` fn returns bare `post` rows (no horse/trainer names),
-// so every page is enriched client-side: a `horse` lookup for the byline, plus the
-// viewer's own `reaction`/`bookmark` rows (RLS returns only the viewer's own).
+// needs-design-check: Explore mockup has no Shares screen; placement and card
+// chrome match Explore minus follow + green contact CTA.
+//
+// DATA REALITY: same as Explore — bare `post` rows enriched client-side. Trainer
+// `website_url` is selected here so the Contact CTA can open it (public only;
+// never private contact rows, never PII, never prices).
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { AccessWall } from "@/components/access-wall";
 import { PostCard, mediaBoxProps } from "@/components/post-card";
@@ -22,14 +24,15 @@ import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 
 const LIMIT = 10;
 
-// Bare be `post` row shape (no horse/trainer names — see module comment).
-// Pinned by test/explore-feed.test.tsx.
 type PostRow = PostIntrinsicRow & { horse_id: string };
 
-// `id` for the Follow pill (a name is not a key), `stable_name`/`location` for the
-// STABLE UPDATE panel footer. Stable identity only — there is no owner field here
-// and none may be added.
-type HorseTrainer = { id: string; name: string; stable_name: string | null; location: string | null };
+type HorseTrainer = {
+  id: string;
+  name: string;
+  stable_name: string | null;
+  location: string | null;
+  website_url: string | null;
+};
 type HorseRow = { id: string; display_name: string; trainer: HorseTrainer | HorseTrainer[] | null };
 type ReactionRow = { post_id: string; emoji: ReactionEmoji };
 type BookmarkRow = { post_id: string };
@@ -47,11 +50,6 @@ type RaceRow = {
 };
 
 type FollowTrainer = { id: string; name: string };
-// `trainer_id` is read RAW alongside the embed on purpose: the embed is what the
-// aside needs (it wants the NAME), but a row whose trainer embed comes back null
-// — RLS hid it, or the join missed — would silently drop that trainer from the
-// followed set and put a Follow pill on a trainer the viewer already follows.
-// The raw column cannot be hidden that way.
 type FollowRow = { trainer_id: string | null; trainer: FollowTrainer | FollowTrainer[] | null };
 
 const Search = () => (
@@ -88,11 +86,7 @@ function one<T>(v: T | T[] | null): T | null {
   return Array.isArray(v) ? (v[0] ?? null) : v;
 }
 
-// `everSubscribed` is resolved SERVER-side (app/(member)/explore/page.tsx) and
-// arrives as a boolean — `stripe_customer_id` itself never reaches client JS
-// (.rx/guardrails.md #1). `gated` still comes from the BFF's 402, which is
-// already date-aware via `hasAccess()`; ENG-585 only changes what the wall SAYS.
-export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; everSubscribed: boolean }) {
+export function SharesFeed({ viewerId, everSubscribed }: { viewerId: string; everSubscribed: boolean }) {
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -101,18 +95,10 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
   const [gated, setGated] = useState(false);
   const [races, setRaces] = useState<RaceDayEntry[]>([]);
   const [trainers, setTrainers] = useState<TrainerSummary[]>([]);
-  // Which trainers the viewer already follows — the Follow pill's only input.
-  // `null` means "not known yet", which is NOT the same as "follows nobody":
-  // treating the two alike would flash a pill on every card and then retract the
-  // ones that were wrong. Populated from the follow read this screen ALREADY
-  // makes for the aside, so the pill costs no extra query and none per card.
-  const [followedTrainerIds, setFollowedTrainerIds] = useState<Set<string> | null>(null);
   const [playing, setPlaying] = useState<Record<string, string>>({});
   const [playError, setPlayError] = useState<Record<string, boolean>>({});
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
-  // Trainer ids with a follow write in flight — see follow() below.
-  const followInFlight = useRef<Set<string>>(new Set());
   const loadingRef = useRef(false);
 
   const fetchPage = useCallback(async (forCursor: string | null) => {
@@ -121,7 +107,6 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
     setLoading(true);
     setError(false);
     if (!forCursor) {
-      // First page (initial mount) — reset list/gate/playing state.
       setPosts([]);
       setGated(false);
       setPlaying({});
@@ -131,7 +116,7 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
       const params = new URLSearchParams({ limit: String(LIMIT) });
       if (forCursor) params.set("cursor", forCursor);
 
-      const res = await fetch(`/api/feed?${params}`);
+      const res = await fetch(`/api/feed/shares?${params}`);
       if (res.status === 402) {
         setGated(true);
         return;
@@ -156,10 +141,8 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
       const sb = supabaseBrowser();
 
       const [{ data: horseRows }, { data: reactionRows }, { data: bookmarkRows }] = await Promise.all([
-        // `sb` is untyped, so `tsc` can never catch a too-narrow `.select()`:
-        // dropping a column here would silently blank the byline, the panel
-        // footer or the Follow pill with no type error. Pinned by a test.
-        sb.from("horse").select("id, display_name, trainer:trainer_id(id, name, stable_name, location)").in("id", horseIds),
+        // website_url for the Contact-trainer CTA — public column only.
+        sb.from("horse").select("id, display_name, trainer:trainer_id(id, name, stable_name, location, website_url)").in("id", horseIds),
         sb.from("reaction").select("post_id,emoji").in("post_id", ids),
         sb.from("bookmark").select("post_id").in("post_id", ids),
       ]);
@@ -167,10 +150,6 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
       const horseById = new Map(((horseRows ?? []) as HorseRow[]).map((h) => [h.id, h]));
       const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
       const mySet = new Set(((bookmarkRows ?? []) as BookmarkRow[]).map((b) => b.post_id));
-      // Photos + their slide counts via ONE POST /api/posts/media; video posters
-      // via playback?posterOnly=1. Absolute URLs pass through. A 402 surfaces the
-      // AccessWall (guardrail 3). `slideCounts` rides in on the same batch, which
-      // is what lets a carousel draw the right dots before it mints a thing.
       let media: PostDisplayMedia;
       try {
         media = await resolvePostDisplayUrls(rows);
@@ -189,11 +168,10 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
         return {
           ...postIntrinsics(r, intrinsics),
           horseId: r.horse_id,
-          // Title-cased and (AUS)-stripped for display; the raw value stays on
-          // the row for keys and comparisons (ENG-761 item 6).
           horseName: displayHorseNameOrEmpty(horse?.display_name) || "Unknown horse",
           trainerName: trainer?.name ?? "Stablepass",
           trainerId: trainer?.id ?? null,
+          websiteUrl: trainer?.website_url ?? null,
           stableName: trainer?.stable_name ?? null,
           stableLocation: trainer?.location ?? null,
           bookmarked: mySet.has(r.id),
@@ -204,7 +182,6 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
       setCursor(meta.nextCursor ?? null);
       setHasMore(Boolean(meta.hasMore));
 
-      // Best-effort impression tracking — never blocks rendering on failure.
       fetch("/api/feed/seen", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -216,14 +193,11 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
     }
   }, []);
 
-  // Fetch the first page on mount — a "synchronize with an external system"
-  // effect (a data fetch), not derived render-state.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial data fetch, not derived state
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial data fetch
     fetchPage(null);
   }, [fetchPage]);
 
-  // Race-day band + "Trainers you follow" aside — loaded once, independent of the tab.
   useEffect(() => {
     const sb = supabaseBrowser();
     const today = new Date().toISOString().slice(0, 10);
@@ -238,8 +212,9 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
           const runners = Array.isArray(r.race_horse) ? r.race_horse : r.race_horse ? [r.race_horse] : [];
           for (const runner of runners) {
             const horse = one(runner.horse);
-            // ENG-831: for-sale horses never appear on Explore (discovery segregation).
-            if (!horse || horse.shares_for_sale) continue;
+            // Shares surface: race-day can include for-sale runners (they are
+            // the point of this feed). Explore filters them out separately.
+            if (!horse) continue;
             entries.push({
               horseId: horse.id,
               horseName: displayHorseNameOrEmpty(horse.display_name),
@@ -256,6 +231,10 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
         .from("follow")
         .select("trainer_id, trainer:trainer_id(id,name)")
         .not("trainer_id", "is", null);
+      if (followError) {
+        setTrainers([]);
+        return;
+      }
       const rows = (followRows ?? []) as FollowRow[];
       const trainerMap = new Map<string, string>();
       for (const row of rows) {
@@ -263,31 +242,15 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
         if (t) trainerMap.set(t.id, t.name);
       }
       const trainerIds = [...trainerMap.keys()];
-
-      // Set BEFORE the horse-count round trip below, and on the empty path too:
-      // an empty follow list is a real answer (every card gets a pill), not a
-      // reason to leave the state unknown.
-      //
-      // A FAILED read is the opposite: leaving it `null` keeps the pill hidden.
-      // Treating an error as "follows nobody" would put a Follow pill on every
-      // card INCLUDING trainers the viewer already follows, and clicking one
-      // then writes a duplicate `follow` row the unique constraint rejects — the
-      // pill flashes out and back. `null` means unknown; only a successful read
-      // may answer the question.
-      if (!followError) {
-        setFollowedTrainerIds(
-          new Set(rows.map((r) => r.trainer_id).filter((id): id is string => Boolean(id))),
-        );
-      }
       if (trainerIds.length === 0) {
         setTrainers([]);
         return;
       }
+      // Horse counts exclude for-sale horses (full segregation for browse-like UI).
       const { data: horseRows } = await sb
         .from("horse")
-        .select("trainer_id")
+        .select("trainer_id, shares_for_sale")
         .in("trainer_id", trainerIds)
-        // ENG-831: aside horse counts exclude for-sale horses.
         .eq("shares_for_sale", false);
       const counts = new Map<string, number>();
       for (const h of (horseRows ?? []) as { trainer_id: string }[]) {
@@ -297,7 +260,6 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
     })();
   }, []);
 
-  // Infinite scroll — a sentinel div at the bottom of the list loads the next page.
   useEffect(() => {
     if (typeof IntersectionObserver === "undefined") return;
     if (!hasMore || loading || gated || error) return;
@@ -346,36 +308,6 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
     }
   }
 
-  // Follow, from the pill on the media. Optimistic like react/bookmark above,
-  // and it clears the pill on EVERY card by that trainer at once, which is the
-  // reason follow state lives on the screen rather than inside the card.
-  async function follow(trainerId: string) {
-    // `follow_no_duplicate` is `unique (user_id, trainer_id, horse_id)`, and a
-    // TRAINER follow has `horse_id IS NULL` — Postgres treats NULLs as distinct,
-    // so that constraint does NOT stop a second row. A fast double-click before
-    // the optimistic re-render would write two, and the Following rail would
-    // then list the trainer twice with a duplicate React key.
-    if (followInFlight.current.has(trainerId)) return;
-    followInFlight.current.add(trainerId);
-
-    setFollowedTrainerIds((prev) => new Set(prev ?? []).add(trainerId));
-
-    const sb = supabaseBrowser();
-    const { error: followError } = await sb.from("follow").insert({ user_id: viewerId, trainer_id: trainerId });
-    followInFlight.current.delete(trainerId);
-
-    // 23505 is unique_violation: the row already exists, so the viewer already
-    // follows this trainer. That IS the desired end state — rolling back would
-    // put the pill back on a trainer they follow, which is the bug, not the fix.
-    if (followError && followError.code !== "23505") {
-      setFollowedTrainerIds((prev) => {
-        const next = new Set(prev ?? []);
-        next.delete(trainerId);
-        return next;
-      });
-    }
-  }
-
   async function play(postId: string) {
     setPlayError((prev) => ({ ...prev, [postId]: false }));
     try {
@@ -399,16 +331,10 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
   const showEmpty = !gated && !error && !loading && posts.length === 0;
   const showSkeleton = !gated && !error && loading && posts.length === 0;
 
-  // No pill until the follow read has answered (see the state's comment), and
-  // none for a trainer already followed — there is no "Following" variant.
-  function canFollowTrainer(post: FeedPost): boolean {
-    return followedTrainerIds !== null && Boolean(post.trainerId) && !followedTrainerIds.has(post.trainerId!);
-  }
-
   return (
     <>
       <div className="topbar">
-        <h1 className="section-title-web" style={{ margin: 0 }}>Explore</h1>
+        <h1 className="section-title-web" style={{ margin: 0 }}>Shares</h1>
         <div className="topbar-spacer" />
         <div className="topbar-search">
           <Search /> Search horses, trainers…
@@ -450,18 +376,13 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
                         <div className="post-avatar-web" aria-hidden="true">{p.horseName[0]?.toUpperCase() ?? "?"}</div>
                         <div className="post-meta-web">
                           <h3 className="post-horse">{p.horseName}</h3>
-                          {/* title on a media card is withheld (client, 18 Aug 2026) — see post-card.tsx */}
                           <div className="post-byline">
                             <span className="by-trainer">{p.trainerName}</span> · {p.postedAgo}
                           </div>
                         </div>
                       </div>
                       <div {...mediaBoxProps(p.media.aspectRatio, { video: true })}>
-                        <video
-                          controls
-                          autoPlay
-                          src={playbackUrl}
-                        />
+                        <video controls autoPlay src={playbackUrl} />
                       </div>
                       <ReactionBar
                         count={p.count}
@@ -470,7 +391,6 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
                         onReact={(e) => react(p.id, e)}
                         onBookmark={() => bookmark(p.id)}
                       />
-                      {/* Caption below the reaction bar, same as PostCard. */}
                       {p.body && <div className="post-body-web">{p.body}</div>}
                     </article>
                   );
@@ -483,8 +403,7 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
                       onReact={(e) => react(p.id, e)}
                       onBookmark={() => bookmark(p.id)}
                       onPlay={() => play(p.id)}
-                      canFollow={canFollowTrainer(p)}
-                      onFollow={() => p.trainerId && follow(p.trainerId)}
+                      variant="shares"
                     />
                     {playError[p.id] && (
                       <p role="alert" style={{ color: "var(--red)", marginTop: -16, marginBottom: 24, fontSize: 13.5 }}>
