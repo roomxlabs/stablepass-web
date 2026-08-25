@@ -83,7 +83,7 @@ export default function TheApp() {
                 <span className="ph-island" />
                 <img
                   className="shot"
-                  src="/marketing/8c0fa420.jpg"
+                  src="/marketing/94d671ea.jpg"
                   alt="stablepass app: the horses you follow, with the next runner"
                 />
                 <span className="ph-home" />
@@ -95,8 +95,8 @@ export default function TheApp() {
                 <div className="lap-view">
                   <img
                     className="shot"
-                    src="/marketing/4a5f34ce.jpg"
-                    alt="stablepass subscriber portal: Mahogany horse profile"
+                    src="/marketing/f8429cbb.jpg"
+                    alt="stablepass subscriber portal: Carbonara horse profile"
                   />
                 </div>
               </div>

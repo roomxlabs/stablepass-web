@@ -106,7 +106,7 @@ export default function Hero({ joined, reason }: { joined?: string | null; reaso
                 <span className="ph-island" />
                 <img
                   className="shot"
-                  src="/marketing/42017d50.jpg"
+                  src="/marketing/792fb5fe.jpg"
                   alt="stablepass app: explore feed with a trackwork video update"
                 />
                 <span className="ph-home" />
