@@ -78,6 +78,22 @@ describe("TrialStartForm", () => {
     }
   });
 
+  // Regression pin (ENG-598): the three links are next/link `<Link>`, which
+  // renders a plain `<a>` — so this asserts the rendered hrefs, not the JSX.
+  //
+  // The hrefs are root-relative ON PURPOSE. `/legal/*` is served on BOTH the
+  // marketing host and the app host (ENG-590 decision 1, encoded in
+  // middleware.ts's `isSharedPath`), which is what lets them resolve from
+  // app.stablepass.co with no edit. Absolutising them, or normalising a
+  // trailing slash onto them, silently breaks one of the two hosts — and
+  // nothing else in the suite covers these three links.
+  it("links to /legal/terms, /legal/privacy and /signin with root-relative hrefs", () => {
+    const { container } = render(<TrialStartForm />);
+
+    const hrefs = Array.from(container.querySelectorAll("a")).map((a) => a.getAttribute("href"));
+    expect(hrefs).toEqual(["/legal/terms", "/legal/privacy", "/signin"]);
+  });
+
   // Regression pin: a number input silently drops the leading zero of '0800'
   // (a real NT postcode) and renders a spinner. It must stay type="text".
   it("renders postcode as a text input with numeric inputmode, never type=number", () => {

@@ -211,6 +211,53 @@ if the hits are outside your surface, negotiate the swap up front rather than
 discovering it at the gate. Prove causation with a holdout — move your route dir
 aside and re-run eslint; exit 0 means it is yours.
 
+**...but ONLY for DYNAMIC routes — a static route can never trip it (ENG-598).**
+Do not predict the error count by grepping for anchors; measure it. In
+`@next/eslint-plugin-next/dist/utils/url.js` an app route becomes the regex
+`"^" + normalizeAppPath(url) + "$"`, while the href under test goes through
+`normalizeURL()`, which **appends a trailing slash**. A static route yields
+`^/signin$` tested against `/signin/` → never matches. A dynamic route yields
+`^/legal/[slug]$`, whose `[...]` → `((?!.+?\..+?).*?)` substitution is a lazy
+wildcard that happily absorbs the trailing slash → matches `/legal/terms/`.
+That is why `trial-start-form.tsx` had THREE raw anchors to real pages but only
+**2** lint errors: `/legal/terms` and `/legal/privacy` fired, `/signin` never
+could. A ticket that says "3 anchors, so 3 errors" is wrong before you start.
+
+## `next/link` silently normalises a trailing slash off the href (ENG-598)
+With `trailingSlash` unset (default `false`), `<Link href="/legal/terms/">`
+renders `<a href="/legal/terms">`, but a raw `<a href="/legal/terms/">` emits the
+slash verbatim. Two consequences: (1) converting an anchor to `<Link>` makes
+slash-drift on `/legal/*` structurally impossible, which matters because those
+hrefs must stay root-relative to serve on both hosts (ENG-590 decision 1); and
+(2) a test asserting rendered hrefs cannot be mutation-checked with a trailing
+slash once the element is a `<Link>` — mutate to an ABSOLUTE url
+(`https://stablepass.co/legal/privacy`) instead, which is the real host-breaking
+failure mode anyway.
+
+## Converting an anchor to `<Link>` is not behaviour-neutral — it adds prefetch
+`<Link>` prefetches on viewport entry in a production build, so an anchor→Link
+swap is behaviour-neutral in the MARKUP and not in the NETWORK. Measured on
+`/start` (ENG-598, `next start` + Playwright counting requests carrying
+`Next-Router-Prefetch: 1`): the page fired prefetches for all three linked
+routes.
+
+**Decide per link, by route type — the split is the point.**
+- `●` prerendered (here `/legal/[slug]`): leave the default on. The prefetch is a
+  static payload and genuinely speeds the tap.
+- `ƒ` dynamic (here `/signin`): its server component awaits `supabaseServer()`
+  then `auth.getUser()`, and there is NO `loading.tsx` anywhere under `app/` for
+  the prefetch to stop at, so the default renders the whole page server-side and
+  spends a Supabase round-trip on every view of the page holding the link.
+
+**Done in ENG-598:** `prefetch={false}` on the `/signin` link only, with an
+in-file comment explaining the asymmetry so nobody normalises it away. Measured
+before/after on the same build: `/signin` prefetches 2 → 0 while `/legal/*` kept
+prefetching (4 and 7). Verified `prefetch={false}` does NOT downgrade the click
+to a full page load — a `window` marker set on `/start` survives the navigation
+to `/signin`, i.e. it is still a soft client-side nav; only the speculative fetch
+is gone. `prefetch` is also not an attribute, so the rendered DOM stays
+byte-identical (1832 chars) and an href-asserting test is untouched by it.
+
 ## A source-grep guardrail cannot see the layout chain — assert the build instead
 "These routes stay static" greped over the route's own directory passes happily
 while a `headers()` in `app/(marketing)/layout.tsx` (or the root layout) flips
