@@ -607,6 +607,60 @@ sessions and carves the loop out in writing — own ticket branch only, never
 `main`, never a shared branch, only its declared surface. Follow the file, not
 this note.
 
+## A grep guard that matches on ADJACENCY is defeated by hoisting the value
+**(2026-08-18, ENG-617)** The guard forbidding the deleted age formula matched
+`/getFullYear\(\)\s*-/` and `/[-+*]\s*foaling_?[Yy]ear/`. Both miss the refactor
+anyone would actually reach for:
+```ts
+const thisYear = new Date().getFullYear();
+const age = thisYear - row.foaling_year;     // guard silent
+```
+The date call moved to another line, and `row.` sits between the operator and
+the name. That exact idiom was already in this repo (`e2e/screenshots.spec.ts`).
+Match on the **identifier** with `[\w.]*` stepping over the property access
+(`/[-+*/]\s*[\w.]*foaling_?[Yy]ear/`), cover `getUTCFullYear`, and **self-test
+the guard**: assert its patterns fire on a list of known reintroduction shapes
+and stay quiet on the legitimate ones. A guard nobody tested is a guard that
+silently rots. Scan `e2e` too — `test` cannot be scanned, since the guard file's
+own regex literals match themselves.
+
+## "Assert a positive first" means PRESENCE — another absence is not a positive
+**(2026-08-18, ENG-617)** Countering the documented vacuity trap with
+`expect(container.querySelector(".profile-header-web")).toBeNull()` fixes
+nothing: it is a second negative, so a screen that regressed to rendering
+*nothing at all* still passes every assertion. `AccessWall` ships
+`data-testid="access-wall"` (`components/access-wall.tsx:85,96`) — assert
+`screen.getByTestId("access-wall")` and let it throw. Same rule for routes: pin
+`res.status` **and** one real field.
+
+## A fake clock straddling a calendar boundary needs ≥1 DAY, not an hour
+**(2026-08-18, ENG-617)** A "the value must not move across the New Year" lock
+set to `2026-12-31T23:59+11:00` → `2027-01-01T00:01+11:00` passed against a
+deliberately broken implementation. `getFullYear()` reads the **host** zone, and
+this machine is `Australia/Brisbane` (UTC+10), where both instants are still
+31 December. Use instants two days apart (`2026-12-30T12:00Z` →
+`2027-01-02T12:00Z`): they land in different calendar years at every offset from
+−12 to +14. Also prefer `vi.useFakeTimers({ toFake: ["Date"] })` — faking timers
+wholesale stalls the awaits inside a route handler.
+
+## The horse reads DISCARD the Supabase `error` — a missing column 404s silently
+**(2026-08-18, ENG-617)** `app/api/horses/[id]/route.ts` and
+`app/(member)/horses/[id]/page.tsx` both did `const { data } = await sb.from(...)`
+and dropped `error`. A query error lands in the same branch as a hidden row, so
+an undeployed computed column (`42703`) makes **every** horse profile 404 with
+nothing logged, indistinguishable from enumeration-resistance working correctly.
+Both now `console.error` it. When a projection names a column that a pending
+migration adds, log the error or the deploy-order failure is invisible — and
+never "fix" the 42703 by trimming the projection.
+
+## `.rx/mockups.md` is STILL wrong — the living mockups are in `06-stage1-design`
+**(2026-08-18, ENG-617)** The manifest (and the entry above it, from ENG-571)
+names `<workspace>/dev-handover/StablePass-mockups/mockups/web/`. That directory
+does not exist anywhere in the workspace. The real, living source is
+`<workspace>/06-stage1-design/mockups/web/screens/` (e.g.
+`07-horse-profile.html`), which is what the ENG-617 ticket itself cited. `ls` the
+design path before building, and do not trust either the manifest or `CLAUDE.md`
+§ Design source.
 ## Design-source CSS guards must strip comments before scanning (ENG-613)
 
 **Symptom:** a green `post-media-ground` guard went red on a diff that added no
