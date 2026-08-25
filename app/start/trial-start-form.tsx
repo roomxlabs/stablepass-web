@@ -19,6 +19,7 @@
 // POST — never logged, never rendered, never put in a query string.
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 const MIN_PASSWORD = 8;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -277,12 +278,12 @@ export function TrialStartForm() {
       </button>
 
       <div className="legal-mini">
-        By continuing you agree to our <a href="/legal/terms">Terms</a> and{" "}
-        <a href="/legal/privacy">Privacy Policy</a>.
+        By continuing you agree to our <Link href="/legal/terms">Terms</Link> and{" "}
+        <Link href="/legal/privacy">Privacy Policy</Link>.
       </div>
 
       <div className="auth-foot">
-        Already a member? <a href="/signin">Sign in</a>
+        Already a member? <Link href="/signin">Sign in</Link>
       </div>
     </form>
   );
