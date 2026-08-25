@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, waitFor } from "@testing-library/react";
 import { PostMediaImage } from "@/components/post-media-image";
 import { PostCard } from "@/components/post-card";
+import { MediaPlayer } from "@/components/media-player";
 import type { FeedPost } from "@/components/types";
 
 beforeEach(() => {
@@ -123,7 +124,7 @@ describe("PostMediaImage — ENG-813 onError re-mint", () => {
     const { container } = render(<PostMediaImage postId="p1" src="https://cdn/expired.jpg" />);
     const img = container.querySelector("img")!;
 
-    expect(() => fireEvent.error(img)).not.toThrow();
+    fireEvent.error(img);
 
     await waitFor(() => expect(container.querySelector("img")).toBeNull());
     expect(container.querySelector("div")).not.toBeNull();
@@ -266,5 +267,142 @@ describe("PostCard — ENG-813 re-mint wiring", () => {
     expect(box).not.toBeNull();
     expect(box.querySelector("img")).toBeNull();
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
+
+// The block above pins the happy paths. This one pins the machinery that had
+// NO coverage: delete the same-url guard, the budget reset or the media-player
+// wiring and the suite stayed green, which is how a "green suite, dead fix"
+// ships. Each test here is paired with the mutation it catches.
+describe("PostMediaImage — the uncovered machinery", () => {
+  const mintOnce = (url: string) =>
+    vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { items: [{ postId: "p1", mediaUrl: url }] } }),
+    })) as unknown as typeof fetch;
+
+  // Catches: deleting `fresh === url` (post-media-image.tsx). Without it the
+  // element keeps a url that already failed, so it never fires `error` again
+  // and sits there broken instead of falling to the placeholder.
+  it("treats a re-mint that returns the SAME url as no recovery", async () => {
+    global.fetch = mintOnce("https://cdn/same.jpg");
+
+    const { container } = render(<PostMediaImage postId="p1" src="https://cdn/same.jpg" />);
+    fireEvent.error(container.querySelector("img")!);
+
+    await waitFor(() => expect(container.querySelector("img")).toBeNull());
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  // Catches: deleting the render-phase prop-sync or the useEffect budget reset.
+  // A NEW url from the screen is a new generation and earns a fresh retry.
+  it("a new src from the screen revives the element and restores its retry budget", async () => {
+    global.fetch = mintOnce("https://cdn/mint-a.jpg");
+
+    const { container, rerender } = render(
+      <PostMediaImage postId="p1" src="https://cdn/expired-1.jpg" />,
+    );
+    fireEvent.error(container.querySelector("img")!);
+    await waitFor(() =>
+      expect(container.querySelector("img")?.getAttribute("src")).toBe("https://cdn/mint-a.jpg"),
+    );
+    fireEvent.error(container.querySelector("img")!);
+    await waitFor(() => expect(container.querySelector("img")).toBeNull());
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+
+    global.fetch = mintOnce("https://cdn/mint-b.jpg");
+    rerender(<PostMediaImage postId="p1" src="https://cdn/page-fresh.jpg" />);
+
+    // Revived on the screen's url, not the placeholder.
+    expect(container.querySelector("img")?.getAttribute("src")).toBe("https://cdn/page-fresh.jpg");
+
+    fireEvent.error(container.querySelector("img")!);
+    await waitFor(() =>
+      expect(container.querySelector("img")?.getAttribute("src")).toBe("https://cdn/mint-b.jpg"),
+    );
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  // Catches: removing `setFailed(false)` before `setUrl(fresh)`. Two error
+  // events racing one in-flight re-mint latch failed=true; the recovery then
+  // lands and must un-latch it, or "retry once" degrades to "retry never".
+  it("a burst of error events does not throw away a successful recovery", async () => {
+    let release: (v: unknown) => void = () => {};
+    const gate = new Promise((r) => {
+      release = r;
+    });
+    global.fetch = vi.fn(async () => {
+      await gate;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { items: [{ postId: "p1", mediaUrl: "https://cdn/fresh.jpg" }] } }),
+      };
+    }) as unknown as typeof fetch;
+
+    const { container } = render(<PostMediaImage postId="p1" src="https://cdn/expired.jpg" />);
+    const img = container.querySelector("img")!;
+
+    fireEvent.error(img); // claims the budget, then awaits the gate
+    fireEvent.error(img); // races it: takes the retried branch, latches failed
+    release(null);
+
+    await waitFor(() =>
+      expect(container.querySelector("img")?.getAttribute("src")).toBe("https://cdn/fresh.jpg"),
+    );
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  // Catches: removing the generation guard. A stale re-mint resolving after the
+  // screen delivered a newer url must not overwrite it — and a stale FAILURE
+  // must not blank it, which would reintroduce the empty box outright.
+  it("a stale in-flight re-mint never overwrites a newer url from the screen", async () => {
+    let release: (v: unknown) => void = () => {};
+    const gate = new Promise((r) => {
+      release = r;
+    });
+    global.fetch = vi.fn(async () => {
+      await gate;
+      return { ok: true, status: 200, json: async () => ({ data: { items: [] } }) };
+    }) as unknown as typeof fetch;
+
+    const { container, rerender } = render(
+      <PostMediaImage postId="p1" src="https://cdn/expired.jpg" />,
+    );
+    fireEvent.error(container.querySelector("img")!);
+
+    rerender(<PostMediaImage postId="p1" src="https://cdn/page-fresh.jpg" />);
+    release(null);
+    await new Promise((r) => setTimeout(r, 0));
+
+    // The stale null resolved AFTER the new src landed: it must be dropped.
+    expect(container.querySelector("img")?.getAttribute("src")).toBe("https://cdn/page-fresh.jpg");
+  });
+});
+
+// Catches: reverting media-player.tsx to a raw <img>. Preview-only today, but
+// it renders post media and must recover the same way.
+describe("MediaPlayer — ENG-813 re-mint wiring", () => {
+  it("re-mints its poster through the playback route", async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { posterUrl: "https://cdn/fresh-poster.jpg" } }),
+    })) as unknown as typeof fetch;
+
+    const { container } = render(
+      <MediaPlayer postId="post-9" posterUrl="https://cdn/expired-poster.jpg" duration="1:12" />,
+    );
+    fireEvent.error(container.querySelector("img")!);
+
+    await waitFor(() =>
+      expect(container.querySelector("img")?.getAttribute("src")).toBe(
+        "https://cdn/fresh-poster.jpg",
+      ),
+    );
+    expect(global.fetch).toHaveBeenCalledWith("/api/posts/post-9/playback?posterOnly=1", {
+      cache: "no-store",
+    });
   });
 });

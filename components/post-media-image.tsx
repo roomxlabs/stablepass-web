@@ -17,6 +17,15 @@
 // Exactly ONE retry per element, then the same empty placeholder the no-media
 // case has always drawn. Unbounded retry against a genuinely dead URL is a
 // request storm.
+//
+// KNOWN LIMIT (ticket-locked, flagged on the PR): the budget is per element
+// LIFETIME, and no screen currently re-renders a mounted card with a new src.
+// So a tab left open across TWO expiry windows recovers once, then falls to
+// the placeholder permanently. Resetting the budget on the img's `onLoad`
+// would make recovery durable without weakening the storm guarantee — a dead
+// url never loads, so it never earns a reset — but "retry exactly once per
+// element" is a locked decision, so that change is a human call, not one to
+// make here.
 import { useEffect, useRef, useState } from "react";
 import { remintPostMedia } from "@/lib/api/post-media";
 
@@ -39,8 +48,19 @@ export function PostMediaImage({ postId, src, video = false }: PostMediaImagePro
   // without waiting for a re-render, or a burst of error events would each see
   // a stale `false` and fire their own re-mint.
   const retried = useRef(false);
+  // Bumped whenever the screen delivers a NEW src. An in-flight re-mint that
+  // resolves after a bump belongs to a previous generation, and its result —
+  // fresh url OR failure — must be dropped: writing it would stomp, or blank,
+  // the newer authoritative url and reintroduce the very empty box this fixes.
+  const generation = useRef(0);
   // Track the prop so a genuine page re-fetch (a NEW minted url from the
   // screen) resets this element, retry budget included.
+  //
+  // DEFENSIVE, not currently exercised: as of ENG-813 no member screen mutates
+  // a MOUNTED card's posterUrl (pagination appends, react/bookmark patch only
+  // their own fields, and a reload goes through setPosts([]) which unmounts).
+  // It exists so that adding a refresh/poll later does not silently strand
+  // this element on a stale url.
   const [seenSrc, setSeenSrc] = useState(src ?? null);
   if ((src ?? null) !== seenSrc) {
     setSeenSrc(src ?? null);
@@ -55,6 +75,7 @@ export function PostMediaImage({ postId, src, video = false }: PostMediaImagePro
   // behaviour, just off the render phase.
   useEffect(() => {
     retried.current = false;
+    generation.current += 1;
   }, [seenSrc]);
 
   async function handleError() {
@@ -64,13 +85,24 @@ export function PostMediaImage({ postId, src, video = false }: PostMediaImagePro
       return;
     }
     retried.current = true;
+    const mine = generation.current;
     const fresh = await remintPostMedia(postId, { video });
+    // A newer src landed from the screen while this was in flight. That url is
+    // authoritative and already rendering; this result is stale. Dropping it
+    // matters most in the failure case: writing setFailed(true) here would
+    // blank a perfectly good, freshly-minted image.
+    if (mine !== generation.current) return;
     // An identical URL would not re-trigger a load, leaving a broken element
     // that never errors again — treat it as no recovery at all.
     if (!fresh || fresh === url) {
       setFailed(true);
       return;
     }
+    // Clearing `failed` is load-bearing. If two error events raced this
+    // re-mint, the second already latched failed=true; without this line the
+    // recovered url would be thrown away and the element would sit on the
+    // placeholder forever — "retry once" silently degraded to "retry never".
+    setFailed(false);
     setUrl(fresh);
   }
 
