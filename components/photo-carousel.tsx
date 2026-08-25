@@ -17,8 +17,24 @@
 // So no-JS degrades to a WRONG indicator, not to no indicator. Acceptable here
 // because this is the authenticated member app, which needs JS regardless; it
 // is the marketing site that has the JS-blocked requirement.
+//
+// ---------------------------------------------------------------------------
+// ENG-815 — WHERE THE SLIDES COME FROM
+//
+// The geometry above is unchanged. What changed underneath it is the source of
+// the pixels: ENG-762 handed this component a fully-resolved `PostPhoto[]` that
+// a client island had read out of `post_media` and signed itself. ENG-800
+// revoked that bucket, so this now takes a POST ID and a SLIDE COUNT and mints
+// each slide through the BFF, addressed by `{ postId, slideIndex }`.
+//
+// The count is what makes that work without a flash of the wrong UI: it rides in
+// on the same batch response as slide 0, so the dots and the `n/m` chip are
+// CORRECT ON FIRST PAINT, before a single extra slide has been minted (ENG-809
+// decision 3). Deriving the dots from "how many slides have arrived" instead
+// would grow them one at a time as the mints landed.
 import { useCallback, useRef, useState } from "react";
-import type { PostPhoto } from "./types";
+import { clampSlideCount, usePostSlides } from "@/lib/post-media";
+import { PostMediaImage } from "./post-media-image";
 
 /**
  * The still-image chip, lifted out of `post-card` (ENG-761 item 3) so the single-
@@ -70,30 +86,43 @@ export function MediaPhotoChip({ index = 0, total = 1 }: MediaPhotoChipProps) {
 }
 
 export interface PhotoCarouselProps {
-  photos: PostPhoto[];
   /**
-   * Rendered into each slide's `alt`. Empty by default and that is deliberate:
-   * the card's existing single `<img>` is `alt=""` because the horse name,
-   * byline and caption immediately below already name the subject — the photo is
-   * illustrative, so an invented per-slide description would be noise, not access.
+   * The post these slides belong to. It is the ONLY handle the client has on
+   * them: a slide is requested as `{ postId, slideIndex }` and the server
+   * resolves the storage path (ENG-809 decision 2). Nothing here builds a path.
    */
-  alt?: string;
+  postId: string;
+  /**
+   * `slideCount` from the page's batch mint. Drives the dots and the `n/m` chip
+   * BEFORE any slide past 0 exists, which is the whole reason the be returns it
+   * in the batch rather than making the client count what it has received.
+   */
+  slideCount: number;
+  /** Slide 0's minted url — already in hand from the same batch response. */
+  firstUrl?: string | null;
 }
 
 /**
  * The paging track + dots. Mounted INSIDE `.post-media-web`, alongside the chip,
  * the watermark overlay and the Follow pill, all of which keep their corners.
  */
-export function PhotoCarousel({ photos, alt = "" }: PhotoCarouselProps) {
+export function PhotoCarousel({ postId, slideCount, firstUrl = null }: PhotoCarouselProps) {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const [index, setIndex] = useState(0);
-  const total = photos.length;
+  // The authority on how many slides to draw. `clampSlideCount` also floors it
+  // at 1, so a nonsense count off the wire degrades to a one-slide carousel
+  // rather than an empty track.
+  const total = clampSlideCount(slideCount);
 
   // A post whose photo count shrinks (a re-fetch after an admin edit) must not
   // leave the counter reading "3/2". Clamped DURING RENDER rather than corrected
   // afterwards in an effect: an effect would render the impossible value once
   // first, and then re-render to fix it.
   const active = Math.min(index, Math.max(0, total - 1));
+
+  // Mints the active slide and the one after it, once each (ENG-809 decision 1).
+  // Slide 0 is never in here — it arrived in the batch as `firstUrl`.
+  const minted = usePostSlides(postId, total, active);
 
   const onScroll = useCallback(() => {
     const el = trackRef.current;
@@ -118,6 +147,12 @@ export function PhotoCarousel({ photos, alt = "" }: PhotoCarouselProps) {
     el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
   }, []);
 
+  // `slideCount` is the be's HIGHEST ORDINAL + 1, not a row count, so a
+  // non-contiguous `{0, 2}` legitimately reports 3 and index 1 mints to nothing.
+  // That slide draws the media ground and its siblings still render — a gap, not
+  // the lost photo a row count would have produced.
+  const slides = Array.from({ length: total }, (_, i) => (i === 0 ? firstUrl : minted.get(i) ?? null));
+
   return (
     <>
       <div
@@ -134,17 +169,26 @@ export function PhotoCarousel({ photos, alt = "" }: PhotoCarouselProps) {
         aria-roledescription="carousel"
         aria-label={`${total} photos`}
       >
-        {photos.map((photo, i) => (
-          <div className="photo-slide" data-testid="photo-slide" key={`${photo.sort}-${i}`}>
-            {photo.url ? (
-              // eslint-disable-next-line @next/next/no-img-element -- arbitrary signed Storage URL, cover-fit
-              <img src={photo.url} alt={alt} />
-            ) : (
-              // This ONE photo failed to sign. It draws the media ground exactly
-              // as a poster-less card does, and its siblings still render — a
-              // dead slide must never take the whole post down.
-              <div className="photo-slide-empty" data-testid="photo-slide-empty" />
-            )}
+        {slides.map((url, i) => (
+          <div className="photo-slide" data-testid="photo-slide" key={i}>
+            {/* PostMediaImage, not a bare <img>, so EVERY slide keeps ENG-813's
+                one-retry recovery — and re-mints by its own index rather than
+                pulling slide 0's url from the batch. A slide with no url yet
+                (not minted, or refused) renders the same empty ground a
+                poster-less card draws; "not yet" and "never" are deliberately
+                indistinguishable on screen, because telling them apart is how a
+                draft's existence would leak.
+
+                `alt` is empty on every slide, exactly as the card's single
+                <img> is: the horse name, byline and caption directly below
+                already name the subject, so an invented per-slide description
+                would be noise rather than access. */}
+            <PostMediaImage
+              postId={postId}
+              src={url}
+              slideIndex={i}
+              placeholder={<div className="photo-slide-empty" data-testid="photo-slide-empty" />}
+            />
           </div>
         ))}
       </div>
@@ -157,9 +201,9 @@ export function PhotoCarousel({ photos, alt = "" }: PhotoCarouselProps) {
       <MediaPhotoChip index={active} total={total} />
 
       <div className="photo-dots" data-testid="photo-dots">
-        {photos.map((photo, i) => (
+        {slides.map((_, i) => (
           <button
-            key={`${photo.sort}-${i}`}
+            key={i}
             type="button"
             className={i === active ? "photo-dot active" : "photo-dot"}
             aria-label={`Go to photo ${i + 1} of ${total}`}

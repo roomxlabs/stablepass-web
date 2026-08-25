@@ -2,14 +2,30 @@ import { test, expect } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
 
 // ENG-762 — the multi-photo carousel, driven END TO END against local Postgres
-// and local Storage.
+// and local Storage. Repointed by ENG-815 onto the mint path.
 //
 // Why the HORSE profile and not /explore: the be `feed` edge function is a stub
-// locally, so Explore and Following cannot be driven end to end here — and, more
-// to the point, that function does not return `post_media` at all. The profile
-// feeds read `post` directly and then call `readPostPhotos` themselves, so this
-// spec exercises the whole real path: the batched `post_media` select under RLS,
-// the signing round trip, the screen's own mapper, and the card's dots.
+// locally, so Explore and Following cannot be driven end to end here. The
+// profile feeds read `post` directly and then resolve their media themselves, so
+// this spec exercises the whole real path: the screen's batched
+// `POST /api/posts/media`, the BFF forwarding the caller's token to the be
+// `post-media` edge function, that function resolving each slide's path under
+// the caller's own RLS, the screen's mapper, and the card's dots.
+//
+// ENVIRONMENT REQUIREMENT (ENG-815). This now needs the local edge runtime to be
+// serving the ENG-809 `post-media` function — the one with `slideCount` in the
+// batch and the `{ postId, slideIndex }` mode. That landed on the be's
+// `feature/round6-v1` (`af68205`) and is NOT on be `main`, so a stack started
+// from be main answers the batch without `slideCount` and every post reads as
+// single-photo. If this spec reports "no dots", check which be branch the edge
+// runtime is serving BEFORE reading it as a web regression.
+//
+// WHAT CHANGED IN THE ASSERTIONS. Slides are no longer all resolved up front:
+// slide 0 arrives in the batch, slide 1 is prefetched on mount and 2+ mint on
+// arrival (ENG-809 decision 1). So the DOT COUNT is right immediately — it comes
+// from `slideCount` — while the third photo has no `src` until you page to it.
+// That asymmetry is the feature, and asserting it is how this spec proves the
+// prefetch is really one-ahead rather than eager.
 //
 // This is deliberately NOT a component-gallery screenshot. ENG-761's pill bug
 // shipped precisely because its evidence was `/preview/components`, which builds
@@ -95,8 +111,18 @@ test("ENG-762 a 3-photo post renders dots + an n/m count on the horse profile fe
       racing_name: "CANNONBROOK",
       sire: "Snitzel",
       dam: "Polar Success",
-      sex: "gelding",
-      foaling_year: new Date().getFullYear() - 5,
+      // `sex` is male/female plus a separate `is_gelded` flag since ENG-304, and
+      // the deployed `horse_sex_check` REJECTS the old `sex: "gelding"` seed with
+      // 23514 — which throws at the `if (horseError)` below, before a single
+      // assertion runs. That migration arrived on this branch with ENG-815's
+      // merge of main; `e2e/screenshots.spec.ts` already carried the fix.
+      sex: "male",
+      is_gelded: true,
+      // A LITERAL year, not `new Date().getFullYear() - n` (ENG-815). Age is
+      // derived in Postgres and ENG-617's guard greps the whole repo — e2e
+      // included — for date arithmetic, so a seed that computes a foaling year
+      // from an age trips it. Nothing here asserts on the rendered age.
+      foaling_year: 2021,
       training_status: "racing",
       status: "active",
       starts: 24,
@@ -172,39 +198,44 @@ test("ENG-762 a 3-photo post renders dots + an n/m count on the horse profile fe
     // as "the carousel is missing" when the feed simply had not landed yet.
     await expect(card).toBeVisible({ timeout: 120_000 });
 
-    // The read path really produced three signed photos.
+    // THREE SLIDES AND THREE DOTS IMMEDIATELY, from the batch's `slideCount` —
+    // before the third photo has been minted at all. This is the assertion that
+    // separates a correct resolution from one that counts slides as they arrive.
     await expect(track).toBeVisible({ timeout: 30_000 });
     await expect(card.getByTestId("photo-slide")).toHaveCount(3);
     await expect(dots).toHaveCount(3);
 
-    // Every slide must hold a SIGNED url, never a bare storage path. This is the
-    // guardrail assertion: a path reaching the browser is the failure.
-    const srcs = await card.getByTestId("photo-slide").locator("img").evaluateAll(
-      (els) => els.map((e) => (e as HTMLImageElement).getAttribute("src") ?? ""),
-    );
-    expect(srcs).toHaveLength(3);
-    for (const src of srcs) {
-      expect(src).toContain("/storage/v1/object/sign/");
-      expect(src).toContain("token=");
-      expect(src.startsWith(`${post.id}/`)).toBe(false);
-    }
+    // Prefetch one ahead: slide 0 (batch) and slide 1 (minted on mount) are
+    // painted; slide 2 has no image yet.
+    const imgs = card.getByTestId("photo-slide").locator("img");
+    await expect.poll(async () => imgs.count(), { timeout: 30_000 }).toBe(2);
 
-    // Every slide must have actually DECODED, not merely been given a src.
-    // Local Storage occasionally serves a bad response for a freshly-uploaded
-    // object, and without this the screenshots below silently capture broken
-    // image icons — evidence that looks fine in a list and proves nothing.
-    await expect
-      .poll(
-        async () =>
-          card.getByTestId("photo-slide").locator("img").evaluateAll((els) =>
-            els.every((e) => {
-              const img = e as HTMLImageElement;
-              return img.complete && img.naturalWidth > 0;
-            }),
-          ),
-        { timeout: 30_000 },
-      )
-      .toBe(true);
+    // Every url that DOES exist must be SIGNED, never a bare storage path. This
+    // is the guardrail assertion: a path reaching the browser is the failure.
+    const assertSigned = async () => {
+      const srcs = await imgs.evaluateAll((els) =>
+        els.map((e) => (e as HTMLImageElement).getAttribute("src") ?? ""),
+      );
+      for (const src of srcs) {
+        expect(src).toContain("/storage/v1/object/sign/");
+        expect(src).toContain("token=");
+        expect(src.startsWith(`${post.id}/`)).toBe(false);
+      }
+    };
+    await assertSigned();
+
+    // Every painted slide must have actually DECODED, not merely been given a
+    // src. Local Storage occasionally serves a bad response for a freshly-
+    // uploaded object, and without this the screenshots below silently capture
+    // broken image icons — evidence that looks fine in a list and proves nothing.
+    const allDecoded = async () =>
+      imgs.evaluateAll((els) =>
+        els.every((e) => {
+          const img = e as HTMLImageElement;
+          return img.complete && img.naturalWidth > 0;
+        }),
+      );
+    await expect.poll(allDecoded, { timeout: 30_000 }).toBe(true);
 
     // --- FIRST ---------------------------------------------------------
     await expect(count).toHaveText("1/3");
@@ -227,6 +258,11 @@ test("ENG-762 a 3-photo post renders dots + an n/m count on the horse profile fe
     await dots.nth(2).click();
     await expect(count).toHaveText("3/3");
     await expect(dots.nth(2)).toHaveAttribute("aria-current", "true");
+    // Arriving on slide 2 is what mints it — the third image appears only now,
+    // which is the whole point of prefetching one ahead instead of all ten.
+    await expect.poll(async () => imgs.count(), { timeout: 30_000 }).toBe(3);
+    await assertSigned();
+    await expect.poll(allDecoded, { timeout: 30_000 }).toBe(true);
     await expect
       .poll(async () => track.evaluate((el) => Math.abs(el.scrollLeft - el.clientWidth * 2) <= 1))
       .toBe(true);
@@ -274,8 +310,8 @@ test("ENG-762 a single-photo post keeps the plain chip and draws no dots", async
       racing_name: "BLACK CAVIAR",
       sire: "Bel Esprit",
       dam: "Helsinge",
-      sex: "mare",
-      foaling_year: new Date().getFullYear() - 6,
+      sex: "female",
+      foaling_year: 2020,
       training_status: "racing",
       status: "active",
       starts: 25,
@@ -358,13 +394,24 @@ test("ENG-762 the gallery shows the degraded slide and the 10-photo cap", async 
   const cards = gallery.locator(".post-web");
   await expect(cards).toHaveCount(4);
 
-  // 1: three photos. 2: one photo, so no dots at all. 3: middle slide dead.
-  // 4: the contract cap.
+  // 1: three photos. 2: one photo, so no dots at all. 3: a slide that cannot be
+  // resolved. 4: the contract cap.
   await expect(cards.nth(0).getByTestId("photo-dots").getByRole("button")).toHaveCount(3);
   await expect(cards.nth(1).getByTestId("photo-dots")).toHaveCount(0);
   await expect(cards.nth(1).getByTestId("media-photo-chip")).toHaveAttribute("aria-label", "Photo");
   await expect(cards.nth(2).getByTestId("photo-slide-empty")).toHaveCount(1);
   await expect(cards.nth(3).getByTestId("photo-dots").getByRole("button")).toHaveCount(10);
+
+  // ENG-815 — THE DOTS COME FROM `slideCount`, NOT FROM WHAT HAS ARRIVED. The
+  // ten-photo card draws all ten dots while holding only two images: slide 0
+  // from the batch and slide 1 prefetched. If the indicator were derived from
+  // resolved slides it would read 2/2 here and grow as mints landed.
+  await expect(cards.nth(3).getByTestId("media-photo-count")).toHaveText("1/10");
+  await expect
+    .poll(async () => cards.nth(3).getByTestId("photo-slide").locator("img").count(), {
+      timeout: 15_000,
+    })
+    .toBe(2);
 
   // Ten dots at the narrow card width must still fit on one row — the ticket's
   // explicit edge case. Measured, not eyeballed.

@@ -2,15 +2,28 @@
 
 // post-card — the shared feed/profile post: head (horse/trainer byline + optional
 // race badge), media (photo, or a video with a play button), the watermark overlay
-// when `watermarked`, body, and the reaction bar. Presentational + callback-driven;
-// it never fetches (the consumer supplies data + wires reactions/bookmark/play).
+// when `watermarked`, body, and the reaction bar. Callback-driven: the consumer
+// supplies the data and wires reactions/bookmark/play.
+//
+// One exception to "never fetches" (ENG-813): the media <img> is PostMediaImage,
+// which on an error re-mints THAT post's signed URL once before falling back to
+// the placeholder. The card still owns no page-level fetching, and the
+// subscription gate still lives on the screen, not here — a re-mint that comes
+// back 402 renders the placeholder, never gated bytes.
+//
+// A CAROUSEL widens that same exception rather than adding a second one
+// (ENG-815): PhotoCarousel mints slides 1+ by index, through the same BFF route
+// and the same PostMediaImage element. What the card still never does is fetch
+// for the PAGE — slide 0 and the slide COUNT both arrive in the screen's batch,
+// so the dots are right on first paint without this component asking anyone.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { ReactionBar } from "./reaction-bar";
 import { PostOverlay } from "./post-overlay";
 import { FollowPill } from "./follow-pill";
 import { MediaPhotoChip, PhotoCarousel } from "./photo-carousel";
-import type { FeedPost, PostMedia, PostPhoto, ReactionEmoji } from "./types";
+import { PostMediaImage } from "./post-media-image";
+import type { FeedPost, PostMedia, ReactionEmoji } from "./types";
 
 /**
  * The two post types that get the STABLE UPDATE treatment — pill, title and the
@@ -163,13 +176,24 @@ const More = () => (
  */
 
 /**
- * More than one `post_media` row is what makes a post a carousel — not the post
- * type, and not `media_url`. ENG-740 mirrors row 0 into `post.media_url`, so a
- * one-row post is indistinguishable from a legacy single-photo post by design,
- * and both take the plain `<img>` path they always did.
+ * More than one slide is what makes a post a carousel — not the post type, and
+ * not `media_url`. ENG-740 mirrors row 0 into `post.media_url`, so a one-slide
+ * post is indistinguishable from a legacy single-photo post by design, and both
+ * take the plain `<img>` path they always did.
+ *
+ * ENG-815 moved the source of that number from a client-side `post_media` read
+ * to the batch mint's `slideCount`, so this now decides from a COUNT rather than
+ * from an array of already-resolved photos. That is what lets the dots be right
+ * on first paint: the old form could not call a post a carousel until every one
+ * of its slides had been read and signed.
+ *
+ * `?? 1` is the legacy case and the majority one — no `post_media` rows at all,
+ * which the be reports as `slideCount: 1` and a screen that never resolved a
+ * count leaves undefined. Both mean "one photo", and one photo is not a
+ * carousel.
  */
-export function carouselPhotos(post: FeedPost): PostPhoto[] {
-  return post.media.type === "photo" && post.photos && post.photos.length > 1 ? post.photos : [];
+export function isCarouselPost(post: FeedPost): boolean {
+  return post.media.type === "photo" && (post.slideCount ?? 1) > 1;
 }
 
 /**
@@ -325,10 +349,7 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
   // would be a new member screen with no confirmed mockup, which `.rx/guardrails.md`
   // makes `needs-spec`, not part of this ticket. `PhotoCarousel` is shared, so
   // the day that screen exists it mounts in one line. Flagged on the issue.
-  const photos = carouselPhotos(post);
-  // `carouselPhotos` already returns [] below 2, so this is the same condition
-  // read back — kept as the single name the JSX branches on.
-  const isCarousel = photos.length > 0;
+  const isCarousel = isCarouselPost(post);
 
   return (
     <article className="post-web">
@@ -365,12 +386,19 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
             // The carousel REPLACES the single poster image and brings its own
             // chip + dots. The box, the Follow pill, the watermark overlay and
             // the aspect ratio all stay exactly where they were.
-            <PhotoCarousel photos={photos} />
-          ) : post.media.posterUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element -- arbitrary Storage/Mux poster URL, cover-fit
-            <img src={post.media.posterUrl} alt="" />
+            //
+            // `posterUrl` is handed straight through as slide 0 — the batch
+            // minted it, so the first photo is painted before the carousel asks
+            // for anything, and index 0 has exactly one source.
+            <PhotoCarousel
+              postId={post.id}
+              slideCount={post.slideCount ?? 1}
+              firstUrl={post.media.posterUrl ?? null}
+            />
           ) : (
-            <div style={{ width: "100%", height: "100%" }} />
+            // Every single-photo and video card takes this path unchanged: one
+            // PostMediaImage, no slide index, ENG-813's one-retry recovery.
+            <PostMediaImage postId={post.id} src={post.media.posterUrl} video={isVideo} />
           )}
           {isReel && (
             /* THE REEL HEADER — the card's identity on a top scrim, with the

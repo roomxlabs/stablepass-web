@@ -18,20 +18,6 @@ const { fromMock } = vi.hoisted(() => ({ fromMock: vi.fn() }));
 
 vi.mock("@/lib/supabase/client", () => ({ supabaseBrowser: () => ({ from: fromMock }) }));
 
-// ENG-762 — the multi-photo carousel read. Mocked at the module boundary
-// rather than faked through the PostgREST chain: `readPostPhotos` owns its
-// own query + signing round trip and carries its own unit coverage
-// (lib/post-media.ts). `photosMock` starts empty (reset in the beforeEach
-// below) so every PRE-EXISTING test in this file — none of which touches it
-// — renders exactly as it did before ENG-762.
-import { readPostPhotos } from "@/lib/post-media";
-
-let photosMock = new Map<string, { url: string | null; sort: number }[]>();
-
-vi.mock("@/lib/post-media", () => ({
-  readPostPhotos: vi.fn(() => Promise.resolve(photosMock)),
-}));
-
 function chainable(result: { data: unknown; error: null }) {
   const obj: Record<string, unknown> = {};
   for (const m of ["select", "eq", "in", "not", "order"]) obj[m] = vi.fn(() => obj);
@@ -62,14 +48,38 @@ const TEXT_ROW = {
 
 beforeEach(() => {
   feedRows = [TEXT_ROW];
-  photosMock = new Map();
-  vi.mocked(readPostPhotos).mockClear();
   fromMock.mockReset();
   fromMock.mockImplementation(() => chainable({ data: [], error: null }));
-  global.fetch = vi.fn((input: string | URL) => {
+  global.fetch = vi.fn((input: string | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.includes("/feed")) {
       return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: feedRows }) });
+    }
+    if (url === "/api/posts/media" || url.startsWith("/api/posts/media?")) {
+      const body = init?.body ? JSON.parse(String(init.body)) : { postIds: [] };
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            items: (body.postIds as string[]).map((id: string) => ({
+              postId: id,
+              mediaUrl: `https://sb.local/${id}?token=abc`,
+            })),
+            expiresAt: "2026-08-01T00:00:00.000Z",
+          },
+        }),
+      });
+    }
+    if (url.includes("/playback?posterOnly=1")) {
+      const id = url.match(/\/posts\/([^/]+)\/playback/)?.[1] ?? "unknown";
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: { posterUrl: `https://sb.local/posters/${id}.jpg?token=abc`, expiresAt: "2026-08-01T00:00:00.000Z" },
+        }),
+      });
     }
     return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
   }) as unknown as typeof fetch;
@@ -131,21 +141,52 @@ describe("HorsePosts — ENG-613 parity on the horse profile", () => {
     expect(document.querySelector(".post-badge")!.textContent).toBe("Trackwork");
   });
 
-  // ENG-762 — the multi-photo carousel, rendered through HorsePosts' REAL
-  // mapper (not a hand-built FeedPost/PostCard render, which would bypass
-  // the exact mapper bug class ENG-772 exists to catch).
-  it("renders the multi-photo carousel (ENG-762)", async () => {
-    photosMock = new Map([
-      [
-        "p1",
-        [
-          { url: "https://signed.test/p1-0.jpg", sort: 0 },
-          { url: "https://signed.test/p1-1.jpg", sort: 1 },
-          { url: "https://signed.test/p1-2.jpg", sort: 2 },
-        ],
-      ],
-    ]);
-    feedRows = [{ ...TEXT_ROW, type: "photo", title: null, body: "Trackwork this morning." }];
+  // ENG-762 / ENG-815 — the multi-photo carousel, rendered through HorsePosts'
+  // REAL mapper (not a hand-built FeedPost/PostCard render, which would bypass
+  // the exact mapper bug class ENG-772 exists to catch). `slideCount` now rides
+  // in on the SAME /api/posts/media batch the ENG-799 mint tests below already
+  // stub, and slides 1+ mint one at a time by `{ postId, slideIndex }` through
+  // that same route — there is no more client-side `post_media` read to mock.
+  it("renders the multi-photo carousel (ENG-762 / ENG-815)", async () => {
+    feedRows = [
+      { ...TEXT_ROW, type: "photo", title: null, body: "Trackwork this morning.", media_url: "media/p1.jpg", poster_url: null },
+    ];
+    const fetchMock = vi.fn((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/feed")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: feedRows }) });
+      }
+      if (url === "/api/posts/media") {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        if ("postId" in body) {
+          // Slide N minted by index (usePostSlides), never a batch of ids.
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              data: {
+                postId: body.postId,
+                slideIndex: body.slideIndex,
+                mediaUrl: `https://sb.local/${body.postId}-${body.slideIndex}.jpg`,
+                expiresAt: "2026-08-01T00:00:00.000Z",
+              },
+            }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              items: [{ postId: "p1", mediaUrl: "https://sb.local/p1-0.jpg", slideCount: 3 }],
+              expiresAt: "2026-08-01T00:00:00.000Z",
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
 
     render(<HorsePosts horseId="h1" horseName="Mahogany" trainerName="Tom Alcott" viewerId={VIEWER_ID} />);
     await screen.findByText("Trackwork this morning.");
@@ -154,17 +195,38 @@ describe("HorsePosts — ENG-613 parity on the horse profile", () => {
     expect(screen.getByTestId("photo-dots").querySelectorAll("button")).toHaveLength(3);
     expect(screen.getByTestId("media-photo-count")).toHaveTextContent("1/3");
 
-    // WHICH IDS the screen actually asked for. Without this the call could be
-    // `readPostPhotos(sb, [])` and every assertion above would still pass — the
-    // mock ignores its arguments — while the carousel died on every real feed.
-    // That is the ENG-772 silent-drop class moved one layer up, and the e2e is
-    // explicitly not the guard for `app/(member)/**` reads (.rx/gotchas.md).
-    expect(vi.mocked(readPostPhotos)).toHaveBeenCalledWith(expect.anything(), ["p1"]);
+    // WHICH IDS the screen actually asked for, on the SAME batch that carries
+    // slideCount — the ENG-772 silent-drop class, moved onto the mint path.
+    const mediaCalls = fetchMock.mock.calls.filter((c) => String(c[0]) === "/api/posts/media");
+    const batch = mediaCalls
+      .map((c) => JSON.parse(String(c[1]?.body)))
+      .find((b) => "postIds" in b);
+    expect(batch).toEqual({ postIds: ["p1"] });
   });
 
-  it("renders no carousel for a single-photo post (ENG-762)", async () => {
-    photosMock = new Map([["p1", [{ url: "https://signed.test/p1-0.jpg", sort: 0 }]]]);
-    feedRows = [{ ...TEXT_ROW, type: "photo", title: null, body: "Trackwork this morning." }];
+  it("renders no carousel for a single-photo post (ENG-762 / ENG-815)", async () => {
+    feedRows = [
+      { ...TEXT_ROW, type: "photo", title: null, body: "Trackwork this morning.", media_url: "media/p1.jpg", poster_url: null },
+    ];
+    global.fetch = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.includes("/feed")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: feedRows }) });
+      }
+      if (url === "/api/posts/media") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              items: [{ postId: "p1", mediaUrl: "https://sb.local/p1-0.jpg", slideCount: 1 }],
+              expiresAt: "2026-08-01T00:00:00.000Z",
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    }) as unknown as typeof fetch;
 
     render(<HorsePosts horseId="h1" horseName="Mahogany" trainerName="Tom Alcott" viewerId={VIEWER_ID} />);
     await screen.findByText("Trackwork this morning.");
@@ -218,21 +280,51 @@ describe("TrainerPosts — ENG-613 parity on the trainer profile", () => {
     expect(document.querySelector(".post-badge")!.textContent).toBe("Trackwork");
   });
 
-  // ENG-762 — the multi-photo carousel, rendered through TrainerPosts' REAL
-  // mapper (not a hand-built FeedPost/PostCard render, which would bypass
-  // the exact mapper bug class ENG-772 exists to catch).
-  it("renders the multi-photo carousel (ENG-762)", async () => {
-    photosMock = new Map([
-      [
-        "p1",
-        [
-          { url: "https://signed.test/p1-0.jpg", sort: 0 },
-          { url: "https://signed.test/p1-1.jpg", sort: 1 },
-          { url: "https://signed.test/p1-2.jpg", sort: 2 },
-        ],
-      ],
-    ]);
-    feedRows = [{ ...TEXT_ROW, type: "photo", title: null, body: "Trackwork this morning." }];
+  // ENG-762 / ENG-815 — the multi-photo carousel, rendered through
+  // TrainerPosts' REAL mapper (not a hand-built FeedPost/PostCard render,
+  // which would bypass the exact mapper bug class ENG-772 exists to catch).
+  // `slideCount` now rides in on the SAME /api/posts/media batch the ENG-799
+  // mint tests below already stub, and slides 1+ mint one at a time by
+  // `{ postId, slideIndex }` through that same route.
+  it("renders the multi-photo carousel (ENG-762 / ENG-815)", async () => {
+    feedRows = [
+      { ...TEXT_ROW, type: "photo", title: null, body: "Trackwork this morning.", media_url: "media/p1.jpg", poster_url: null },
+    ];
+    const fetchMock = vi.fn((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/feed")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: feedRows }) });
+      }
+      if (url === "/api/posts/media") {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        if ("postId" in body) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              data: {
+                postId: body.postId,
+                slideIndex: body.slideIndex,
+                mediaUrl: `https://sb.local/${body.postId}-${body.slideIndex}.jpg`,
+                expiresAt: "2026-08-01T00:00:00.000Z",
+              },
+            }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              items: [{ postId: "p1", mediaUrl: "https://sb.local/p1-0.jpg", slideCount: 3 }],
+              expiresAt: "2026-08-01T00:00:00.000Z",
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
 
     render(<TrainerPosts trainerId="t1" trainerName="Tom Alcott" viewerId={VIEWER_ID} />);
     await screen.findByText("Trackwork this morning.");
@@ -241,22 +333,122 @@ describe("TrainerPosts — ENG-613 parity on the trainer profile", () => {
     expect(screen.getByTestId("photo-dots").querySelectorAll("button")).toHaveLength(3);
     expect(screen.getByTestId("media-photo-count")).toHaveTextContent("1/3");
 
-    // WHICH IDS the screen actually asked for. Without this the call could be
-    // `readPostPhotos(sb, [])` and every assertion above would still pass — the
-    // mock ignores its arguments — while the carousel died on every real feed.
-    // That is the ENG-772 silent-drop class moved one layer up, and the e2e is
-    // explicitly not the guard for `app/(member)/**` reads (.rx/gotchas.md).
-    expect(vi.mocked(readPostPhotos)).toHaveBeenCalledWith(expect.anything(), ["p1"]);
+    // WHICH IDS the screen actually asked for, on the SAME batch that carries
+    // slideCount — the ENG-772 silent-drop class, moved onto the mint path.
+    const mediaCalls = fetchMock.mock.calls.filter((c) => String(c[0]) === "/api/posts/media");
+    const batch = mediaCalls
+      .map((c) => JSON.parse(String(c[1]?.body)))
+      .find((b) => "postIds" in b);
+    expect(batch).toEqual({ postIds: ["p1"] });
   });
 
-  it("renders no carousel for a single-photo post (ENG-762)", async () => {
-    photosMock = new Map([["p1", [{ url: "https://signed.test/p1-0.jpg", sort: 0 }]]]);
-    feedRows = [{ ...TEXT_ROW, type: "photo", title: null, body: "Trackwork this morning." }];
+  it("renders no carousel for a single-photo post (ENG-762 / ENG-815)", async () => {
+    feedRows = [
+      { ...TEXT_ROW, type: "photo", title: null, body: "Trackwork this morning.", media_url: "media/p1.jpg", poster_url: null },
+    ];
+    global.fetch = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.includes("/feed")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: feedRows }) });
+      }
+      if (url === "/api/posts/media") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              items: [{ postId: "p1", mediaUrl: "https://sb.local/p1-0.jpg", slideCount: 1 }],
+              expiresAt: "2026-08-01T00:00:00.000Z",
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    }) as unknown as typeof fetch;
 
     render(<TrainerPosts trainerId="t1" trainerName="Tom Alcott" viewerId={VIEWER_ID} />);
     await screen.findByText("Trackwork this morning.");
 
     expect(screen.queryByTestId("photo-dots")).toBeNull();
     expect(screen.queryByTestId("photo-track")).toBeNull();
+  });
+});
+
+describe("profile post feeds — ENG-799 post-media mint", () => {
+  it("HorsePosts makes exactly one POST /api/posts/media for a photo page", async () => {
+    feedRows = [
+      {
+        ...TEXT_ROW,
+        type: "photo",
+        title: null,
+        body: "Trackwork this morning.",
+        media_url: "media/p1.jpg",
+        poster_url: null,
+      },
+    ];
+    const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
+
+    render(
+      <HorsePosts horseId="h1" horseName="Mahogany" trainerName="Tom Alcott" viewerId={VIEWER_ID} />,
+    );
+    await screen.findByText("Trackwork this morning.");
+
+    const mediaCalls = fetchMock.mock.calls.filter((c) => String(c[0]) === "/api/posts/media");
+    expect(mediaCalls).toHaveLength(1);
+    expect(JSON.parse(String(mediaCalls[0][1]?.body))).toEqual({ postIds: ["p1"] });
+  });
+
+  it("TrainerPosts makes exactly one POST /api/posts/media for a photo page", async () => {
+    feedRows = [
+      {
+        ...TEXT_ROW,
+        type: "photo",
+        title: null,
+        body: "Trackwork.",
+        media_url: "media/p1.jpg",
+        poster_url: null,
+      },
+    ];
+    const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
+
+    render(<TrainerPosts trainerId="t1" trainerName="Tom Alcott" viewerId={VIEWER_ID} />);
+    await screen.findByText("Trackwork.");
+
+    const mediaCalls = fetchMock.mock.calls.filter((c) => String(c[0]) === "/api/posts/media");
+    expect(mediaCalls).toHaveLength(1);
+  });
+
+  it("omitted mint id → null poster placeholder on HorsePosts", async () => {
+    feedRows = [
+      {
+        ...TEXT_ROW,
+        type: "photo",
+        title: null,
+        body: "Trackwork.",
+        media_url: "media/draft.jpg",
+        poster_url: null,
+      },
+    ];
+    global.fetch = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.includes("/feed")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: feedRows }) });
+      }
+      if (url === "/api/posts/media") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { items: [], expiresAt: "2026-08-01T00:00:00.000Z" } }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    }) as unknown as typeof fetch;
+
+    const { container } = render(
+      <HorsePosts horseId="h1" horseName="Mahogany" trainerName="Tom Alcott" viewerId={VIEWER_ID} />,
+    );
+    await screen.findByText("Trackwork.");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(container.querySelector(".post-media-web img")).toBeNull();
   });
 });

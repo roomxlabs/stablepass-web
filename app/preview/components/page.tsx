@@ -167,11 +167,78 @@ const slide = (bg: string, fg: string, n: number) =>
       `fill="${fg}" text-anchor="middle">PHOTO ${n}</text></svg>`,
   )}`;
 
-const CAROUSEL_PHOTOS = [
-  { url: slide("#1A1A1A", "#FAF7F2", 1), sort: 0 },
-  { url: slide("#F1ECE3", "#1A1A1A", 2), sort: 1 },
-  { url: slide("#285D50", "#FAF7F2", 3), sort: 2 },
+const CAROUSEL_SLIDES = [
+  slide("#1A1A1A", "#FAF7F2", 1),
+  slide("#F1ECE3", "#1A1A1A", 2),
+  slide("#285D50", "#FAF7F2", 3),
 ];
+
+/**
+ * ENG-815 — A STUBBED MINT, FOR THIS DEV PAGE ONLY.
+ *
+ * The carousel no longer receives resolved photos as a prop: it takes a post id
+ * and a slide count and asks `POST /api/posts/media` for slides 1+ by index.
+ * That is the whole point of the change, and it is also what a no-auth fixture
+ * gallery cannot satisfy — the real route 401s here, so every slide past 0 would
+ * draw blank ground and this page would stop showing what it exists to show
+ * (whether the dots and the n/m chip stay legible over a hostile photo).
+ *
+ * So the request is answered locally, with the same generated SVGs the fixtures
+ * always used. Three things keep this honest:
+ *   - it is installed only when this module is evaluated, i.e. only on
+ *     `/preview/components`, which is a dev aid and is not linked in the nav;
+ *   - it intercepts ONLY this route and only for the fixture post ids below,
+ *     delegating everything else to the real `fetch`;
+ *   - it answers in the be's exact response shape, INCLUDING `mediaUrl: null`
+ *     for a slide that cannot be resolved — which is what the degraded fixture
+ *     below now uses instead of a hand-placed `{ url: null }`.
+ *
+ * As ever, this gallery is NOT evidence for the read path (it bypasses both the
+ * projection and the mapper — see .rx/gotchas.md). `e2e/eng-762-photo-carousel`
+ * drives the real one against local Postgres and Storage.
+ */
+const FIXTURE_SLIDES: Record<string, (index: number) => string | null> = {
+  "post-carousel-1": (i) => CAROUSEL_SLIDES[i] ?? null,
+  // The middle slide cannot be resolved: it draws the media ground while its
+  // siblings still render. A dead slide must never take the whole post down.
+  "post-carousel-degraded": (i) => (i === 1 ? null : CAROUSEL_SLIDES[i] ?? null),
+  "post-carousel-ten": (i) =>
+    slide(i % 2 ? "#F1ECE3" : "#1A1A1A", i % 2 ? "#1A1A1A" : "#FAF7F2", i + 1),
+};
+
+// The `NODE_ENV` guard is belt-and-braces: this module is only evaluated on
+// `/preview/components`, which is unlinked and a dev aid. It is here because the
+// patch is never removed once installed, so it would survive a client-side
+// navigation off this route in a production build.
+if (
+  process.env.NODE_ENV !== "production" &&
+  typeof window !== "undefined" &&
+  !("__previewMint" in window)
+) {
+  (window as unknown as Record<string, unknown>).__previewMint = true;
+  const realFetch = window.fetch.bind(window);
+  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url === "/api/posts/media" && init?.body) {
+      const body = JSON.parse(String(init.body)) as { postId?: string; slideIndex?: number };
+      const resolve = body.postId ? FIXTURE_SLIDES[body.postId] : undefined;
+      if (resolve && typeof body.slideIndex === "number") {
+        return new Response(
+          JSON.stringify({
+            data: {
+              postId: body.postId,
+              slideIndex: body.slideIndex,
+              mediaUrl: resolve(body.slideIndex),
+              expiresAt: new Date(Date.now() + 300_000).toISOString(),
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+    }
+    return realFetch(input, init);
+  }) as typeof window.fetch;
+}
 
 const CAROUSEL_POST: FeedPost = {
   ...PHOTO_POST,
@@ -179,42 +246,46 @@ const CAROUSEL_POST: FeedPost = {
   horseName: "Cannonbrook",
   label: "Trackwork",
   body: "Three from the course proper this morning.",
-  media: { type: "photo", posterUrl: CAROUSEL_PHOTOS[0].url },
-  photos: CAROUSEL_PHOTOS,
+  // `posterUrl` is slide 0, exactly as the batch delivers it on a real screen.
+  media: { type: "photo", posterUrl: CAROUSEL_SLIDES[0] },
+  slideCount: 3,
 };
 
 // One photo is the SAME rendering case as none: post.media_url already mirrors
-// sort_order 0, so this must draw the plain chip and no dots at all.
+// sort_order 0, and the be reports `slideCount: 1` either way, so this must draw
+// the plain chip and no dots at all.
 const SINGLE_PHOTO_POST: FeedPost = {
   ...PHOTO_POST,
   id: "post-carousel-single",
   horseName: "Verry Elleegant (NZ)",
   body: "One photo — no dots, no count.",
-  media: { type: "photo", posterUrl: CAROUSEL_PHOTOS[1].url },
-  photos: [CAROUSEL_PHOTOS[1]],
+  media: { type: "photo", posterUrl: CAROUSEL_SLIDES[1] },
+  slideCount: 1,
 };
 
-// A photo that failed to sign takes the media ground; its siblings still render.
+// A photo that cannot be resolved takes the media ground; its siblings still
+// render. TWO slides, not three, so exactly ONE empty slide is on screen at
+// mount — with three, slide 2 would also be blank simply because the carousel
+// prefetches only one ahead, and the evidence would no longer isolate the
+// degraded case from the not-yet-minted one.
 const DEGRADED_CAROUSEL_POST: FeedPost = {
   ...PHOTO_POST,
   id: "post-carousel-degraded",
   horseName: "Black Caviar",
-  body: "The middle photo could not be signed.",
-  media: { type: "photo", posterUrl: CAROUSEL_PHOTOS[0].url },
-  photos: [CAROUSEL_PHOTOS[0], { url: null, sort: 1 }, CAROUSEL_PHOTOS[2]],
+  body: "The second photo could not be resolved.",
+  media: { type: "photo", posterUrl: CAROUSEL_SLIDES[0] },
+  slideCount: 2,
 };
 
-// The contract's cap. Ten dots must still fit the narrow card.
+// The contract's cap. Ten dots must still fit the narrow card, and they are
+// drawn from `slideCount` alone — none of slides 2..9 has been minted yet.
 const TEN_PHOTO_POST: FeedPost = {
   ...PHOTO_POST,
   id: "post-carousel-ten",
   horseName: "Northern Star",
   body: "Ten is the maximum the schema allows.",
-  media: { type: "photo", posterUrl: CAROUSEL_PHOTOS[0].url },
-  photos: Array.from({ length: 10 }, (_, i) => ({
-    url: slide(i % 2 ? "#F1ECE3" : "#1A1A1A", i % 2 ? "#1A1A1A" : "#FAF7F2", i + 1),
-    sort: i,
-  })),
+  media: { type: "photo", posterUrl: CAROUSEL_SLIDES[0] },
+  slideCount: 10,
 };
 
 export default function ComponentPreviewPage() {
@@ -246,10 +317,11 @@ export default function ComponentPreviewPage() {
 
       <h2 id="round6-carousel">Round 6 — multi-photo carousel (ENG-762)</h2>
       <p style={{ color: "var(--muted)", marginBottom: 16 }}>
-        Two or more <code>post_media</code> rows turn the media box into a scroll-snap carousel: dots
+        A <code>slideCount</code> above one turns the media box into a scroll-snap carousel: dots
         bottom-centre, and the ENG-761 photo chip extended with an <code>n/m</code> count. One photo —
         or none, which is the same case, since <code>post.media_url</code> mirrors row 0 — draws neither.
-        Drag, swipe or press a dot to page.
+        Drag, swipe or press a dot to page. The dots come from the count, so they are right before any
+        slide past the first has been minted; slides arrive one ahead of where you are (ENG-815).
       </p>
       <div style={{ maxWidth: 520, marginBottom: 40 }} data-testid="round6-carousel-gallery">
         <PostCard post={CAROUSEL_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />

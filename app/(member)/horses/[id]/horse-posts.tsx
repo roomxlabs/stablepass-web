@@ -10,8 +10,7 @@ import { useEffect, useState } from "react";
 import { PostCard, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { signPhotoMap, POST_MEDIA_BUCKET } from "@/lib/storage/photos";
-import { readPostPhotos } from "@/lib/post-media";
+import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@/lib/api/post-media";
 import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
 import type { FeedPost, ReactionEmoji } from "@/components/types";
 
@@ -64,16 +63,23 @@ export function HorsePosts({ horseId, horseName, trainerName, stableName = null,
         ]);
         const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
         const mySet = new Set(((bookmarkRows ?? []) as BookmarkRow[]).map((b) => b.post_id));
-        // `media_url` is a bare path in the PRIVATE `post-media` bucket — sign it
-        // or the poster renders as a broken relative URL (absolute URLs pass through).
-        // Concurrent, not sequential: the carousel read is independent of the
-        // poster signing, so it costs no extra latency on the feed.
-        const [postMedia, photosByPost] = await Promise.all([
-          signPhotoMap(sb, POST_MEDIA_BUCKET, rows.flatMap((r) => [r.poster_url, r.media_url])),
-          readPostPhotos(sb, rows.map((r) => r.id)),
-        ]);
+        // Photos + their slide counts via ONE POST /api/posts/media; video posters
+        // via playback?posterOnly=1. Absolute URLs pass through. A 402 surfaces the
+        // AccessWall (guardrail 3). `slideCounts` rides in on the same batch, which
+        // is what lets a carousel draw the right dots before it mints a thing.
+        let media: PostDisplayMedia;
+        try {
+          media = await resolvePostDisplayUrls(rows);
+        } catch (e) {
+          if (e instanceof PostMediaError && e.reason === "gated") {
+            // Profile pages already wall at the page level; mid-session 402 → error.
+            if (!cancelled) setError(true);
+            return;
+          }
+          media = { urls: new Map(), slideCounts: new Map() };
+        }
 
-        const intrinsics = { signedMedia: postMedia, photosByPost, reactionByPost: myReaction };
+        const intrinsics = { signedMedia: media.urls, slideCountByPost: media.slideCounts, reactionByPost: myReaction };
         const mapped: FeedPost[] = rows.map((r) => ({
           ...postIntrinsics(r, intrinsics),
           horseId,

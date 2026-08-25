@@ -215,6 +215,53 @@ if the hits are outside your surface, negotiate the swap up front rather than
 discovering it at the gate. Prove causation with a holdout — move your route dir
 aside and re-run eslint; exit 0 means it is yours.
 
+**...but ONLY for DYNAMIC routes — a static route can never trip it (ENG-598).**
+Do not predict the error count by grepping for anchors; measure it. In
+`@next/eslint-plugin-next/dist/utils/url.js` an app route becomes the regex
+`"^" + normalizeAppPath(url) + "$"`, while the href under test goes through
+`normalizeURL()`, which **appends a trailing slash**. A static route yields
+`^/signin$` tested against `/signin/` → never matches. A dynamic route yields
+`^/legal/[slug]$`, whose `[...]` → `((?!.+?\..+?).*?)` substitution is a lazy
+wildcard that happily absorbs the trailing slash → matches `/legal/terms/`.
+That is why `trial-start-form.tsx` had THREE raw anchors to real pages but only
+**2** lint errors: `/legal/terms` and `/legal/privacy` fired, `/signin` never
+could. A ticket that says "3 anchors, so 3 errors" is wrong before you start.
+
+## `next/link` silently normalises a trailing slash off the href (ENG-598)
+With `trailingSlash` unset (default `false`), `<Link href="/legal/terms/">`
+renders `<a href="/legal/terms">`, but a raw `<a href="/legal/terms/">` emits the
+slash verbatim. Two consequences: (1) converting an anchor to `<Link>` makes
+slash-drift on `/legal/*` structurally impossible, which matters because those
+hrefs must stay root-relative to serve on both hosts (ENG-590 decision 1); and
+(2) a test asserting rendered hrefs cannot be mutation-checked with a trailing
+slash once the element is a `<Link>` — mutate to an ABSOLUTE url
+(`https://stablepass.co/legal/privacy`) instead, which is the real host-breaking
+failure mode anyway.
+
+## Converting an anchor to `<Link>` is not behaviour-neutral — it adds prefetch
+`<Link>` prefetches on viewport entry in a production build, so an anchor→Link
+swap is behaviour-neutral in the MARKUP and not in the NETWORK. Measured on
+`/start` (ENG-598, `next start` + Playwright counting requests carrying
+`Next-Router-Prefetch: 1`): the page fired prefetches for all three linked
+routes.
+
+**Decide per link, by route type — the split is the point.**
+- `●` prerendered (here `/legal/[slug]`): leave the default on. The prefetch is a
+  static payload and genuinely speeds the tap.
+- `ƒ` dynamic (here `/signin`): its server component awaits `supabaseServer()`
+  then `auth.getUser()`, and there is NO `loading.tsx` anywhere under `app/` for
+  the prefetch to stop at, so the default renders the whole page server-side and
+  spends a Supabase round-trip on every view of the page holding the link.
+
+**Done in ENG-598:** `prefetch={false}` on the `/signin` link only, with an
+in-file comment explaining the asymmetry so nobody normalises it away. Measured
+before/after on the same build: `/signin` prefetches 2 → 0 while `/legal/*` kept
+prefetching (4 and 7). Verified `prefetch={false}` does NOT downgrade the click
+to a full page load — a `window` marker set on `/start` survives the navigation
+to `/signin`, i.e. it is still a soft client-side nav; only the speculative fetch
+is gone. `prefetch` is also not an attribute, so the rendered DOM stays
+byte-identical (1832 chars) and an href-asserting test is untouched by it.
+
 ## A source-grep guardrail cannot see the layout chain — assert the build instead
 "These routes stay static" greped over the route's own directory passes happily
 while a `headers()` in `app/(marketing)/layout.tsx` (or the root layout) flips
@@ -611,6 +658,60 @@ sessions and carves the loop out in writing — own ticket branch only, never
 `main`, never a shared branch, only its declared surface. Follow the file, not
 this note.
 
+## A grep guard that matches on ADJACENCY is defeated by hoisting the value
+**(2026-08-18, ENG-617)** The guard forbidding the deleted age formula matched
+`/getFullYear\(\)\s*-/` and `/[-+*]\s*foaling_?[Yy]ear/`. Both miss the refactor
+anyone would actually reach for:
+```ts
+const thisYear = new Date().getFullYear();
+const age = thisYear - row.foaling_year;     // guard silent
+```
+The date call moved to another line, and `row.` sits between the operator and
+the name. That exact idiom was already in this repo (`e2e/screenshots.spec.ts`).
+Match on the **identifier** with `[\w.]*` stepping over the property access
+(`/[-+*/]\s*[\w.]*foaling_?[Yy]ear/`), cover `getUTCFullYear`, and **self-test
+the guard**: assert its patterns fire on a list of known reintroduction shapes
+and stay quiet on the legitimate ones. A guard nobody tested is a guard that
+silently rots. Scan `e2e` too — `test` cannot be scanned, since the guard file's
+own regex literals match themselves.
+
+## "Assert a positive first" means PRESENCE — another absence is not a positive
+**(2026-08-18, ENG-617)** Countering the documented vacuity trap with
+`expect(container.querySelector(".profile-header-web")).toBeNull()` fixes
+nothing: it is a second negative, so a screen that regressed to rendering
+*nothing at all* still passes every assertion. `AccessWall` ships
+`data-testid="access-wall"` (`components/access-wall.tsx:85,96`) — assert
+`screen.getByTestId("access-wall")` and let it throw. Same rule for routes: pin
+`res.status` **and** one real field.
+
+## A fake clock straddling a calendar boundary needs ≥1 DAY, not an hour
+**(2026-08-18, ENG-617)** A "the value must not move across the New Year" lock
+set to `2026-12-31T23:59+11:00` → `2027-01-01T00:01+11:00` passed against a
+deliberately broken implementation. `getFullYear()` reads the **host** zone, and
+this machine is `Australia/Brisbane` (UTC+10), where both instants are still
+31 December. Use instants two days apart (`2026-12-30T12:00Z` →
+`2027-01-02T12:00Z`): they land in different calendar years at every offset from
+−12 to +14. Also prefer `vi.useFakeTimers({ toFake: ["Date"] })` — faking timers
+wholesale stalls the awaits inside a route handler.
+
+## The horse reads DISCARD the Supabase `error` — a missing column 404s silently
+**(2026-08-18, ENG-617)** `app/api/horses/[id]/route.ts` and
+`app/(member)/horses/[id]/page.tsx` both did `const { data } = await sb.from(...)`
+and dropped `error`. A query error lands in the same branch as a hidden row, so
+an undeployed computed column (`42703`) makes **every** horse profile 404 with
+nothing logged, indistinguishable from enumeration-resistance working correctly.
+Both now `console.error` it. When a projection names a column that a pending
+migration adds, log the error or the deploy-order failure is invisible — and
+never "fix" the 42703 by trimming the projection.
+
+## `.rx/mockups.md` is STILL wrong — the living mockups are in `06-stage1-design`
+**(2026-08-18, ENG-617)** The manifest (and the entry above it, from ENG-571)
+names `<workspace>/dev-handover/StablePass-mockups/mockups/web/`. That directory
+does not exist anywhere in the workspace. The real, living source is
+`<workspace>/06-stage1-design/mockups/web/screens/` (e.g.
+`07-horse-profile.html`), which is what the ENG-617 ticket itself cited. `ls` the
+design path before building, and do not trust either the manifest or `CLAUDE.md`
+§ Design source.
 ## Design-source CSS guards must strip comments before scanning (ENG-613)
 
 **Symptom:** a green `post-media-ground` guard went red on a diff that added no
@@ -767,8 +868,12 @@ returns an empty map and every card falls back to `post.media_url`.
   never infer position from array index.
 - `post.media_url` MIRRORS row 0, so **0 rows and 1 photo are the same rendering
   case**. Anything that draws dots at `length >= 1` is wrong; the test is `> 1`.
-- Web named the view-model field `photos`, NOT `media` — `FeedPost.media` is
-  already the `PostMedia` view model.
+- **SUPERSEDED BY ENG-815 (25 Aug 2026).** The view-model field was `photos:
+  PostPhoto[]`, resolved client-side. It is now `slideCount: number` from the
+  batch mint, and the client never sees `sort_order` at all — the server
+  resolves ordinals. The contiguity point above still matters, but it is now the
+  BE's problem: `slideCount` is HIGHEST ORDINAL + 1, not a row count, so `{0,2}`
+  reports 3 and the client draws a blank middle slide instead of losing photo 2.
 
 ## e2e here is timing-sensitive on a COLD Next dev server — budget for the compile
 **(2026-08-24, ENG-762)** `e2e/eng-772-profile-label-pill.spec.ts` uses default
@@ -1000,5 +1105,104 @@ renders needs `lib/feed/post-row.ts` (row type + projection + key + mapper) and
 screen for real reasons. Don't widen the helper to cover them.
 
 The return type is `Required<Pick<FeedPost, PostIntrinsicKey>>` on purpose:
-`title?`, `body?` and `photos?` are optional on `FeedPost`, so a plain `Pick`
+`title?`, `body?` and `slideCount?` are optional on `FeedPost`, so a plain `Pick`
 would let the shared mapper drop one and still compile.
+
+## `<img>` recovery: the HTTP cache makes expiry bugs look unreproducible (ENG-813, 25 Aug 2026)
+
+**Symptom:** a minted-URL expiry bug "cannot be reproduced" by clicking through the app.
+**Cause:** an already-painted image survives the HTTP cache, so nothing re-requests it. The
+break only appears when something DOES re-request after the TTL — a tab left open, a bfcache
+restore, a re-mount.
+**Do this:** never try to wait out a real TTL in a test. Drive `fireEvent.error(img)` against a
+mocked fetch. The element's `onError` is both the production mechanism and the test hook.
+
+Two related traps on the same ticket:
+
+1. **A cached GET silently no-ops a re-mint.** The video poster re-mint hits the SAME
+   `/api/posts/:id/playback?posterOnly=1` URL the initial page resolve already fetched. Without
+   `cache: "no-store"` a cached 200 returns the poster that just failed — the single retry
+   becomes a guaranteed no-op AND the server's re-gate is skipped. `ok()` in
+   `lib/api/envelope.ts` sets no `Cache-Control`, so this is one header away from real.
+2. **`react-hooks/refs` errors on a ref mutation during render.** The documented "adjust state
+   on a prop change" pattern (render-phase `setState`) is fine, but a `ref.current = x` beside
+   it is a lint ERROR, not a warning. Move just that line into a `useEffect` keyed on the same
+   tracked prop.
+
+**Test-strength note:** a presentational component's *wiring* is easy to leave untested. Every
+media case in `test/post-card.test.tsx` uses `posterUrl: null`, which short-circuits before an
+`<img>` exists, and `components/media-player.tsx` has no test file at all. A wrong `postId`
+there leaks nothing (the BFF re-authorises) but silently kills the feature in production with a
+green suite. Mutation-check the wiring, not just the logic.
+
+## Subagents sharing a worktree corrupt each other's test runs (25 Aug 2026)
+
+**Symptom:** intermittent single-test failures and test COUNTS that change between back-to-back
+`npm test` runs in the same tree (53 files/789 → 54 files/796).
+**Cause:** a review subagent working in the same worktree was writing scratch/probe test files
+(`test/zz-*.test.tsx`) and temporarily mutating source to prove a test's strength. A concurrent
+`npm test` sees the tree mid-mutation.
+**Do this:** never run the verification suite while a reviewer/labour agent is live in the same
+worktree. Serialise them, and before committing always `git status --porcelain` and delete any
+`test/zz-*` scratch files — they will otherwise be staged and inflate the diff. A stalled
+subagent's transcript file stays at 179 bytes and its mtime does NOT update while it works, so
+mtime is not a liveness signal; and an agent you spawned may not be stoppable via TaskStop
+("owned by" error).
+
+## A revoked bucket does not throw — it renders a carousel of nulls (ENG-815, 25 Aug 2026)
+
+**Symptom:** after merging `main` into `feature/round6-v1`, the multi-photo
+carousel compiles, type-checks, passes `tsc`, renders its dots and its `n/m`
+chip, and shows no photograph past the first. No error anywhere.
+
+**Cause:** ENG-799 made `signPhoto` / `signPhotoMap` **deny-by-construction** for
+`POST_MEDIA_BUCKET` — they `return null` / `return out` early rather than
+throwing (`lib/storage/photos.ts`). Round 6's `lib/post-media.ts` still called
+`signPhotoMap(sb, POST_MEDIA_BUCKET, …)`, and that file did not conflict during
+the merge because it exists only on one side. Git kept it silently, and a
+mechanical resolution therefore ships dead code that looks alive.
+
+- **Do this:** after any merge that crosses a cutover, list the files that exist
+  on ONE side only and read them against the other side's new invariants. The
+  conflicting files are the ones you will look at anyway; the non-conflicting
+  ones are where the silent regression hides.
+- The general shape: a guard that degrades quietly is the right call at runtime
+  and a trap at merge time. Grep for callers of anything that became
+  deny-by-construction, not just for compile errors.
+
+## The web carousel e2e needs the be on `feature/round6-v1`, not `main` (ENG-815, 25 Aug 2026)
+
+`e2e/eng-762-photo-carousel.spec.ts` drives slides through
+`POST /api/posts/media` → the be `post-media` edge function. The
+`{ postId, slideIndex }` mode and `slideCount` landed on the be's
+`feature/round6-v1` (`af68205`) and are NOT on be `main`.
+
+- **Symptom if the local edge runtime serves the wrong branch:** every post reads
+  as single-photo (no dots), or `post.label` comes back `PGRST204 Could not find
+  the 'label' column`. Both look like web regressions and are not.
+- **Check first:** `docker inspect supabase_edge_runtime_stablepass` shows which
+  be worktree is bind-mounted; `git -C <that worktree> branch --show-current`
+  names the branch actually being served.
+- The stack is SHARED across all be worktrees (see the BE loop-serialization
+  rule), so a web worker must not repoint it to suit itself.
+
+**Degradation is safe, and that was verified rather than assumed:** web running
+against a be without the slide mode gets `slideCount: undefined` → 1 → no
+carousel, and a `{postId, slideIndex}` request 400s → `null` → blank slide. No
+crash and no wrong photo, so the web PR can land before the be one.
+
+## `horse.sex` is male/female + `is_gelded` — old e2e seeds die at the fixture (ENG-815, 25 Aug 2026)
+
+ENG-304's `horse_sex_check` is `sex IS NULL OR sex = ANY('{male,female}')`, with
+gelding moved to a separate `is_gelded` boolean. Every pre-ENG-304 e2e seed says
+`sex: "gelding"` (or `"mare"`), which now fails with `23514` at the `if
+(horseError) throw horseError` line — **before a single assertion runs**, so the
+spec reports as a product failure.
+
+- **Do this:** when a merge brings a schema migration onto a branch that carries
+  its own e2e specs, grep the specs for every column that migration touched.
+  `main`'s `e2e/screenshots.spec.ts` already had the fix; three round-6 specs did
+  not, and only one commit separated them.
+- Same class as the `foaling_year: new Date().getFullYear() - 5` seeds, which
+  ENG-617's repo-wide "no date arithmetic" guard flags in `e2e/` too. Use an
+  absolute year in fixtures.
