@@ -602,4 +602,33 @@ describe("ExploreFeed — ENG-799 post-media mint", () => {
     expect(container.querySelector(".post-media-web img")).toBeNull();
     expect(container.querySelector(".post-media-web")).not.toBeNull();
   });
+
+  it("renders the reactivate wall when the mint returns 402", async () => {
+    const photoPosts = [{ ...POSTS[0], media_url: "media/p1.jpg", poster_url: null }];
+    global.fetch = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/feed/seen")) {
+        return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
+      }
+      if (url === "/api/posts/media") {
+        return Promise.resolve({
+          ok: false,
+          status: 402,
+          json: async () => ({ error: { code: "subscription_required" } }),
+        });
+      }
+      if (url.startsWith("/api/feed")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ data: photoPosts, meta: { nextCursor: null, hasMore: false } }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    }) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={true} />);
+    expect(await screen.findByText(/your access has paused/i)).toBeInTheDocument();
+    expect(screen.queryByText("Mahogany")).not.toBeInTheDocument();
+  });
 });
