@@ -56,46 +56,48 @@ const TILES = [
 
 const APP_SCREENS: AppScreen[] = [
   {
-    src: "/marketing/2abf5618.jpg",
+    src: "/marketing/49dc49c5.jpg",
     alt: "stablepass app: a written update posted by the trainer",
     caption: "Stable updates",
   },
   {
-    src: "/marketing/1c515ac1.jpg",
+    src: "/marketing/ff7c4249.jpg",
     alt: "stablepass app: a photo update posted from the stable",
     caption: "Photos from the stable",
   },
   {
-    src: "/marketing/df701113.jpg",
-    alt: "stablepass app: a trackwork update with the morning's gallop times",
+    src: "/marketing/806ed732.jpg",
+    alt: "stablepass app: trackwork updates posted from the morning's work",
     caption: "Training & trackwork",
   },
   {
-    src: "/marketing/8c0fa420.jpg",
+    src: "/marketing/33c5e035.jpg",
     alt: "stablepass app: the horses you follow and where each one is up to",
     caption: "Horse progress reports",
   },
   {
-    src: "/marketing/daa70248.jpg",
+    src: "/marketing/20c7ef86.jpg",
     alt: "stablepass app: horse profile with the next race card",
     caption: "Race previews",
   },
   {
-    src: "/marketing/42017d50.jpg",
+    src: "/marketing/f5da4f66.jpg",
     alt: "stablepass app: a short video posted from the stable",
     caption: "Videos & short clips",
   },
   {
-    // v2.7 asset: this screen's third stat tile reads 57.5kg / WEIGHT. The v2.6
-    // asset showed a market price there, which guardrail #8 does not allow to be
-    // rendered as product UI. Do not "restore" the older file to match the live
-    // preview, which is still serving v2.6.
-    src: "/marketing/3334430f.jpg",
+    // GUARDRAIL #8 SLOT. This screen's stats tile reads starts / wins / places /
+    // prizemoney — career figures, no market price anywhere on it. A withdrawn
+    // v2.6 asset once showed a price in that tile, which guardrail #8 does not
+    // allow to be rendered as product UI; v2.7 replaced it with weight and
+    // ENG-732 re-cut it from the real app. Whatever this slot is pointed at next
+    // has to be vetted the same way, and two tests pin this exact file by name.
+    src: "/marketing/626b12ea.jpg",
     alt: "stablepass app: a race result with the stable's post-race comment",
     caption: "Post-race comments",
   },
   {
-    src: "/marketing/27c52a38.jpg",
+    src: "/marketing/e3a237ed.jpg",
     alt: "stablepass app: race day alerts for the horses you follow",
     caption: "Race day alerts",
   },

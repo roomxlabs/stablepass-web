@@ -392,8 +392,18 @@ describe("extracted marketing assets", () => {
   // mockup inlined. The md5-naming pin below and the both-directions
   // "referenced === assets" equality further down are unchanged and still
   // enforced.
-  it("holds the 21 non-trainer images the mockup inlined", () => {
-    expect(assets).toHaveLength(21);
+  //
+  // ENG-732 re-cut the ELEVEN app-screenshot slots from real production content,
+  // so the directory is no longer wholly mockup-derived: the nine mockup-era app
+  // screenshots were deleted and eleven real ones added. The count is therefore
+  // 12 surviving mockup assets + 11 real app screens. It is re-pinned to that
+  // arithmetic deliberately, NOT to whatever number makes the suite green — the
+  // old set reused two files across four slots (one in the hero and the videos
+  // screen, one in the app section and the progress screen) and the new set has
+  // eleven distinct images, which is exactly where the +2 comes from.
+  it("holds the 12 surviving mockup images plus ENG-732's 11 real app screens", () => {
+    expect(assets).toHaveLength(21 - REPLACED_BY_ENG732.length + REAL_APP_SCREENS.length);
+    expect(assets).toHaveLength(23);
   });
 
   // Every file is named for the md5 of its own bytes, which is what makes
@@ -447,6 +457,18 @@ describe("extracted marketing assets", () => {
    *     name. A twentieth going missing fails here, and so does one of these
    *     coming back without the roster coming back with it;
    *   - nothing strays into the directory that the mockup did not produce.
+   *
+   * ENG-732 widens the same deviation a second time, and the third bullet is the
+   * one that changed. The eleven app screenshots are re-cut from real production
+   * content, so they are NOT mockup output and they DO stray into the directory
+   * by design. "Nothing strays" would now be a false claim, and weakening it to
+   * "strays are fine" would give up a real guarantee, so it is replaced by an
+   * exact one: the set of files the mockup did not produce is pinned by name to
+   * these eleven. A twelfth stray fails here.
+   *
+   * The nine mockup-era app screenshots they replace are deleted, so they join
+   * the MISSING set for the same reason the trainer photographs did — an
+   * intended deviation, pinned rather than tolerated.
    */
   const REMOVED_BY_ENG730 = [
     "0660c8a4.jpg",
@@ -470,7 +492,46 @@ describe("extracted marketing assets", () => {
     "d5b44861.jpg",
   ];
 
-  it.skipIf(!MOCKUP)("still matches the mockup byte for byte, minus ENG-730's removals", () => {
+  /**
+   * ENG-732 — the nine mockup-era app screenshots the real re-cut replaced.
+   *
+   * Nine, not eleven: the mockup reused one file for the hero phone and the
+   * "Videos & short clips" screen, and another for the app section's phone and
+   * the "Horse progress reports" screen. The eleven replacements are all
+   * distinct, which is why the directory grows by two.
+   */
+  const REPLACED_BY_ENG732 = [
+    "1c515ac1.jpg",
+    "27c52a38.jpg",
+    "2abf5618.jpg",
+    "3334430f.jpg",
+    "42017d50.jpg",
+    "4a5f34ce.jpg",
+    "8c0fa420.jpg",
+    "daa70248.jpg",
+    "df701113.jpg",
+  ];
+
+  /**
+   * ENG-732 — the eleven real app screens, one per marketing slot, in slot
+   * order. These are the only files under public/marketing that the mockup did
+   * not produce, and the check below pins that set exactly.
+   */
+  const REAL_APP_SCREENS = [
+    "792fb5fe.jpg", // 1  hero phone
+    "94d671ea.jpg", // 2  the-app phone
+    "f8429cbb.jpg", // 3  the-app laptop
+    "49dc49c5.jpg", // 4  Stable updates
+    "ff7c4249.jpg", // 5  Photos from the stable
+    "806ed732.jpg", // 6  Training & trackwork
+    "33c5e035.jpg", // 7  Horse progress reports
+    "20c7ef86.jpg", // 8  Race previews
+    "f5da4f66.jpg", // 9  Videos & short clips
+    "626b12ea.jpg", // 10 Post-race comments
+    "e3a237ed.jpg", // 11 Race day alerts
+  ];
+
+  it.skipIf(!MOCKUP)("still matches the mockup byte for byte, minus the pinned removals", () => {
     let report: string;
     try {
       report = execFileSync(
@@ -493,9 +554,25 @@ describe("extracted marketing assets", () => {
     // The fidelity claim: nothing on disk has drifted from the mockup's bytes.
     expect(named("DIFFERS"), "an extracted asset no longer matches the mockup").toEqual([]);
 
-    // The deviation, pinned exactly.
-    expect(named("MISSING").sort()).toEqual([...REMOVED_BY_ENG730].sort());
-    expect(named("ok")).toHaveLength(40 - REMOVED_BY_ENG730.length);
+    // The two deviations, pinned exactly and separately, so a file that goes
+    // missing for a THIRD reason cannot hide inside either list.
+    const removed = [...REMOVED_BY_ENG730, ...REPLACED_BY_ENG732];
+    expect(new Set(removed).size, "a file is listed in both removal sets").toBe(removed.length);
+    expect(named("MISSING").sort()).toEqual([...removed].sort());
+    expect(named("ok")).toHaveLength(40 - removed.length);
+
+    // ENG-732's replacement for "nothing strays": the report names every image
+    // the mockup produces, so anything on disk that is absent from it is a
+    // deliberate non-mockup asset — and that set must be exactly the eleven
+    // real app screens.
+    const producedByMockup = new Set(
+      lines.filter((line) => /^[0-9a-f]{32}\s/.test(line.trim())).map((line) => line.trim().split(/\s+/)[1]!),
+    );
+    expect(producedByMockup.size, "the check no longer reports all 40 mockup images").toBe(40);
+    expect(
+      assets.filter((name) => !producedByMockup.has(name)).sort(),
+      "a file the mockup did not produce strayed into public/marketing",
+    ).toEqual([...REAL_APP_SCREENS].sort());
   });
 
   it("removed exactly the trainer photographs, and they are really gone", () => {
@@ -503,6 +580,28 @@ describe("extracted marketing assets", () => {
     expect(new Set(REMOVED_BY_ENG730).size).toBe(19);
     for (const name of REMOVED_BY_ENG730) {
       expect(assets, `${name} came back without the roster coming back`).not.toContain(name);
+    }
+  });
+
+  // The same shape for ENG-732, and it is the half that catches a half-done
+  // swap: a slot repointed at a new screen while the old file is left behind
+  // would keep the count wrong and fail here by name.
+  it("removed exactly the mockup-era app screenshots, and they are really gone", () => {
+    expect(REPLACED_BY_ENG732).toHaveLength(9);
+    expect(new Set(REPLACED_BY_ENG732).size).toBe(9);
+    for (const name of REPLACED_BY_ENG732) {
+      expect(assets, `${name} survived the re-cut`).not.toContain(name);
+    }
+  });
+
+  // ...and the other half: every replacement is actually on disk. Together with
+  // the "referenced === assets" equality above, a slot cannot point at a file
+  // that does not exist and a file cannot sit here unreferenced.
+  it("added exactly the eleven real app screens", () => {
+    expect(REAL_APP_SCREENS).toHaveLength(11);
+    expect(new Set(REAL_APP_SCREENS).size, "two slots share an asset").toBe(11);
+    for (const name of REAL_APP_SCREENS) {
+      expect(assets, `${name} is pinned but not on disk`).toContain(name);
     }
   });
 });

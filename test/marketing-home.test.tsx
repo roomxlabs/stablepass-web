@@ -430,11 +430,23 @@ describe("marketing home — assets", () => {
     }
   });
 
-  it("uses the v2.7 post-race screen, not the withdrawn odds one", () => {
+  /**
+   * GUARDRAIL #8 at the page level — the same carry-over as
+   * `test/marketing-app-screens.test.tsx`, re-targeted at ENG-732's re-cut
+   * asset and not weakened.
+   *
+   * The positive half moves to the new hash: the post-race slot now serves the
+   * real career-stats screen (starts, wins, places, prizemoney, then the
+   * post-race card), which carries no market price. The negative half is
+   * UNCHANGED and stays forever — `f70905af` is the withdrawn v2.6 screenshot
+   * that rendered a price as product UI, and it must never come back no matter
+   * how many times the slot is re-cut.
+   */
+  it("uses the re-cut post-race screen, never the withdrawn odds one", () => {
     const { container } = render(<HomeSections />);
     const sources = [...container.querySelectorAll("img")].map((img) => img.getAttribute("src"));
 
-    expect(sources).toContain("/marketing/3334430f.jpg");
+    expect(sources).toContain("/marketing/626b12ea.jpg");
     expect(sources).not.toContain("/marketing/f70905af.jpg");
   });
 
@@ -593,16 +605,153 @@ describe("marketing home — copy matches the frozen fixture", () => {
     expect(fixture.blocks.map((b) => b.signature)).toEqual(expect.arrayContaining(Object.keys(WAITLIST_ADDITIONS)));
   });
 
-  it("points at the same extracted asset in the same place", () => {
+  /**
+   * ENG-732 — the app screenshots are re-cut from real content, layered OVER the
+   * frozen fixture exactly the way ENG-729 layered the waitlist copy.
+   *
+   * The fixture froze the mockup's image srcs, and the mockup's app screenshots
+   * were mockup-era: invented horses, invented captions. Round 6 requires the
+   * eleven app-screen slots to show the real product with real production
+   * content. Regenerating the fixture is the obvious move and the wrong one, for
+   * the same reason as the copy: rebuilding it from the page makes the check
+   * circular and freezes whatever else drifted in alongside.
+   *
+   * So the swap is pinned here as an explicit old -> new SUBSTITUTION per block,
+   * applied to the fixture's list before the comparison. What that preserves:
+   *
+   *   - nothing may be DROPPED or REORDERED. The substitution is positional —
+   *     it maps the fixture's list one entry at a time and never changes its
+   *     length — so a slot that lost its image, gained one, or moved still
+   *     fails the equality below.
+   *   - nothing may be SUBSTITUTED except these eleven. An unpinned src change
+   *     survives untouched into `expected` and breaks the same equality.
+   *   - the list cannot go stale. Every pinned substitution must actually fire,
+   *     or `fired` and `pinned` disagree and this fails — that is what catches
+   *     a KEY that no longer matches the fixture. A slot re-cut a second time
+   *     (a changed VALUE) is caught by the equality instead, since the new src
+   *     no longer matches what the map says the fixture becomes.
+   *
+   * Keyed by block, not globally, because two of the mockup's files were each
+   * used in two different slots and their replacements are distinct: the hero
+   * phone and "Videos & short clips" shared one, the app section's phone and
+   * "Horse progress reports" shared the other. Per-block keys are what let the
+   * same old src map to two different new ones without ambiguity.
+   *
+   * NOT in this list, deliberately: the four client photographs in `#members`
+   * and the hero's own photograph. They are the client's supplied photography,
+   * not app screenshots, and they are out of this ticket's scope entirely — the
+   * confinement test below checks them as both keys AND values, so neither
+   * re-cutting one away nor promoting one into an app slot passes quietly.
+   */
+  const APP_SCREEN_SUBSTITUTIONS: Record<string, Record<string, string>> = {
+    "header#top.hero": {
+      // slot 1 — hero phone: explore feed, trackwork video
+      "/marketing/42017d50.jpg": "/marketing/792fb5fe.jpg",
+    },
+    "section#app.sec": {
+      // slot 2 — the-app phone: following tab with the race-day band
+      "/marketing/8c0fa420.jpg": "/marketing/94d671ea.jpg",
+      // slot 3 — the-app laptop: the subscriber web portal
+      "/marketing/4a5f34ce.jpg": "/marketing/f8429cbb.jpg",
+    },
+    "section#members.sec": {
+      // slots 4-11 — the eight carousel screens, in carousel order
+      "/marketing/2abf5618.jpg": "/marketing/49dc49c5.jpg", // Stable updates
+      "/marketing/1c515ac1.jpg": "/marketing/ff7c4249.jpg", // Photos from the stable
+      "/marketing/df701113.jpg": "/marketing/806ed732.jpg", // Training & trackwork
+      "/marketing/8c0fa420.jpg": "/marketing/33c5e035.jpg", // Horse progress reports
+      "/marketing/daa70248.jpg": "/marketing/20c7ef86.jpg", // Race previews
+      "/marketing/42017d50.jpg": "/marketing/f5da4f66.jpg", // Videos & short clips
+      "/marketing/3334430f.jpg": "/marketing/626b12ea.jpg", // Post-race comments
+      "/marketing/27c52a38.jpg": "/marketing/e3a237ed.jpg", // Race day alerts
+    },
+  };
+
+  /** `${signature} ${oldSrc}` for every pinned substitution, so both sides can be compared as a set. */
+  const pinnedSubstitutions = Object.entries(APP_SCREEN_SUBSTITUTIONS).flatMap(([signature, swaps]) =>
+    Object.keys(swaps).map((src) => `${signature} ${src}`),
+  );
+
+  it("points at the same extracted asset in the same place, bar ENG-732's pinned re-cut", () => {
     const { container } = renderFrozen();
+    const fired: string[] = [];
+
     blocksOf(container, "main").forEach((block, i) => {
       // Same subtraction, same reason: the trainer photographs are no longer
       // extracted assets under /marketing/ but public-bucket URLs chosen by an
       // admin. `test/marketing-shell.test.tsx` still pins the extracted asset
       // set, and this ticket deleted the nineteen that went orphaned with them.
-      if (isExempt(fixture.blocks[i].signature)) return;
-      expect(imagesOf(block), `asset drift in ${fixture.blocks[i].signature}`).toEqual(fixture.blocks[i].images);
+      const { signature, images } = fixture.blocks[i];
+      if (isExempt(signature)) return;
+
+      const swaps = APP_SCREEN_SUBSTITUTIONS[signature] ?? {};
+      const expected = images.map((src) => {
+        const replacement = src === null ? undefined : swaps[src];
+        if (replacement === undefined) return src;
+        fired.push(`${signature} ${src}`);
+        return replacement;
+      });
+
+      expect(imagesOf(block), `asset drift in ${signature}`).toEqual(expected);
     });
+
+    expect(fired.sort(), "a pinned substitution no longer matches the fixture").toEqual(
+      [...pinnedSubstitutions].sort(),
+    );
+  });
+
+  it("confines the re-cut to the eleven app-screenshot slots", () => {
+    const { container } = renderFrozen();
+    const onThePage = blocksOf(container, "main").flatMap((block) => imagesOf(block));
+
+    // Three blocks carry app screenshots and no others do. A fourth entry here
+    // is a scope change to argue on the ticket, not a line to add quietly.
+    expect(Object.keys(APP_SCREEN_SUBSTITUTIONS).sort()).toEqual([
+      "header#top.hero",
+      "section#app.sec",
+      "section#members.sec",
+    ]);
+    expect(fixture.blocks.map((b) => b.signature)).toEqual(
+      expect.arrayContaining(Object.keys(APP_SCREEN_SUBSTITUTIONS)),
+    );
+
+    // Eleven slots, eleven DISTINCT replacements. The old set reused two files
+    // across four slots; the re-cut does not, and this is where that is pinned.
+    const replacements = Object.values(APP_SCREEN_SUBSTITUTIONS).flatMap((swaps) => Object.values(swaps));
+    expect(pinnedSubstitutions).toHaveLength(11);
+    expect(replacements).toHaveLength(11);
+    expect(new Set(replacements).size, "two slots were pointed at the same file").toBe(11);
+
+    // The client's photography is OUT of scope, in BOTH directions. A key would
+    // mean a photograph was re-cut away; a VALUE would mean a photograph was
+    // promoted into an app-screenshot slot. Checking only keys is what an
+    // earlier draft of this test did, and it was wrong: swapping `a65c5702`
+    // (the hero photograph) into the Stable-updates slot left this entire file
+    // green, because it fires a substitution, keeps the count at eleven
+    // distinct, and satisfies the positional equality. Only the separate asset
+    // equality in `marketing-shell.test.tsx` caught it, in a different file,
+    // for an incidental reason — the displaced screen going unreferenced.
+    const PHOTOGRAPHY = [
+      "/marketing/f10610fb.jpg",
+      "/marketing/6ec6412f.jpg",
+      "/marketing/a2f69179.jpg",
+      "/marketing/276f4bc3.jpg",
+      "/marketing/a65c5702.jpg",
+    ];
+    for (const photo of PHOTOGRAPHY) {
+      const asKey = Object.values(APP_SCREEN_SUBSTITUTIONS).some((swaps) => photo in swaps);
+      expect(asKey, `${photo} is client photography and must not be re-cut away`).toBe(false);
+
+      const asValue = Object.values(APP_SCREEN_SUBSTITUTIONS).some((swaps) =>
+        Object.values(swaps).includes(photo),
+      );
+      expect(asValue, `${photo} is client photography and must not be promoted into an app slot`).toBe(false);
+
+      // ...and it is still on the RENDERED page. Asserting this against the
+      // fixture instead would be a tautology — the fixture is a constant, so it
+      // could never fail and would quietly claim cover it does not give.
+      expect(onThePage, `${photo} left the page`).toContain(photo);
+    }
   });
 
   it("covers the whole page, so none of the above can pass vacuously", () => {

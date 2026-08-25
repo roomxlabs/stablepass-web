@@ -168,13 +168,32 @@ describe("subscribers-get section", () => {
     expect(container.querySelector('[data-ma="1"]')).not.toBeNull();
   });
 
-  // Guardrail #8: the v2.6 asset showed a market price where v2.7 shows weight.
-  it("keeps the v2.7 post-race asset, not the v2.6 one", () => {
+  /**
+   * GUARDRAIL #8, carried across the re-cut — same intent, new asset.
+   *
+   * The withdrawn v2.6 screenshot rendered a market price as product UI, which
+   * is the one thing guardrail #8 forbids outright. v2.7 replaced that stat with
+   * weight; ENG-732 re-cut the slot from real production content and it now
+   * shows the horse's career stats tile — starts, wins, places, prizemoney —
+   * above the post-race card. No price, no odds, no bookmaker anything.
+   *
+   * This assertion is RE-TARGETED at the new hash, never relaxed — it keeps the
+   * original's exact shape, naming one vetted file that must be among the
+   * screens the carousel serves. Relaxing it to a looser predicate (any image,
+   * or merely "not the old one") would leave the slot free to pick up an
+   * unvetted screenshot later, which is the failure it exists to stop.
+   *
+   * Scope, stated honestly: `toContain` proves the vetted file is PRESENT, not
+   * that it sits in the post-race position. Position is enforced elsewhere, by
+   * the frozen-fixture equality in `test/marketing-home.test.tsx`. Both halves
+   * are needed and neither claims the other's job.
+   */
+  it("serves the vetted post-race asset, which carries a stats tile and no market price", () => {
     const { container } = render(<SubscribersGet />);
 
     const sources = Array.from(container.querySelectorAll(".ma-row .ma img")).map((img) =>
       img.getAttribute("src"),
     );
-    expect(sources).toContain("/marketing/3334430f.jpg");
+    expect(sources).toContain("/marketing/626b12ea.jpg");
   });
 });
