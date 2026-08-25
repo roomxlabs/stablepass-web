@@ -85,9 +85,13 @@ missing — a worktree branched off the base has everything.
 ## Screenshot evidence = append a test to `e2e/screenshots.spec.ts`
 Convention: seed fixtures with the local service-role admin client, create a
 throwaway confirmed user, sign in through the real `/signin` form, screenshot to
-`.rx/review/<ticket>-<state>.png`, and commit the PNGs (they're tracked). This
-widening beyond a ticket's declared surface is expected for UI tickets, not scope
-creep. Local Supabase must already be up — the harness never starts it.
+`.rx/review/<ticket>-<state>.png`. Do NOT add NEW PNGs to the diff: `.rx/review/`
+is gitignored and fresh evidence ships on a `screenshots/<ticket>` branch instead.
+Beware: gitignore does not untrack, so ~76 PNGs committed before that rule are
+still tracked and many are REWRITTEN by existing specs (see "`.rx/review/` is
+gitignored, but 76 PNGs in it are still TRACKED" below). This widening beyond a
+ticket's declared surface is expected for UI tickets, not scope creep. Local
+Supabase must already be up — the harness never starts it.
 
 ## `new URL(x).href` normalises — don't write it back to an href
 Validating a URL is fine; returning `url.href` rewrites what the admin entered
@@ -746,6 +750,364 @@ their aside/rail. Derive the Follow pill from those rather than adding a query,
 and model the state as `Set<string> | null` where `null` is "not known yet" —
 conflating it with "follows nobody" flashes a pill on every card and retracts it.
 
+## Two buttons named "More" on one card — the caption affordance collides with `⋯` (ENG-761)
+
+The post card's options control is `<button aria-label="More">` (`.post-more-web`).
+Round 6 added a caption "more" affordance to the same card, so a Playwright
+`getByRole("button", { name: "more" })` matched **one per card plus the real one**
+(five where one was meant) — Playwright's `name` is case-insensitive and
+substring-trimmed unless you pass `exact: true`.
+
+- **Symptom:** a locator that looks unambiguous resolves to N+1 elements; the count
+  scales with how many cards are on the page, which reads like a render bug.
+- **Cause:** two controls with the same accessible name in one card. That is also a
+  real a11y defect, not only a test problem — name navigation cannot tell them apart.
+- **Do this:** the caption button carries `aria-label="Expand caption"` while still
+  *showing* the word "more". Locate it by `.post-caption-more`, not by name.
+
+## A line-clamp must go on the TEXT, never on the box that holds the affordance (ENG-761)
+
+The obvious reading of "`.post-body-web` gets `-webkit-line-clamp: 2`" is wrong once
+there is a "more" button: the button is a child of `.post-body-web`, so the clamp
+counts it as part of the clamped flow and hides the very control that undoes the clamp.
+- **Do this:** clamp an inner `.post-caption`; keep the button its sibling.
+- **Measuring "does it overflow":** compare `scrollHeight - clientHeight > 1` after
+  layout, with a 1px tolerance — sub-pixel line heights make an exactly-two-line
+  caption measure a hair over, which shows a "more" that reveals nothing. A character
+  count is always wrong at some viewport.
+
+## The web member app has NO post-detail route (ENG-761)
+
+`app/(member)` is explore, following, saved, horses, horses/[id], trainers,
+trainers/[id], account, checkout. There is no `posts/[id]` page — only
+`app/api/posts/[id]/playback`. Any ticket whose copy says "opens the post detail"
+(ported from mobile, which does have one) has no route to open on web. ENG-761's
+caption "more" expands in place instead. Check before promising navigation.
+
+## The profile feed routes have EXPLICIT post column lists — a new `post` column stops there
+
+`/api/feed` and `/api/feed/following` proxy the be `feed` edge fn (`returns setof
+post`), so a new post column reaches those two screens for free. The **profile** feeds
+do not: `app/api/horses/[id]/feed/route.ts` and `app/api/trainers/[id]/feed/route.ts`
+name their columns one by one, and `saved-feed.tsx` uses `post:post_id(*)`.
+- **Consequence on ENG-761:** `post.label` reaches Explore and Following but NOT the
+  horse/trainer profile feeds, whose selects were on the ticket's do-not-touch list.
+- **Do this:** when a ticket adds a `post` column that the card renders, list all four
+  read paths and say explicitly which ones are in scope. "The feed carries it
+  automatically" is true of exactly two of them.
+
+## `follow_no_duplicate` does NOT stop a second trainer follow (preserved from ENG-613)
+
+Recorded here because ENG-761 deleted the code this lesson lived in (the
+Following screen's `follow()` write path went with the Follow pill), and the
+constraint detail existed nowhere else.
+
+`follow_no_duplicate` is `unique (user_id, trainer_id, horse_id)`, and a TRAINER
+follow has `horse_id IS NULL`. **Postgres treats NULLs as distinct**, so that
+unique constraint does not prevent a second row. A fast double-click before the
+optimistic re-render writes two, and the Following rail then lists the trainer
+twice — a duplicate React key.
+- **Do this:** any new trainer-follow write needs its own in-flight guard (an
+  `useRef<Set<string>>` keyed by trainer id), not a reliance on the constraint.
+- Explore's `explore-feed.tsx` still has this pattern intact; copy it from there.
+
+## Five surfaces re-declare `PostRow` + their own `FeedPost` mapper — a new `post` column needs FIVE edits
+Adding a column to `post` and rendering it in `components/post-card.tsx` is **not** enough
+for it to appear. Five member surfaces each carry their **own** local `PostRow` type and
+their **own** row→`FeedPost` mapper, and a column missing from either is dropped silently:
+`app/(member)/explore/explore-feed.tsx`, `following/following-screen.tsx`,
+`horses/[id]/horse-posts.tsx`, `trainers/[id]/trainer-posts.tsx`, `saved/saved-feed.tsx`.
+ENG-761 added `post.label` + the card render and shipped the pill broken on three of the
+five; ENG-772 fixed the two profile feeds, ENG-775 covers `/saved`. So a ticket that says
+"the card already renders it, this is purely the read path" is under-scoped by default —
+budget one edit per mapper, PLUS one per explicit projection. Symptom is invisible to
+`tsc` (every mapper input is `any`) and invisible to a route test (the route returns the
+column correctly; the screen throws it away one layer later). Do this: for any new `post`
+column, grep `FeedPost\[\]` and edit every hit, and cover it with a RENDER test through the
+real mapper, not only a projection assertion.
+
+## An explicit PostgREST projection is load-bearing in BOTH directions, and BOTH fail SILENTLY
+`select("a, b, c")` **rejects the whole query with `42703` / HTTP 400** if any named column
+is not deployed — unlike `select("*")`, which just omits it. So a projection breaks two
+ways: too narrow silently starves the UI (see above); too wide kills the entire result set
+against any project without the migration. **Neither shows up as a 500.** Measured, not
+assumed: `curl .../rest/v1/post?select=id,nonexistent_col` → `400 {"code":"42703"}`, and
+supabase-js turns that into `{ data: null, error }`. Our routes destructure **only** `data`
+(`const { data: posts } = await sb…`; no route in `app/api/{horses,trainers}/[id]/feed`
+inspects `error`), so `ok(posts ?? [])` returns a cheerful **200 `{"data":[]}`** and the
+screen renders its empty state. The screens' own `setError(true)` path is unreachable for
+this entire error class. Net effect of naming a column too early: a **silent total content
+blackout** that is indistinguishable from an empty stable. Treat "web names a new column"
+as a **deploy-order dependency on that column's migration**, not a cosmetic risk.
+`sb` is untyped, so `tsc` catches neither. Assert the
+**exact** projection string (`.toBe(...)`, not `.toContain(...)`) in the route's test —
+that is the only assertion that pins both directions — and before naming a new column,
+verify it is actually deployed on the base you are targeting, e.g.
+`docker exec supabase_db_stablepass psql -U postgres -d postgres -c "\d public.post"`.
+
+## The profile feeds CAN be e2e'd end to end; `/explore` and `/following` cannot
+The local `feed` edge function is a stub, so Explore/Following can only be component-tested
+with mocked routes. But `app/api/{horses,trainers}/[id]/feed` read `post` **directly** from
+local Postgres, so they drive the full stack for real — seed a trainer/horse/post with the
+admin API, sign in through `/signin`, assert on the live page (see
+`e2e/eng-772-profile-label-pill.spec.ts`). Prefer these two for real end-to-end evidence of
+anything card-related. Corollary, and the reason ENG-761's bug shipped: a screenshot of
+`/preview/components#round6` proves nothing about the read path — the gallery builds its
+`PostCard` props by hand and bypasses both the projection and the mapper.
+
+## `post_media` reads go in their OWN query, never in the `post` projection
+**(2026-08-24, ENG-762)** The table is only on be `feature/round6-v1`, not `main`.
+Per the 42703 rule above, naming its columns on the `post` select would blank the
+**entire feed** silently anywhere the migration is not deployed. Isolated in
+`lib/post-media.ts`, the same failure costs only the carousel: `readPostPhotos`
+returns an empty map and every card falls back to `post.media_url`.
+- The be contract requires it anyway: one batched `.in('post_id', …)` ordered
+  read per page, then sign. Never per post.
+- The ordering column is **`sort_order`** (not `sort`), 0-based, `CHECK 0..9`, so
+  ten photos max. It is **not guaranteed contiguous** — `{0,3,7}` is legal — so
+  never infer position from array index.
+- `post.media_url` MIRRORS row 0, so **0 rows and 1 photo are the same rendering
+  case**. Anything that draws dots at `length >= 1` is wrong; the test is `> 1`.
+- **SUPERSEDED BY ENG-815 (25 Aug 2026).** The view-model field was `photos:
+  PostPhoto[]`, resolved client-side. It is now `slideCount: number` from the
+  batch mint, and the client never sees `sort_order` at all — the server
+  resolves ordinals. The contiguity point above still matters, but it is now the
+  BE's problem: `slideCount` is HIGHEST ORDINAL + 1, not a row count, so `{0,2}`
+  reports 3 and the client draws a blank middle slide instead of losing photo 2.
+
+## e2e here is timing-sensitive on a COLD Next dev server — budget for the compile
+**(2026-08-24, ENG-762)** `e2e/eng-772-profile-label-pill.spec.ts` uses default
+5s `expect` budgets. The first hit on `/api/{horses,trainers}/[id]/feed` compiles
+the route in dev, which routinely exceeds that, so the spec fails on a cold
+server and passes once warm — and the failure MOVES between the horse and
+trainer halves, which makes it look like a real regression in whichever file you
+just edited. Verified both ways on ENG-762: red once before the change, red once
+after, then 3/3 green with the change in place AND green with the file reverted.
+- **Do this:** wait for `.post-web` itself with a generous timeout before
+  asserting anything inside it, then assert the innards on the default budget.
+- Do not conclude "my mapper edit broke the profile feed" from one red run.
+
+## Playwright element screenshots STITCH, and duplicate absolutely-positioned children
+**(2026-08-24, ENG-762)** Screenshotting an element taller than the viewport
+composites several scroll positions. Anything `position: absolute` inside it
+(the photo chip, the dots, the Follow pill) is captured **more than once** and
+appears at a bogus offset in the image — it reads exactly like a duplicated-chip
+bug. The DOM is fine; the picture is not.
+- **Do this:** `page.setViewportSize()` taller than the element before capturing,
+  or screenshot the individual card.
+
+## A screenshot proves nothing unless you assert the image DECODED
+**(2026-08-24, ENG-762)** Local Storage intermittently serves a bad response for
+a freshly-uploaded object. The `<img>` still has its `src`, the test still
+passes, and the committed screenshot silently shows a broken-image icon.
+- **Do this:** poll `img.complete && img.naturalWidth > 0` before `.screenshot()`.
+
+## Running the dev server breaks `test/marketing-marquee.test.ts`
+**(2026-08-24, ENG-762)** That spec reads the PRODUCTION build output under
+`.next/server` + `.next/static`. `npm run dev` (including the Playwright
+webServer) leaves `.next` holding only `dev/`, so it finds 0 bundles and fails
+with no relation to your change.
+- **Do this:** run `npm run build` before the final `npm test` after any e2e run.
+
+## Cross-repo parity tickets: read the sibling's `screenshots/<ticket>` branch
+**(2026-08-24, ENG-762)** ENG-757 (mobile) had no PR open, but had pushed
+`screenshots/eng-757` with its carousel captures. Reading them changed the web
+build: a scrim pill behind the dots and a white rim on the active dot were both
+dropped because mobile draws neither. A parity ticket's real reference is the
+sibling's pixels, not its ticket prose — fetch with
+`gh api "repos/<owner>/<repo>/contents/.screenshots/<ticket>/<file>.png?ref=screenshots/<ticket>" -q .content | base64 -d`.
+## Signup now consults `phone_in_use` — a LEAKED e2e user bricks every later run
+ENG-763 made `POST /api/auth/signup` ask ENG-742's `phone_in_use` RPC before `auth.signUp`,
+so a phone number that already belongs to an `app_user` is walled with `409
+trial_already_used`. `e2e/trial-start.spec.ts`'s real-signup test uses a **fixed** phone
+(`+61 400 000 000`) and only frees it in its `finally` via `deleteUser`. Interrupt that run
+(Ctrl-C, a crash, a failure before `userId` is assigned) and the number stays claimed —
+after which **every** later run of that test is walled, `waitForURL("**/onboarding")` times
+out, and it reads as "signup is broken" rather than "stale fixture". Harmless before this
+ticket, because the email is unique per run and a duplicate phone had no effect on signup
+succeeding. Recovery, before assuming your change broke signup:
+```sh
+# who holds it?
+curl -s "http://127.0.0.1:54321/rest/v1/app_user?select=id,email,phone&phone=eq.%2B61%20400%20000%20000" \
+  -H "apikey: $SERVICE_ROLE_KEY" -H "Authorization: Bearer $SERVICE_ROLE_KEY"
+# then DELETE /auth/v1/admin/users/<id> with the service role — it cascades to app_user.
+```
+Verify a suspected wall directly: `POST /rest/v1/rpc/phone_in_use` `{"p_phone":"+61 400 000 000"}`
+as anon returns a bare `true`/`false`, 200, no auth needed.
+
+## `.rx/review/` is gitignored, but 76 PNGs in it are still TRACKED
+`.gitignore:47` ignores the directory, which does **not** untrack files committed before the
+rule. `git ls-files .rx/review/ | wc -l` returns **76**, and 40+ of them are still rewritten by
+current specs (`screenshots.spec.ts`, `checkout.spec.ts`, `expiry-banner.spec.ts`,
+`marketing{,-interactive}.spec.ts`, `eng-585-status-truth.spec.ts`, `trial-start.spec.ts`,
+`legal.spec.ts`, `signin-cta-sidebar-email.spec.ts`). So a reflexive `git add -A` after ANY
+screenshot run silently drags another ticket's PNGs into your diff. Check `git diff --stat` against your base before
+committing, and `git checkout origin/<base> -- .rx/review/` to put them back. (The
+"Screenshot evidence" entry above now points here; its old "commit the PNGs" advice is dead
+for anything new. Current evidence goes to a
+`screenshots/<ticket>` branch of PNGs named `eng-NNN-NN-<state>.png`, per
+`origin/screenshots/eng-761`, `-762`, `-772`.)
+
+## `test.use({ ...devices[...] })` is rejected inside a `describe`
+`Cannot use({ defaultBrowserType }) in a describe group, because it forces a new worker.`
+Every Playwright device descriptor carries `defaultBrowserType`, and that one field is the
+problem — the parts that matter (`viewport`, `hasTouch`, `isMobile`, `deviceScaleFactor`)
+are fine in a describe. Strip it:
+```ts
+const { defaultBrowserType: _b, ...iPhone13 } = devices["iPhone 13"];
+void _b; test.use(iPhone13);
+```
+This matters because a resized viewport is NOT a touch profile: `setViewportSize({width:390})`
+on a desktop context still reports `hover: hover`, so phone-shaped screenshots render the
+DESKTOP state (this is how ENG-729 shipped a touch-only bug). Assert
+`matchMedia("(hover: none)").matches` inside the test so the profile failing to apply goes
+red instead of quietly re-testing desktop.
+
+## The `/start` + `/signin` split-screen has NO mobile breakpoint (pre-existing)
+`.auth-page` is a bare `display:flex` with two `flex:1` children and no media query, so on a
+390px phone the green brand panel eats ~a third of the width and both columns clip: the
+wordmark renders as "stabl", the founder quote wraps to one word per line, and inputs cut off
+mid-placeholder. Verified on an iPhone 13 profile against the **unmodified** `/start`, so it
+is not attributable to whatever screen you are working on — check a baseline capture before
+"fixing" it, and note the client reviews on a phone. Fixing it is a real responsive ticket
+against `app/globals.css`, not a drive-by.
+
+## A MIXED `.next` makes the built-output guardrail test fail at random
+`test/marketing-marquee.test.ts`'s "ships no confirmation copy in the built output either"
+greps `.next`. It is `it.skipIf`-guarded, so in a fresh worktree with no build it simply
+SKIPS — which is why a clean checkout looks green and says nothing. Once you have run BOTH
+`npm run build` and `npm run dev` in the same worktree, `.next` holds production chunks and
+dev chunks together, and the grep intermittently reads stale or half-written output: the
+full suite then fails roughly one run in four, always in files with no relationship to your
+diff (`marketing-marquee`, `following-screen`), which sends you hunting a phantom regression
+in your own change. Fix is not a retry loop:
+```sh
+pkill -f "next dev"; rm -rf .next && npm run build && npx vitest run
+```
+After that it is stable — verified 3 consecutive full-suite runs, 801/801. Do this BEFORE
+concluding anything about a red suite, and be suspicious of any "flaky" failure whose file
+you did not touch. Corollary: a Playwright run leaves a dev server alive, so finish e2e work
+before you trust a unit run.
+
+## `FeedPost.label` is REQUIRED, so a dropped mapper line is a compile error (ENG-785)
+Five member screens each re-declare their own local `PostRow` **and** their own
+row->`FeedPost` mapper (`explore-feed`, `following-screen`, `horses/[id]/horse-posts`,
+`trainers/[id]/trainer-posts`, `saved/saved-feed`), so every new `post` column needs an edit
+in all five, plus each explicit projection. `label` was declared `label?:` on `FeedPost`, and
+that single `?` let it be dropped from all five without `tsc` ever complaining: it took three
+tickets (ENG-761, ENG-772, ENG-775) and human eyes to find. It is now `label: string | null`,
+proven by deleting each of the five mapper lines in turn (all five fail `tsc`; with the `?`
+restored the same deletion compiles green).
+**Do this for the next non-optional post column too** rather than reaching for `?`, or the
+bug class comes straight back. Keep `?` only for fields that really are sometimes absent.
+Two knock-on traps when you tighten a field on `FeedPost`:
+* Fixture helpers shaped `{ ...base, ...overrides }` with `overrides: Partial<FeedPost>` stop
+  compiling when the field is missing from the BASE literal. Add it there, beside its siblings.
+  A spread does **not** widen a field the base literal already sets: TypeScript strips
+  `undefined` from an optional right-hand property, so a plain `label: null` in the base is
+  enough. (Narrowing after the spread compiles too, but it is not required, and writing it as
+  though it were teaches a wrong model of spread typing.)
+* `app/preview/components/page.tsx` hand-builds `FeedPost` literals and will also stop
+  compiling. It is part of the real surface here even though no feed ticket lists it.
+The fix defends itself: `test/post-card.test.tsx` carries a `LabelIsRequired<...>` type
+assertion that fails the build if anyone puts the `?` back.
+
+## Label/media e2e specs fail when the local DB is behind the be migrations
+**Five failures across four spec files**, and they come in two different shapes. Do not assume
+the second shape is the first.
+
+*Shape 1 — dies while SEEDING.* `eng-772-profile-label-pill`, `eng-775-saved-label-pill` and one
+of `eng-762-photo-carousel` insert the column directly, so they fail loudly at insert with
+PostgREST `PGRST204 Could not find the 'label' column of 'post' in the schema cache`. The other
+`eng-762` failure is the same shape one table over: `PGRST205 Could not find the table
+'public.post_media'`.
+
+*Shape 2 — dies while RENDERING, and names no column at all.* `reaction-save` never mentions
+`label` (grep it: zero hits). It fails because `app/api/horses/[id]/feed/route.ts` **names
+`label` in its `.select()`**. A projection naming an undeployed column makes PostgREST reject
+the WHOLE query with `42703` (HTTP 400), unlike `select *`, which would just omit it. The route
+destructures only `data`, so it returns 200 `{"data":[]}` and the screen renders "No updates
+yet". The spec then fails on a missing `.post-media-web`, which looks like a UI regression and
+is not one. That route documents the trap in-file; read it before debugging a blank feed.
+
+Cause of both: this repo has no `supabase/migrations` of its own. `post.label` ships in the be's
+`20260819120001_post_label.sql` (ENG-738) and `post_media` in ENG-762's, so a local
+`supabase db reset` drops them and nothing here puts them back. Check before blaming your diff:
+```
+docker exec supabase_db_stablepass psql -U postgres -d postgres \
+  -tAc "select column_name from information_schema.columns
+        where table_name='post' and column_name='label';"
+```
+Empty output means the migration is missing: re-apply the be migrations, then re-run. These
+specs passed when ENG-772 and ENG-775 shipped, so a green PR does not mean they stay green
+locally. Always baseline the same specs on the merge-base before treating a red as yours.
+
+## Three member e2e specs are RED on `feature/round6-v1` — they die in their own SEED (ENG-794)
+
+`e2e/eng-772-profile-label-pill`, `e2e/eng-775-saved-label-pill` and
+`e2e/reaction-save` fail on the round-6 tip. Measured at `4dbefe7` and again on
+ENG-794's branch: **3 failed / 2 passed** across those three files (5 tests), and
+**9 failed / 105 passed** across the whole Playwright suite — identical on both,
+so they are not anyone's regression.
+
+**They fail in their service-role seed, before any page is loaded.** The error is:
+
+```
+{ code: 'PGRST204', message: "Could not find the 'label' column of 'post' in the schema cache" }
+```
+
+The specs INSERT a post with `label: "Trackwork"`, and the local `post` table has
+no `label` column — `information_schema` lists 19 and `label` is not one. The
+migration `20260819120001_post_label.sql` (ENG-738) exists only on unmerged
+`stablepass-be` worktrees, never on be `main`. A transient
+`42501 permission denied for table trainer` has also been seen from the same seed
+when the local stack was in a half-restarted state.
+
+**Do NOT conflate this with the 42703 projection trap.** That trap is real and
+documented above, but it applies to a `.select()` naming an undeployed column,
+where PostgREST rejects the query and the ROUTE turns it into a silent empty
+list. These specs never get that far — they cannot even write their fixture. If
+you go looking for a blank feed you will waste the afternoon.
+
+**The consequence worth knowing:** while this holds, the three specs give the
+five member feed screens **zero** end-to-end coverage. Anything touching those
+screens is covered by vitest and static comparison only, so say so in the PR
+rather than implying the e2e red is understood and harmless.
+
+**Do this:** baseline before blaming your diff, and do NOT deploy the be
+migration yourself — the local Supabase stack is shared across every worktree
+(see the BE serialization rule). Disclose, and note that CI must re-run these
+once ENG-738 lands.
+
+## `npm test` alone can FAIL `marketing-marquee`, and a dev server is why
+
+`test/marketing-marquee.test.ts` ("ships no confirmation copy in the built output
+either") scans `.next` for bundle files and asserts `bundles.length > 0`. The
+`existsSync` guard documented above skips it when `.next` is absent — but a
+Playwright run (or any `npm run dev`) creates a `.next` with **dev** output, so
+the guard passes and the filter then finds zero production bundles. The test
+fails with `expected 0 to be greater than 0` and looks like a regression in code
+you never touched.
+
+**Do this:** run the documented gate in order — `typecheck && build && test`. After
+a `next build` the file goes green. Two suite skips also disappear once the build
+output exists, so the honest full-suite number on round-6 is 873/873, not
+858 + 2 skipped.
+
+## The five feed mappers are now ONE — add a `post` column in `lib/feed/post-row.ts` (ENG-794)
+
+`postIntrinsics()` + `POST_INTRINSIC_COLUMNS` own the ten post-intrinsic fields
+for all five member screens and both profile routes. A new `post` column the card
+renders needs `lib/feed/post-row.ts` (row type + projection + key + mapper) and
+`components/types.ts` (the view model) — and nothing else. Identity/context
+(`horseId`, `horseName`, `trainerName`, `trainerId`, `stableName`,
+`stableLocation`, `bookmarked`) is deliberately NOT shared; those diverge per
+screen for real reasons. Don't widen the helper to cover them.
+
+The return type is `Required<Pick<FeedPost, PostIntrinsicKey>>` on purpose:
+`title?`, `body?` and `slideCount?` are optional on `FeedPost`, so a plain `Pick`
+would let the shared mapper drop one and still compile.
+
 ## `<img>` recovery: the HTTP cache makes expiry bugs look unreproducible (ENG-813, 25 Aug 2026)
 
 **Symptom:** a minted-URL expiry bug "cannot be reproduced" by clicking through the app.
@@ -786,3 +1148,61 @@ worktree. Serialise them, and before committing always `git status --porcelain` 
 subagent's transcript file stays at 179 bytes and its mtime does NOT update while it works, so
 mtime is not a liveness signal; and an agent you spawned may not be stoppable via TaskStop
 ("owned by" error).
+
+## A revoked bucket does not throw — it renders a carousel of nulls (ENG-815, 25 Aug 2026)
+
+**Symptom:** after merging `main` into `feature/round6-v1`, the multi-photo
+carousel compiles, type-checks, passes `tsc`, renders its dots and its `n/m`
+chip, and shows no photograph past the first. No error anywhere.
+
+**Cause:** ENG-799 made `signPhoto` / `signPhotoMap` **deny-by-construction** for
+`POST_MEDIA_BUCKET` — they `return null` / `return out` early rather than
+throwing (`lib/storage/photos.ts`). Round 6's `lib/post-media.ts` still called
+`signPhotoMap(sb, POST_MEDIA_BUCKET, …)`, and that file did not conflict during
+the merge because it exists only on one side. Git kept it silently, and a
+mechanical resolution therefore ships dead code that looks alive.
+
+- **Do this:** after any merge that crosses a cutover, list the files that exist
+  on ONE side only and read them against the other side's new invariants. The
+  conflicting files are the ones you will look at anyway; the non-conflicting
+  ones are where the silent regression hides.
+- The general shape: a guard that degrades quietly is the right call at runtime
+  and a trap at merge time. Grep for callers of anything that became
+  deny-by-construction, not just for compile errors.
+
+## The web carousel e2e needs the be on `feature/round6-v1`, not `main` (ENG-815, 25 Aug 2026)
+
+`e2e/eng-762-photo-carousel.spec.ts` drives slides through
+`POST /api/posts/media` → the be `post-media` edge function. The
+`{ postId, slideIndex }` mode and `slideCount` landed on the be's
+`feature/round6-v1` (`af68205`) and are NOT on be `main`.
+
+- **Symptom if the local edge runtime serves the wrong branch:** every post reads
+  as single-photo (no dots), or `post.label` comes back `PGRST204 Could not find
+  the 'label' column`. Both look like web regressions and are not.
+- **Check first:** `docker inspect supabase_edge_runtime_stablepass` shows which
+  be worktree is bind-mounted; `git -C <that worktree> branch --show-current`
+  names the branch actually being served.
+- The stack is SHARED across all be worktrees (see the BE loop-serialization
+  rule), so a web worker must not repoint it to suit itself.
+
+**Degradation is safe, and that was verified rather than assumed:** web running
+against a be without the slide mode gets `slideCount: undefined` → 1 → no
+carousel, and a `{postId, slideIndex}` request 400s → `null` → blank slide. No
+crash and no wrong photo, so the web PR can land before the be one.
+
+## `horse.sex` is male/female + `is_gelded` — old e2e seeds die at the fixture (ENG-815, 25 Aug 2026)
+
+ENG-304's `horse_sex_check` is `sex IS NULL OR sex = ANY('{male,female}')`, with
+gelding moved to a separate `is_gelded` boolean. Every pre-ENG-304 e2e seed says
+`sex: "gelding"` (or `"mare"`), which now fails with `23514` at the `if
+(horseError) throw horseError` line — **before a single assertion runs**, so the
+spec reports as a product failure.
+
+- **Do this:** when a merge brings a schema migration onto a branch that carries
+  its own e2e specs, grep the specs for every column that migration touched.
+  `main`'s `e2e/screenshots.spec.ts` already had the fix; three round-6 specs did
+  not, and only one commit separated them.
+- Same class as the `foaling_year: new Date().getFullYear() - 5` seeds, which
+  ENG-617's repo-wide "no date arithmetic" guard flags in `e2e/` too. Use an
+  absolute year in fixtures.

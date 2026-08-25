@@ -5,6 +5,7 @@
 // local Postgres stack.
 import { ok, UNAUTH, GATED } from "@/lib/api/envelope";
 import { hasAccess, ACCESS_COLUMNS } from "@/lib/api/access";
+import { POST_INTRINSIC_COLUMNS } from "@/lib/feed/post-row";
 import { supabaseServer } from "@/lib/supabase/server";
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -16,14 +17,18 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const { data: sub } = await sb.from("subscription").select(ACCESS_COLUMNS).eq("user_id", user.id).single();
   if (!hasAccess(sub)) return GATED();
 
-  // `aspect_ratio` is EXPLICIT here and must stay. Unlike /api/feed — which
-  // proxies the be `feed` fn's `setof post` untouched — this route names its
-  // columns, so a column omitted here simply never reaches the card and the
-  // profile feed silently falls back to the unknown-ratio box. `sb` is untyped,
-  // so `tsc` cannot catch that; test/horses-route.test.ts pins the column set.
+  // The post columns come from the ONE shared constant (ENG-794) — the same
+  // trick as `ACCESS_COLUMNS`, and the reason a new `post` column is now one
+  // edit rather than five. `source_trainer_id` is this route's own context
+  // column and stays here. Why the constant is load-bearing in BOTH directions
+  // (too narrow silently starves the card; too wide fails 42703 and blanks the
+  // whole feed) is documented on it in lib/feed/post-row.ts. Never name a
+  // column ahead of its migration: `label` needs ENG-738's
+  // 20260819120001_post_label.sql, which is NOT yet on be `main`.
+  // test/horses-route.test.ts still pins the resolved string exactly.
   const { data: posts } = await sb
     .from("post")
-    .select("id, type, title, body, media_url, poster_url, mux_playback_id, aspect_ratio, watermarked, like_count, published_at, source_trainer_id")
+    .select(`${POST_INTRINSIC_COLUMNS}, source_trainer_id`)
     .eq("horse_id", id)
     .eq("status", "published")
     .order("published_at", { ascending: false })

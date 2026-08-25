@@ -302,4 +302,23 @@ describe("GET /api/trainers/:id/feed", () => {
     const postChain = fromMock.mock.results[postCallIndex].value as { select: ReturnType<typeof vi.fn> };
     expect(postChain.select.mock.calls[0][0]).toContain("aspect_ratio");
   });
+
+  // ENG-772: exact equality, not `toContain`, because this projection is
+  // load-bearing in BOTH directions. Too narrow is invisible to `tsc` (`sb` is
+  // untyped) and silently drops a column before it reaches the card. Too wide
+  // names an undeployed column and PostgREST fails the whole query with 42703
+  // at runtime. Pinning the exact string is the only way to catch either.
+  it("pins the EXACT post projection — it is load-bearing in both directions", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.post = { data: [] };
+
+    await trainerFeedGET(new Request("http://localhost/api/trainers/t1/feed"), params("t1"));
+
+    const postCallIndex = fromMock.mock.calls.findIndex((c) => c[0] === "post");
+    const postChain = fromMock.mock.results[postCallIndex].value as { select: ReturnType<typeof vi.fn> };
+    expect(postChain.select.mock.calls[0][0]).toBe(
+      "id, type, title, body, label, media_url, poster_url, mux_playback_id, aspect_ratio, watermarked, like_count, published_at, horse_id, horse:horse_id(display_name, racing_name)",
+    );
+  });
 });

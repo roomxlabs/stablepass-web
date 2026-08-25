@@ -288,6 +288,35 @@ describe("SavedFeed", () => {
     });
   });
 
+  // ENG-775. A RENDER assertion, deliberately not a data-layer one: this screen's
+  // projection is `post:post_id(*)`, so `label` always arrives from the database —
+  // the drop was in the screen's own row→FeedPost mapper. Asserting on the
+  // `.select()` string (the ENG-772 shape) would therefore pass with the bug
+  // present. This fails unless the mapper actually copies `label` through to the card.
+  it("renders the green label pill on a saved card (ENG-775)", async () => {
+    // Deliberately NOT "Trackwork": the default fixture's body is "Trackwork.",
+    // so that value would be one full stop away from matching the CAPTION, and a
+    // reader could not tell the assertion apart from a false positive at a glance.
+    // "Jockey Comments" (also an ENG-738 preset) appears nowhere else in the DOM.
+    bookmarkData = [{ ...BOOKMARKS[0], post: { ...BOOKMARKS[0].post, label: "Jockey Comments" } }];
+
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Nature Strip");
+
+    expect(document.querySelector(".post-badge")!.textContent).toBe("Jockey Comments");
+  });
+
+  // The negative control pins `null` explicitly rather than leaning on the
+  // fixture's ABSENT key: the column is nullable, so `null` is the shape the
+  // database actually produces for an unlabelled post.
+  it("renders no label pill on an unlabelled saved card (ENG-775)", async () => {
+    bookmarkData = [{ ...BOOKMARKS[0], post: { ...BOOKMARKS[0].post, label: null } }];
+
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Nature Strip");
+
+    expect(document.querySelector(".post-badge")).toBeNull();
+  });
 });
 
 // ===========================================================================
@@ -335,7 +364,8 @@ describe("SavedFeed — ENG-613 view model", () => {
 
     render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
 
-    // 18 Aug: neither the pill nor the title renders — the panel is the card's face.
+    // The panel is the card's face here, so no title renders; and this fixture
+    // carries no `label`, so no pill either (the pill itself returned in ENG-761).
     expect(await screen.findByText("Quiet week here.")).toBeInTheDocument();
     expect(document.querySelector(".post-title")).toBeNull();
     expect(document.querySelector(".post-badge")).toBeNull();
@@ -353,6 +383,9 @@ describe("SavedFeed — ENG-613 view model", () => {
   });
 });
 
+// ===========================================================================
+// ENG-799 — post-media mint via BFF (no client createSignedUrls)
+// ===========================================================================
 describe("SavedFeed — ENG-799 post-media mint", () => {
   it("makes exactly one POST /api/posts/media for a photo page", async () => {
     bookmarkData = [
@@ -414,5 +447,106 @@ describe("SavedFeed — ENG-799 post-media mint", () => {
     await screen.findByText("Nature Strip");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(container.querySelector(".post-media-web img")).toBeNull();
+  });
+});
+
+// ===========================================================================
+// ENG-762 / ENG-815 — the multi-photo carousel, rendered through SavedFeed's
+// REAL mapper. Not a hand-built FeedPost/PostCard render: bypassing the mapper
+// is exactly the bug class ENG-772 exists to catch. `slideCount` now rides in
+// on the SAME /api/posts/media batch the ENG-799 mint tests above already
+// stub, and slides 1+ mint one at a time by `{ postId, slideIndex }` through
+// that same route (ENG-809 decision 2) — there is no more client-side
+// `post_media` read to mock.
+// ===========================================================================
+describe("SavedFeed — ENG-762 multi-photo carousel", () => {
+  function fetchWithCarousel(slideCount: number) {
+    bookmarkData = [
+      {
+        created_at: "2026-07-12T00:00:00.000Z",
+        post: {
+          id: "p1",
+          horse_id: "h1",
+          type: "photo",
+          body: "Trackwork.",
+          media_url: "media/p1.jpg",
+          poster_url: null,
+          watermarked: false,
+          like_count: 3,
+          published_at: "2026-07-10T00:00:00.000Z",
+        },
+      },
+    ];
+    return vi.fn((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/posts/media") {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        if ("postId" in body) {
+          // Slide N minted by index (usePostSlides), never a batch of ids.
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              data: {
+                postId: body.postId,
+                slideIndex: body.slideIndex,
+                mediaUrl: `https://sb.local/${body.postId}-${body.slideIndex}.jpg`,
+                expiresAt: "2026-08-01T00:00:00.000Z",
+              },
+            }),
+          });
+        }
+        // `slideCount` rides in on the SAME batch as slide 0's url, which is
+        // what lets the dots be right before any further slide is minted.
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              items: [{ postId: "p1", mediaUrl: "https://sb.local/p1-0.jpg", slideCount }],
+              expiresAt: "2026-08-01T00:00:00.000Z",
+            },
+          }),
+        });
+      }
+      if (url.includes("/playback?posterOnly=1")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { posterUrl: "https://sb.local/poster?token=abc", expiresAt: "2026-08-01T00:00:00.000Z" } }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    });
+  }
+
+  it("renders the multi-photo carousel (ENG-762 / ENG-815)", async () => {
+    const fetchMock = fetchWithCarousel(3);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Nature Strip");
+
+    expect(screen.getAllByTestId("photo-slide")).toHaveLength(3);
+    expect(screen.getByTestId("photo-dots").querySelectorAll("button")).toHaveLength(3);
+    expect(screen.getByTestId("media-photo-count")).toHaveTextContent("1/3");
+
+    // WHICH IDS the screen actually asked for, on the SAME batch that carries
+    // slideCount — the ENG-772 silent-drop class, moved onto the mint path.
+    const mediaCalls = fetchMock.mock.calls.filter((c) => String(c[0]) === "/api/posts/media");
+    const batch = mediaCalls
+      .map((c) => JSON.parse(String(c[1]?.body)))
+      .find((b) => "postIds" in b);
+    expect(batch).toEqual({ postIds: ["p1"] });
+  });
+
+  it("renders no carousel for a single-photo post (ENG-762 / ENG-815)", async () => {
+    global.fetch = fetchWithCarousel(1) as unknown as typeof fetch;
+
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Nature Strip");
+
+    expect(screen.queryByTestId("photo-dots")).toBeNull();
+    expect(screen.queryByTestId("photo-track")).toBeNull();
   });
 });

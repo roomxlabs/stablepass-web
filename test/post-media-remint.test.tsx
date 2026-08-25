@@ -185,6 +185,10 @@ describe("PostCard — ENG-813 re-mint wiring", () => {
     horseName: "Mahogany",
     trainerName: "Chris Waller",
     postedAgo: "2h ago",
+    // Required since ENG-785 on `feature/round6-v1`, which is why this main-side
+    // fixture needed a line adding at the merge (ENG-815). `null` is "no pill",
+    // which is what every pre-round-6 post carries.
+    label: null,
     body: "Trackwork this morning.",
     media: { type: "photo", posterUrl: "https://cdn/expired.jpg" },
     watermarked: false,
@@ -474,5 +478,120 @@ describe("PostMediaImage — durability across repeated expiry", () => {
     fireEvent.error(container.querySelector("img")!);
     await waitFor(() => expect(container.querySelector("img")).toBeNull());
     expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ===========================================================================
+// ENG-815 — the third of the three behaviours the merge had to keep at once.
+//
+// A carousel slide is a PostMediaImage like any other, so it inherits ENG-813's
+// one-retry recovery. What it must NOT inherit is the batch REQUEST: re-minting
+// `{ postIds: [postId] }` for slide 3 returns slide 0's url, so an expired
+// carousel would silently swap in the wrong photo — a quieter bug than the black
+// box ENG-813 removed, and one no screenshot would catch.
+// ===========================================================================
+describe("PostMediaImage — ENG-815 a slide re-mints by ITS OWN index", () => {
+  it("asks for { postId, slideIndex }, never the batch", async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: { postId: "p1", slideIndex: 2, mediaUrl: "https://cdn/fresh-2.jpg", expiresAt: "x" },
+      }),
+    })) as unknown as typeof fetch;
+
+    const { container } = render(
+      <PostMediaImage postId="p1" src="https://cdn/expired-2.jpg" slideIndex={2} />,
+    );
+    fireEvent.error(container.querySelector("img")!);
+
+    await waitFor(() =>
+      expect(container.querySelector("img")?.getAttribute("src")).toBe("https://cdn/fresh-2.jpg"),
+    );
+
+    const calls = (global.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(String(calls[0][0])).toBe("/api/posts/media");
+    // The ENTIRE body: a post id and an ordinal. No path, and no `postIds`.
+    expect(JSON.parse(String((calls[0][1] as RequestInit).body))).toEqual({
+      postId: "p1",
+      slideIndex: 2,
+    });
+  });
+
+  it("slide 0 keeps using the batch, so the common case is untouched", async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: { items: [{ postId: "p1", mediaUrl: "https://cdn/fresh.jpg", slideCount: 4 }], expiresAt: "x" },
+      }),
+    })) as unknown as typeof fetch;
+
+    const { container } = render(
+      <PostMediaImage postId="p1" src="https://cdn/expired.jpg" slideIndex={0} />,
+    );
+    fireEvent.error(container.querySelector("img")!);
+
+    await waitFor(() =>
+      expect(container.querySelector("img")?.getAttribute("src")).toBe("https://cdn/fresh.jpg"),
+    );
+    const calls = (global.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(JSON.parse(String((calls[0][1] as RequestInit).body))).toEqual({ postIds: ["p1"] });
+  });
+
+  it("a refused slide falls back to the placeholder rather than showing another slide", async () => {
+    // `mediaUrl: null` is the be's answer for a draft, a gap and an out-of-range
+    // index alike. The element must draw nothing — NOT reach for the batch and
+    // paint slide 0 in its place.
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: { postId: "p1", slideIndex: 3, mediaUrl: null, expiresAt: "x" },
+      }),
+    })) as unknown as typeof fetch;
+
+    const { container } = render(
+      <PostMediaImage postId="p1" src="https://cdn/expired-3.jpg" slideIndex={3} />,
+    );
+    fireEvent.error(container.querySelector("img")!);
+
+    await waitFor(() => expect(container.querySelector("img")).toBeNull());
+    expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+  });
+
+  it("keeps ENG-813's durable budget: a slide recovers from a SECOND expiry", async () => {
+    // The `onLoad` reset is what makes recovery repeatable rather than one-shot,
+    // and a long-lived tab expires a 300s url over and over. Deleting that reset
+    // would make this case red — which is exactly why it must survive the merge.
+    let n = 0;
+    global.fetch = vi.fn(async () => {
+      n += 1;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: { postId: "p1", slideIndex: 1, mediaUrl: `https://cdn/fresh-${n}.jpg`, expiresAt: "x" },
+        }),
+      };
+    }) as unknown as typeof fetch;
+
+    const { container } = render(
+      <PostMediaImage postId="p1" src="https://cdn/expired-1.jpg" slideIndex={1} />,
+    );
+
+    fireEvent.error(container.querySelector("img")!);
+    await waitFor(() =>
+      expect(container.querySelector("img")?.getAttribute("src")).toBe("https://cdn/fresh-1.jpg"),
+    );
+    // The slide painted, which returns the retry budget.
+    fireEvent.load(container.querySelector("img")!);
+
+    fireEvent.error(container.querySelector("img")!);
+    await waitFor(() =>
+      expect(container.querySelector("img")?.getAttribute("src")).toBe("https://cdn/fresh-2.jpg"),
+    );
+    expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(2);
   });
 });

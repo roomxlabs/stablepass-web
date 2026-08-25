@@ -5,6 +5,7 @@
 // name so the byline is per-horse (a trainer's updates span their whole stable).
 import { ok, UNAUTH, GATED } from "@/lib/api/envelope";
 import { hasAccess, ACCESS_COLUMNS } from "@/lib/api/access";
+import { POST_INTRINSIC_COLUMNS } from "@/lib/feed/post-row";
 import { supabaseServer } from "@/lib/supabase/server";
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -18,9 +19,11 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
   const { data: posts } = await sb
     .from("post")
-    // `aspect_ratio` is EXPLICIT here and must stay — see the note in
-    // app/api/horses/[id]/feed/route.ts. Pinned by test/trainers-route.test.ts.
-    .select("id, type, title, body, media_url, poster_url, mux_playback_id, aspect_ratio, watermarked, like_count, published_at, horse_id, horse:horse_id(display_name, racing_name)")
+    // Post columns from the ONE shared constant (ENG-794) — see the note in
+    // app/api/horses/[id]/feed/route.ts and on the constant itself. `horse_id`
+    // and the embedded horse join are this route's own context and stay here.
+    // Pinned exactly by test/trainers-route.test.ts.
+    .select(`${POST_INTRINSIC_COLUMNS}, horse_id, horse:horse_id(display_name, racing_name)`)
     .eq("source_trainer_id", id)
     .eq("status", "published")
     .order("published_at", { ascending: false })

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, devices } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
 
 // See .rx/fe-harness.md for the full harness convention.
@@ -945,4 +945,110 @@ test("ENG-613 both profile feeds show the same card anatomy", async ({ page }) =
       await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});
     }
   }
+});
+
+// ---- ENG-763 · the repeat-signup wall ---------------------------------------
+// `/start?trial=used` server-renders the wall, so these need no seeded account
+// and no signup: the same component the client form swaps in after a 409.
+
+test("repeat-signup wall renders", async ({ page }) => {
+  await page.goto("/start?trial=used");
+
+  await expect(
+    page.getByRole("heading", { name: /already had your free trial/i }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sign in to join" })).toHaveAttribute(
+    "href",
+    "/signin",
+  );
+
+  // The whole screen must agree with the wall, brand panel included.
+  await expect(page.getByText(/30 days on us/i)).toHaveCount(0);
+  await expect(page.getByText(/no credit card/i)).toHaveCount(0);
+
+  // The control half of the touch test below: a normal desktop context really
+  // does report hover:hover, so the two runs are exercising different states.
+  expect(await page.evaluate(() => matchMedia("(hover: hover)").matches)).toBe(true);
+
+  await page.screenshot({ path: ".rx/review/r22-wall-desktop.png", fullPage: true });
+});
+
+test.describe("repeat-signup wall with JavaScript blocked", () => {
+  // The client form reaches the wall by navigating to this URL, but the URL has
+  // to stand on its own: the person who reviews this screen browses with
+  // scripting off, and a wall that only exists as the result of a fetch() is
+  // invisible to him. This is the regression guard for that — it is why the
+  // wall is a server component behind a query param rather than local state,
+  // and without a test it would quietly break the first time someone made the
+  // wall a client component.
+  test.use({ javaScriptEnabled: false });
+
+  test("renders server-side and its CTA really navigates", async ({ page }) => {
+    await page.goto("/start?trial=used");
+
+    await expect(
+      page.getByRole("heading", { name: /already had your free trial/i }),
+    ).toBeVisible();
+    await expect(page.getByText(/30 days on us/i)).toHaveCount(0);
+
+    // A real <a href>, and it actually gets there with no JS to help it.
+    const cta = page.getByRole("link", { name: "Sign in to join" });
+    await expect(cta).toHaveAttribute("href", "/signin");
+    await cta.click();
+    await page.waitForURL("**/signin");
+    await expect(page.getByRole("heading", { name: "Welcome back." })).toBeVisible();
+  });
+});
+
+test.describe("repeat-signup wall on a real touch device", () => {
+  // A REAL device profile, not `setViewportSize({ width: 390 })`.
+  //
+  // ENG-729 shipped a bug through exactly that gap an hour before this ticket:
+  // resizing the viewport on a desktop context still reports `hover: hover`, so
+  // a phone-shaped screenshot renders the DESKTOP state and the touch-only
+  // branch of the CSS is never seen. That is how a CTA band reading "Enjoy your
+  // free 30 day trial" survived review on a page saying you cannot join yet.
+  // `devices[...]` sets hasTouch/isMobile, which is what actually flips
+  // `hover: none` + `pointer: coarse`.
+  //
+  // `defaultBrowserType` is dropped deliberately: Playwright refuses a
+  // browser-type switch inside a describe ("forces a new worker"), and it is
+  // the one field of the descriptor we do not want. The touch emulation comes
+  // from hasTouch/isMobile/viewport, which chromium supports, so the assertion
+  // at the top of the test is what proves the profile really took effect.
+  const { defaultBrowserType: _browserType, ...iPhone13 } = devices["iPhone 13"];
+  void _browserType;
+  test.use(iPhone13);
+
+  test("renders the wall, not the trial offer, on a touch profile", async ({ page }) => {
+    await page.goto("/start?trial=used");
+
+    // Prove the profile is genuinely touch BEFORE trusting anything below it,
+    // so this test fails loudly if the descriptor ever stops applying rather
+    // than quietly re-testing the desktop state.
+    const touch = await page.evaluate(() => ({
+      hover: matchMedia("(hover: none)").matches,
+      pointer: matchMedia("(pointer: coarse)").matches,
+    }));
+    expect(touch).toEqual({ hover: true, pointer: true });
+
+    await expect(
+      page.getByRole("heading", { name: /already had your free trial/i }),
+    ).toBeVisible();
+    await expect(page.getByRole("link", { name: "Sign in to join" })).toBeVisible();
+
+    // The ENG-729 defect class, pinned across the WHOLE page, including the
+    // left-hand brand panel — which is where it actually bit: the panel pitches
+    // "30 days on us, no credit card" and sat there contradicting the wall until
+    // the wall became a server-rendered URL that re-renders both halves. An
+    // earlier version of this assertion only looked for "free 30 day trial" and
+    // sailed straight past the real copy, so it is deliberately matched on the
+    // panel's own words now.
+    await expect(page.getByText(/30 days on us/i)).toHaveCount(0);
+    await expect(page.getByText(/no credit card/i)).toHaveCount(0);
+    await expect(page.getByText(/free 30 day trial/i)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Start free trial" })).toHaveCount(0);
+
+    await page.screenshot({ path: ".rx/review/r22-wall-touch.png", fullPage: true });
+  });
 });

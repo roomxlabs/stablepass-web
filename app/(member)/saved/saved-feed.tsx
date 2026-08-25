@@ -11,26 +11,14 @@ import { AccessWall } from "@/components/access-wall";
 import { PostCard, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { signedPosterFor } from "@/lib/storage/photos";
-import { PostMediaError, resolvePostDisplayUrls } from "@/lib/api/post-media";
-import type { FeedPost, PostMedia, ReactionEmoji } from "@/components/types";
+import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@/lib/api/post-media";
+import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
+import type { FeedPost, ReactionEmoji } from "@/components/types";
 
 const LIMIT = 10;
 
 // Bare be `post` row shape — the bookmark→post embed returns full post columns.
-type PostRow = {
-  id: string;
-  horse_id: string;
-  type: PostMedia["type"];
-  title: string | null;
-  body: string | null;
-  media_url: string | null;
-  poster_url: string | null;
-  aspect_ratio: number | null;
-  watermarked: boolean;
-  like_count: number;
-  published_at: string;
-};
+type PostRow = PostIntrinsicRow & { horse_id: string };
 type BookmarkRow = { created_at: string; post: PostRow | PostRow[] | null };
 
 // `stable_name`/`location` for the STABLE UPDATE panel footer. Stable identity
@@ -41,20 +29,6 @@ type ReactionRow = { post_id: string; emoji: ReactionEmoji };
 
 function one<T>(v: T | T[] | null): T | null {
   return Array.isArray(v) ? (v[0] ?? null) : v;
-}
-
-// Same relative-time formatting as the Explore feed (kept local so this screen owns
-// its files and doesn't couple to explore-feed's internals).
-export function relativeTime(iso: string | null): string {
-  if (!iso) return "";
-  const ms = Date.now() - new Date(iso).getTime();
-  const mins = Math.max(0, Math.round(ms / 60000));
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
 }
 
 // `everSubscribed` — see the note in ../explore/explore-feed.tsx (server-resolved
@@ -134,47 +108,32 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
 
       const horseById = new Map(((horseRows ?? []) as HorseRow[]).map((h) => [h.id, h]));
       const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
-      // Photos via POST /api/posts/media; video posters via playback?posterOnly=1.
-      // Absolute URLs pass through. A 402 surfaces the AccessWall (guardrail 3).
-      let postMedia: Map<string, string>;
+      // Photos + their slide counts via ONE POST /api/posts/media; video posters
+      // via playback?posterOnly=1. Absolute URLs pass through. A 402 surfaces the
+      // AccessWall (guardrail 3). `slideCounts` rides in on the same batch, which
+      // is what lets a carousel draw the right dots before it mints a thing.
+      let media: PostDisplayMedia;
       try {
-        postMedia = await resolvePostDisplayUrls(postRows);
+        media = await resolvePostDisplayUrls(postRows);
       } catch (e) {
         if (e instanceof PostMediaError && e.reason === "gated") {
           setGated(true);
           return;
         }
-        postMedia = new Map();
+        media = { urls: new Map(), slideCounts: new Map() };
       }
 
+      const intrinsics = { signedMedia: media.urls, slideCountByPost: media.slideCounts, reactionByPost: myReaction };
       const mapped: FeedPost[] = postRows.map((r) => {
         const horse = horseById.get(r.horse_id);
         const trainer = one(horse?.trainer ?? null);
         return {
-          id: r.id,
+          ...postIntrinsics(r, intrinsics),
           horseId: r.horse_id,
           horseName: horse?.display_name ?? "Unknown horse",
           trainerName: trainer?.name ?? "Stablepass",
           stableName: trainer?.stable_name ?? null,
           stableLocation: trainer?.location ?? null,
-          postedAgo: relativeTime(r.published_at),
-          title: r.title,
-          body: r.body,
-          // `aspectRatio` is RAW here. `resolveAspect` (post-card) owns the clamp,
-          // so exactly one place decides what an unusable value becomes. The
-          // `typeof` guard is load-bearing, not belt-and-braces: `'NaN'::numeric`
-          // passes the be's `CHECK (aspect_ratio > 0)` and `to_json` serialises it
-          // as the QUOTED string "NaN", which would otherwise widen a string into
-          // a field typed `number | null`.
-          media: {
-            type: r.type,
-            posterUrl: signedPosterFor(r, postMedia),
-            duration: null,
-            aspectRatio: typeof r.aspect_ratio === "number" ? r.aspect_ratio : null,
-          },
-          watermarked: r.watermarked,
-          count: r.like_count,
-          reacted: myReaction.get(r.id) ?? null,
           bookmarked: true, // everything on this screen is, by definition, saved
         };
       });

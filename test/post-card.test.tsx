@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   PostCard,
+  PostCaption,
   resolveAspect,
   aspectBucket,
   mediaBoxProps,
@@ -12,12 +13,23 @@ import {
 } from "@/components/post-card";
 import type { FeedPost } from "@/components/types";
 
+// ENG-785 — `label` must stay REQUIRED on `FeedPost`. Dropping the `?` is the
+// whole point of that ticket: it is what turns a mapper that forgets a column
+// into a compile error instead of a pill nobody notices is missing for weeks.
+// Nothing stopped a future edit from quietly putting the `?` back, so this line
+// is the guard on the guard. `{} extends T` holds only when every key of T is
+// optional, so `label?:` collapses this to `never` and fails the build.
+type LabelIsRequired<T> = {} extends T ? never : true;
+const _labelStaysRequired: LabelIsRequired<Pick<FeedPost, "label">> = true;
+void _labelStaysRequired;
+
 const BASE: FeedPost = {
   id: "post-1",
   horseId: "horse-1",
   horseName: "Mahogany",
   trainerName: "Chris Waller",
   postedAgo: "2h ago",
+  label: null,
   body: "Trackwork this morning.",
   media: { type: "photo", posterUrl: null },
   watermarked: false,
@@ -536,6 +548,26 @@ describe("PostCard — the reel card", () => {
       <PostCard post={post} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={vi.fn()} {...extra} />,
     );
 
+  // ROUND 6 / ENG-761 item 1 — the pill must draw on ALL web card variants, and
+  // the reel head is the SECOND of the two render sites. Without this the site
+  // is invisible to the suite: deleting it left 755/755 green, and the preview
+  // gallery has no reel fixture, so the e2e does not cover it either.
+  it("draws the label pill inside the reel head, not only on the classic card", () => {
+    const { container } = renderReel({ ...REEL, label: "Trackwork" });
+
+    const badge = container.querySelector(".reel-head .post-badge");
+    expect(badge).not.toBeNull();
+    expect(badge!.textContent).toBe("Trackwork");
+    // It belongs to the overlaid head, not to a classic header row (which a
+    // reel does not render at all).
+    expect(container.querySelector(".post-head-web")).toBeNull();
+  });
+
+  it("draws no pill on a reel whose label is null", () => {
+    const { container } = renderReel({ ...REEL, label: null });
+    expect(container.querySelector(".post-badge")).toBeNull();
+  });
+
   it("draws the FULL 9:16 box, tagged reel", () => {
     const { container } = renderReel(REEL);
     const box = container.querySelector<HTMLElement>(".post-media-web")!;
@@ -589,5 +621,180 @@ describe("PostCard — the reel card", () => {
     expect(mediaBoxProps(0.5625, { video: true }).className).toBe("post-media-web reel");
     expect(mediaBoxProps(0.5625).className).toBe("post-media-web tall");
     expect(mediaBoxProps(1.7778, { video: true }).className).toBe("post-media-web");
+  });
+});
+
+// ===========================================================================
+// ROUND 6 / ENG-761 — the `.post-badge` pill returns as DATA (`post.label`),
+// the photo chip mirrors the video duration chip, and the caption clamps to
+// two lines with a "more" affordance.
+// ===========================================================================
+
+describe("PostCard — the label pill (ENG-761 item 1)", () => {
+  it("renders the pill with the label's own text when post.label is set", () => {
+    render(
+      <PostCard post={{ ...BASE, label: "Trackwork" }} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />,
+    );
+
+    const badge = document.querySelector(".post-badge");
+    expect(badge).not.toBeNull();
+    expect(badge!.textContent).toBe("Trackwork");
+  });
+
+  it("renders no pill when post.label is null", () => {
+    render(<PostCard post={{ ...BASE, label: null }} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />);
+    expect(document.querySelector(".post-badge")).toBeNull();
+  });
+
+  it("renders no pill when post.label is absent entirely", () => {
+    render(<PostCard post={BASE} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />);
+    expect(document.querySelector(".post-badge")).toBeNull();
+  });
+
+  // The pill is COPY chosen at compose time; it is independent of the caption,
+  // which is its own affordance underneath the reaction bar.
+  it("shows the pill alongside a long caption at the same time — the two are independent", () => {
+    const longBody =
+      "This caption runs on for quite a while, well past what two lines of the clamped column could ever hold, so it stands in for a genuinely long post body.";
+    render(
+      <PostCard
+        post={{ ...BASE, label: "Race Replay", body: longBody }}
+        viewerId={VIEWER_ID}
+        onReact={noop}
+        onBookmark={noop}
+      />,
+    );
+
+    const badge = document.querySelector(".post-badge");
+    expect(badge).not.toBeNull();
+    expect(badge!.textContent).toBe("Race Replay");
+    expect(screen.getByTestId("post-caption")).toBeInTheDocument();
+  });
+});
+
+describe("PostCard — the photo chip mirrors the video duration chip (ENG-761 item 3)", () => {
+  it("shows the photo chip, and no duration chip, on a photo post", () => {
+    render(
+      <PostCard
+        post={{ ...BASE, media: { type: "photo", posterUrl: null } }}
+        viewerId={VIEWER_ID}
+        onReact={noop}
+        onBookmark={noop}
+      />,
+    );
+
+    expect(screen.getByTestId("media-photo-chip")).toBeInTheDocument();
+    expect(document.querySelector(".media-duration")).toBeNull();
+  });
+
+  it("shows the duration chip, and no photo chip, on a video post", () => {
+    render(
+      <PostCard
+        post={{ ...BASE, media: { type: "video", posterUrl: null, duration: "0:47" } }}
+        viewerId={VIEWER_ID}
+        onReact={noop}
+        onBookmark={noop}
+        onPlay={vi.fn()}
+      />,
+    );
+
+    expect(document.querySelector(".media-duration")).not.toBeNull();
+    expect(screen.queryByTestId("media-photo-chip")).not.toBeInTheDocument();
+  });
+});
+
+describe("PostCaption (ENG-761 item 2)", () => {
+  it("carries the clamped class by default", () => {
+    render(<PostCaption body="Trackwork this morning." />);
+    const caption = screen.getByTestId("post-caption");
+    expect(caption).toHaveClass("post-caption");
+    expect(caption).toHaveClass("clamped");
+  });
+
+  // An update card's body IS the panel, so it is never also a caption.
+  it("renders no caption at all for an update-type (STABLE UPDATE) card", () => {
+    render(<PostCard post={TEXT_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />);
+    expect(screen.queryByTestId("post-caption")).not.toBeInTheDocument();
+  });
+
+  // jsdom lays out nothing, so `scrollHeight`/`clientHeight` both report 0 and
+  // the "more" affordance can never appear naturally — the measurement itself
+  // has to be stubbed to exercise either branch.
+  describe("the scrollHeight/clientHeight measurement, stubbed", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('offers "more" when the full text overflows the clamp, and expands in place on click', async () => {
+      vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(100);
+      vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(40);
+
+      const user = userEvent.setup();
+      render(<PostCaption body="A caption long enough to overflow the two-line clamp." />);
+
+      // The visible word is "more", but its accessible name is "Expand caption"
+      // (post-card.tsx) — disambiguated from the card's own "More" (⋯) options
+      // button, which is also visible in a full PostCard render.
+      const more = screen.getByRole("button", { name: "Expand caption" });
+      expect(more).toHaveTextContent("more");
+      expect(screen.getByTestId("post-caption")).toHaveClass("clamped");
+
+      await user.click(more);
+
+      expect(screen.queryByRole("button", { name: "Expand caption" })).not.toBeInTheDocument();
+      expect(screen.getByTestId("post-caption")).not.toHaveClass("clamped");
+      expect(screen.getByTestId("post-caption")).toHaveClass("post-caption");
+    });
+
+    // The ticket's named edge case: a caption landing on EXACTLY two lines
+    // measures equal, not over, and must get no affordance at all.
+    it('offers no "more" when the caption lands on exactly two lines (scrollHeight === clientHeight)', () => {
+      vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(40);
+      vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(40);
+
+      render(<PostCaption body="A caption that lands on exactly two lines, no more, no less." />);
+
+      expect(screen.queryByRole("button", { name: "Expand caption" })).not.toBeInTheDocument();
+      expect(screen.getByTestId("post-caption")).toHaveClass("clamped");
+    });
+
+    // THE CONTENT-LOSS GUARD. The first measurement runs against the FALLBACK
+    // font. If the real face is wider the caption grows a third line — and the
+    // ResizeObserver cannot see it, because `line-height` is unitless so the
+    // clamped box stays exactly two lines tall and its border box never
+    // changes, while `scrollHeight` grows underneath. Without the
+    // `document.fonts.ready` re-measure the member is left with a silently
+    // truncated caption and no way to open it.
+    it("re-measures when the webfont lands, so a caption that only overflows after the swap still gets its 'more'", async () => {
+      let fontsLoaded = false;
+      // Fits on the fallback face, overflows once the real face applies.
+      vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(40);
+      vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(() => (fontsLoaded ? 100 : 40));
+
+      let releaseFonts: () => void = () => {};
+      const ready = new Promise<void>((resolve) => {
+        releaseFonts = () => {
+          fontsLoaded = true;
+          resolve();
+        };
+      });
+      // jsdom has no FontFaceSet; the component guards on `document.fonts?.ready`.
+      Object.defineProperty(document, "fonts", { value: { ready }, configurable: true });
+
+      render(<PostCaption body="A caption that only overflows once the real face loads." />);
+
+      // Before the swap it measures as fitting, so no affordance — this half is
+      // what makes the assertion below meaningful rather than trivially true.
+      expect(screen.queryByRole("button", { name: "Expand caption" })).not.toBeInTheDocument();
+
+      await act(async () => {
+        releaseFonts();
+        await ready;
+      });
+
+      expect(screen.getByRole("button", { name: "Expand caption" })).toBeInTheDocument();
+
+      Reflect.deleteProperty(document, "fonts");
+    });
   });
 });

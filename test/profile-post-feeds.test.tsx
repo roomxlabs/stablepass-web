@@ -35,6 +35,7 @@ const TEXT_ROW = {
   type: "text",
   title: "Where the team is up to",
   body: "Quiet week here.\n\nBanjo's Girl trials Tuesday.",
+  label: null,
   media_url: null,
   poster_url: null,
   aspect_ratio: null,
@@ -127,6 +128,112 @@ describe("HorsePosts — ENG-613 parity on the horse profile", () => {
     expect(actions).toBeGreaterThanOrEqual(0);
     expect(body).toBeGreaterThan(actions);
   });
+
+  // A data-layer projection test (test/horses-route.test.ts) cannot see a
+  // dropped mapper field, and this render test cannot see a wrong projection
+  // — ENG-772 needed both, because the bug lived in each layer.
+  it("renders the green label pill on a horse-profile card (ENG-772)", async () => {
+    feedRows = [{ ...TEXT_ROW, label: "Trackwork" }];
+
+    render(<HorsePosts horseId="h1" horseName="Mahogany" trainerName="Tom Alcott" viewerId={VIEWER_ID} />);
+
+    expect(await screen.findByText("Trackwork")).toBeInTheDocument();
+    expect(document.querySelector(".post-badge")!.textContent).toBe("Trackwork");
+  });
+
+  // ENG-762 / ENG-815 — the multi-photo carousel, rendered through HorsePosts'
+  // REAL mapper (not a hand-built FeedPost/PostCard render, which would bypass
+  // the exact mapper bug class ENG-772 exists to catch). `slideCount` now rides
+  // in on the SAME /api/posts/media batch the ENG-799 mint tests below already
+  // stub, and slides 1+ mint one at a time by `{ postId, slideIndex }` through
+  // that same route — there is no more client-side `post_media` read to mock.
+  it("renders the multi-photo carousel (ENG-762 / ENG-815)", async () => {
+    feedRows = [
+      { ...TEXT_ROW, type: "photo", title: null, body: "Trackwork this morning.", media_url: "media/p1.jpg", poster_url: null },
+    ];
+    const fetchMock = vi.fn((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/feed")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: feedRows }) });
+      }
+      if (url === "/api/posts/media") {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        if ("postId" in body) {
+          // Slide N minted by index (usePostSlides), never a batch of ids.
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              data: {
+                postId: body.postId,
+                slideIndex: body.slideIndex,
+                mediaUrl: `https://sb.local/${body.postId}-${body.slideIndex}.jpg`,
+                expiresAt: "2026-08-01T00:00:00.000Z",
+              },
+            }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              items: [{ postId: "p1", mediaUrl: "https://sb.local/p1-0.jpg", slideCount: 3 }],
+              expiresAt: "2026-08-01T00:00:00.000Z",
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<HorsePosts horseId="h1" horseName="Mahogany" trainerName="Tom Alcott" viewerId={VIEWER_ID} />);
+    await screen.findByText("Trackwork this morning.");
+
+    expect(screen.getAllByTestId("photo-slide")).toHaveLength(3);
+    expect(screen.getByTestId("photo-dots").querySelectorAll("button")).toHaveLength(3);
+    expect(screen.getByTestId("media-photo-count")).toHaveTextContent("1/3");
+
+    // WHICH IDS the screen actually asked for, on the SAME batch that carries
+    // slideCount — the ENG-772 silent-drop class, moved onto the mint path.
+    const mediaCalls = fetchMock.mock.calls.filter((c) => String(c[0]) === "/api/posts/media");
+    const batch = mediaCalls
+      .map((c) => JSON.parse(String(c[1]?.body)))
+      .find((b) => "postIds" in b);
+    expect(batch).toEqual({ postIds: ["p1"] });
+  });
+
+  it("renders no carousel for a single-photo post (ENG-762 / ENG-815)", async () => {
+    feedRows = [
+      { ...TEXT_ROW, type: "photo", title: null, body: "Trackwork this morning.", media_url: "media/p1.jpg", poster_url: null },
+    ];
+    global.fetch = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.includes("/feed")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: feedRows }) });
+      }
+      if (url === "/api/posts/media") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              items: [{ postId: "p1", mediaUrl: "https://sb.local/p1-0.jpg", slideCount: 1 }],
+              expiresAt: "2026-08-01T00:00:00.000Z",
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    }) as unknown as typeof fetch;
+
+    render(<HorsePosts horseId="h1" horseName="Mahogany" trainerName="Tom Alcott" viewerId={VIEWER_ID} />);
+    await screen.findByText("Trackwork this morning.");
+
+    expect(screen.queryByTestId("photo-dots")).toBeNull();
+    expect(screen.queryByTestId("photo-track")).toBeNull();
+  });
 });
 
 describe("TrainerPosts — ENG-613 parity on the trainer profile", () => {
@@ -159,6 +266,111 @@ describe("TrainerPosts — ENG-613 parity on the trainer profile", () => {
 
     expect(document.querySelector(".post-media-web")).not.toBeNull();
     expect(screen.queryByRole("button", { name: /^Follow / })).not.toBeInTheDocument();
+  });
+
+  // A data-layer projection test (test/trainers-route.test.ts) cannot see a
+  // dropped mapper field, and this render test cannot see a wrong projection
+  // — ENG-772 needed both, because the bug lived in each layer.
+  it("renders the green label pill on a trainer-profile card (ENG-772)", async () => {
+    feedRows = [{ ...TEXT_ROW, label: "Trackwork" }];
+
+    render(<TrainerPosts trainerId="t1" trainerName="Tom Alcott" viewerId={VIEWER_ID} />);
+
+    expect(await screen.findByText("Trackwork")).toBeInTheDocument();
+    expect(document.querySelector(".post-badge")!.textContent).toBe("Trackwork");
+  });
+
+  // ENG-762 / ENG-815 — the multi-photo carousel, rendered through
+  // TrainerPosts' REAL mapper (not a hand-built FeedPost/PostCard render,
+  // which would bypass the exact mapper bug class ENG-772 exists to catch).
+  // `slideCount` now rides in on the SAME /api/posts/media batch the ENG-799
+  // mint tests below already stub, and slides 1+ mint one at a time by
+  // `{ postId, slideIndex }` through that same route.
+  it("renders the multi-photo carousel (ENG-762 / ENG-815)", async () => {
+    feedRows = [
+      { ...TEXT_ROW, type: "photo", title: null, body: "Trackwork this morning.", media_url: "media/p1.jpg", poster_url: null },
+    ];
+    const fetchMock = vi.fn((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/feed")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: feedRows }) });
+      }
+      if (url === "/api/posts/media") {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        if ("postId" in body) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              data: {
+                postId: body.postId,
+                slideIndex: body.slideIndex,
+                mediaUrl: `https://sb.local/${body.postId}-${body.slideIndex}.jpg`,
+                expiresAt: "2026-08-01T00:00:00.000Z",
+              },
+            }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              items: [{ postId: "p1", mediaUrl: "https://sb.local/p1-0.jpg", slideCount: 3 }],
+              expiresAt: "2026-08-01T00:00:00.000Z",
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<TrainerPosts trainerId="t1" trainerName="Tom Alcott" viewerId={VIEWER_ID} />);
+    await screen.findByText("Trackwork this morning.");
+
+    expect(screen.getAllByTestId("photo-slide")).toHaveLength(3);
+    expect(screen.getByTestId("photo-dots").querySelectorAll("button")).toHaveLength(3);
+    expect(screen.getByTestId("media-photo-count")).toHaveTextContent("1/3");
+
+    // WHICH IDS the screen actually asked for, on the SAME batch that carries
+    // slideCount — the ENG-772 silent-drop class, moved onto the mint path.
+    const mediaCalls = fetchMock.mock.calls.filter((c) => String(c[0]) === "/api/posts/media");
+    const batch = mediaCalls
+      .map((c) => JSON.parse(String(c[1]?.body)))
+      .find((b) => "postIds" in b);
+    expect(batch).toEqual({ postIds: ["p1"] });
+  });
+
+  it("renders no carousel for a single-photo post (ENG-762 / ENG-815)", async () => {
+    feedRows = [
+      { ...TEXT_ROW, type: "photo", title: null, body: "Trackwork this morning.", media_url: "media/p1.jpg", poster_url: null },
+    ];
+    global.fetch = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.includes("/feed")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: feedRows }) });
+      }
+      if (url === "/api/posts/media") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              items: [{ postId: "p1", mediaUrl: "https://sb.local/p1-0.jpg", slideCount: 1 }],
+              expiresAt: "2026-08-01T00:00:00.000Z",
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    }) as unknown as typeof fetch;
+
+    render(<TrainerPosts trainerId="t1" trainerName="Tom Alcott" viewerId={VIEWER_ID} />);
+    await screen.findByText("Trackwork this morning.");
+
+    expect(screen.queryByTestId("photo-dots")).toBeNull();
+    expect(screen.queryByTestId("photo-track")).toBeNull();
   });
 });
 

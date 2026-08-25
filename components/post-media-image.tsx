@@ -24,6 +24,7 @@
 // reset would fix only the FIRST expiry and then sit on a permanent
 // placeholder — visually identical to the bug this file exists to remove.
 import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { remintPostMedia } from "@/lib/api/post-media";
 
 export interface PostMediaImageProps {
@@ -33,12 +34,33 @@ export interface PostMediaImageProps {
   src?: string | null;
   /** A video poster re-mints from the playback route, a photo from post-media. */
   video?: boolean;
+  /**
+   * WHICH slide of the post this element draws (ENG-815). Omitted / 0 is the
+   * post's own `media_url`, which is what every single-photo and video card
+   * passes and is why their behaviour is untouched. A carousel slide passes its
+   * ordinal so the re-mint below asks for THAT slide by index — re-minting the
+   * batch would otherwise hand slide 3 the url of slide 0.
+   */
+  slideIndex?: number;
+  /**
+   * What to draw with no url — before the first mint, and after a failed retry.
+   * Defaults to the empty box the media ground has always drawn. The carousel
+   * overrides it so a dead slide keeps its own `.photo-slide-empty` styling
+   * instead of silently becoming a differently-classed empty div.
+   */
+  placeholder?: ReactNode;
 }
 
 /** The no-media placeholder, unchanged from what the media box always drew. */
 const Placeholder = () => <div style={{ width: "100%", height: "100%" }} />;
 
-export function PostMediaImage({ postId, src, video = false }: PostMediaImageProps) {
+export function PostMediaImage({
+  postId,
+  src,
+  video = false,
+  slideIndex = 0,
+  placeholder,
+}: PostMediaImageProps) {
   const [url, setUrl] = useState<string | null>(src ?? null);
   const [failed, setFailed] = useState(false);
   // A ref, not state: the cap must be read AND set inside one error handler
@@ -83,7 +105,7 @@ export function PostMediaImage({ postId, src, video = false }: PostMediaImagePro
     }
     retried.current = true;
     const mine = generation.current;
-    const fresh = await remintPostMedia(postId, { video });
+    const fresh = await remintPostMedia(postId, { video, slideIndex });
     // A newer src landed from the screen while this was in flight. That url is
     // authoritative and already rendering; this result is stale. Dropping it
     // matters most in the failure case: writing setFailed(true) here would
@@ -103,7 +125,7 @@ export function PostMediaImage({ postId, src, video = false }: PostMediaImagePro
     setUrl(fresh);
   }
 
-  if (failed || !url) return <Placeholder />;
+  if (failed || !url) return <>{placeholder ?? <Placeholder />}</>;
 
   return (
     // eslint-disable-next-line @next/next/no-img-element -- arbitrary Storage/Mux poster URL, cover-fit

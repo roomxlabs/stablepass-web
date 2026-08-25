@@ -38,8 +38,37 @@ export interface FeedPost {
    * as on mobile's M4 — so a text post with no title still gets pill and panel.
    */
   title?: string | null;
+  /**
+   * `post.label` — one of the 13 presets the be pins with a CHECK (ENG-738), or
+   * null. Drawn as the green pill at the top of the card; null means no pill,
+   * which is every pre-round-6 post (the column is nullable with no backfill).
+   *
+   * It is COPY chosen by the admin at compose time, not a card selector: what
+   * makes a card a STABLE UPDATE is still `media.type`, exactly as on mobile.
+   * The two are independent — a labelled photo post is a normal photo card that
+   * happens to carry a pill.
+   */
+  label: string | null;
   body?: string | null;
   media: PostMedia;
+  /**
+   * How many slides this post carries, from the batch mint's `slideCount`
+   * (ENG-809 / ENG-815). 1 — or absent, on a surface that resolved no count —
+   * is a single-photo post and draws no carousel, which is every legacy post
+   * since ENG-740 ships no backfill.
+   *
+   * IT IS A COUNT, NOT AN ARRAY OF PHOTOS, and that is the point: it arrives in
+   * the same response as slide 0, so the dots and the `n/m` chip are correct
+   * before any further slide has been minted. ENG-762 carried a resolved
+   * `PostPhoto[]` here instead, which meant a client island had to read and sign
+   * every slide up front — the path ENG-800 revoked.
+   *
+   * The be derives it as HIGHEST `sort_order` + 1, not a row count, so it is an
+   * upper bound: a non-contiguous `{0, 2}` reports 3 and index 1 mints to
+   * nothing. The carousel draws that as a blank slide, which is a gap rather
+   * than the silently-dropped photo a row count would produce.
+   */
+  slideCount?: number;
   watermarked: boolean;
   raceBadge?: { text: string; kind?: "race-day" | "result" } | null;
   count: number; // post.like_count

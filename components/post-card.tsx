@@ -10,10 +10,18 @@
 // the placeholder. The card still owns no page-level fetching, and the
 // subscription gate still lives on the screen, not here — a re-mint that comes
 // back 402 renders the placeholder, never gated bytes.
+//
+// A CAROUSEL widens that same exception rather than adding a second one
+// (ENG-815): PhotoCarousel mints slides 1+ by index, through the same BFF route
+// and the same PostMediaImage element. What the card still never does is fetch
+// for the PAGE — slide 0 and the slide COUNT both arrive in the screen's batch,
+// so the dots are right on first paint without this component asking anyone.
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { ReactionBar } from "./reaction-bar";
 import { PostOverlay } from "./post-overlay";
 import { FollowPill } from "./follow-pill";
+import { MediaPhotoChip, PhotoCarousel } from "./photo-carousel";
 import { PostMediaImage } from "./post-media-image";
 import type { FeedPost, PostMedia, ReactionEmoji } from "./types";
 
@@ -160,6 +168,129 @@ const More = () => (
   </svg>
 );
 
+/**
+ * The photo chip moved to `photo-carousel.tsx` in round 6 (ENG-762) so the
+ * single-photo card and the carousel draw the SAME chip — the multi-photo state
+ * adds an `n/m` count to it, and two copies of that element would drift.
+ * `MediaPhotoChip` is imported above; the ENG-761 behaviour is unchanged.
+ */
+
+/**
+ * More than one slide is what makes a post a carousel — not the post type, and
+ * not `media_url`. ENG-740 mirrors row 0 into `post.media_url`, so a one-slide
+ * post is indistinguishable from a legacy single-photo post by design, and both
+ * take the plain `<img>` path they always did.
+ *
+ * ENG-815 moved the source of that number from a client-side `post_media` read
+ * to the batch mint's `slideCount`, so this now decides from a COUNT rather than
+ * from an array of already-resolved photos. That is what lets the dots be right
+ * on first paint: the old form could not call a post a carousel until every one
+ * of its slides had been read and signed.
+ *
+ * `?? 1` is the legacy case and the majority one — no `post_media` rows at all,
+ * which the be reports as `slideCount: 1` and a screen that never resolved a
+ * count leaves undefined. Both mean "one photo", and one photo is not a
+ * carousel.
+ */
+export function isCarouselPost(post: FeedPost): boolean {
+  return post.media.type === "photo" && (post.slideCount ?? 1) > 1;
+}
+
+/**
+ * The caption, clamped to two lines with a "more" affordance (round 6 / ENG-761
+ * item 2).
+ *
+ * NOT "matching mobile", despite the ticket's wording: as of `feature/round6-v1`
+ * mobile's post card has no caption clamp at all (no `numberOfLines` on the
+ * body) and its `.post-badge` pill is still retired. Web is AHEAD here, not in
+ * step. Said plainly because comments are this repo's decision record, and
+ * "matching mobile" would send the next reader to "fix" mobile toward behaviour
+ * it does not have.
+ *
+ * WHY A MEASUREMENT AND NOT A CHARACTER COUNT: how many lines a caption takes
+ * depends on the rendered font, the column width and where the words break, so
+ * any length threshold is wrong at some viewport. After layout we compare the
+ * element's `scrollHeight` (its full text) against its `clientHeight` (the two
+ * lines the clamp actually shows) and only offer "more" when the former
+ * genuinely exceeds the latter. A caption that lands on exactly two lines
+ * measures equal and gets NO affordance — the edge case the ticket calls out.
+ *
+ * WHY "more" EXPANDS IN PLACE rather than opening the post detail: this app has
+ * no post-detail route. `app/(member)` has explore, following, saved, horses,
+ * horses/[id], trainers, trainers/[id], account and checkout — there is no
+ * `posts/[id]` page to open, and adding one is a screen, not a line of this
+ * ticket. Expanding in place is the honest web equivalent (and is what
+ * Instagram's own web feed does); if a detail route is ever built, this is the
+ * one call site to repoint. Flagged on ENG-761.
+ */
+export function PostCaption({ body }: { body: string }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+
+  const measure = useCallback(() => {
+    const el = ref.current;
+    if (!el || expanded) return;
+    // A 1px tolerance: sub-pixel line heights make an exactly-two-line caption
+    // measure a hair over on some zoom levels, which would show a "more" that
+    // reveals nothing.
+    setOverflows(el.scrollHeight - el.clientHeight > 1);
+  }, [expanded]);
+
+  useEffect(() => {
+    measure();
+
+    // RE-MEASURE WHEN THE WEBFONT LANDS. This is the one path that could lose
+    // content: the first measurement runs against the fallback face, and if the
+    // real face is wider a caption that fitted in two lines becomes three. The
+    // ResizeObserver below would NOT catch it — the clamped box stays exactly
+    // two lines tall, so its border box never changes and RO never fires, while
+    // `scrollHeight` quietly grows past it. The result would be a truncated
+    // caption with no "more" to open it. `document.fonts` is absent in jsdom
+    // and in older browsers, hence the guard.
+    let cancelled = false;
+    if (typeof document !== "undefined" && document.fonts?.ready) {
+      document.fonts.ready.then(() => {
+        if (!cancelled) measure();
+      });
+    }
+
+    // The column is fluid, so a resize can turn a two-line caption into three.
+    // Guarded because jsdom (the unit suite) has no ResizeObserver.
+    if (typeof ResizeObserver === "undefined") return () => { cancelled = true; };
+    const ro = new ResizeObserver(measure);
+    if (ref.current) ro.observe(ref.current);
+    return () => {
+      cancelled = true;
+      ro.disconnect();
+    };
+  }, [measure, body]);
+
+  return (
+    <div className="post-body-web">
+      <div ref={ref} className={expanded ? "post-caption" : "post-caption clamped"} data-testid="post-caption">
+        {body}
+      </div>
+      {overflows && !expanded && (
+        // The visible word is "more", but the card ALREADY has a button whose
+        // accessible name is "More" — the `⋯` post-options control in the head.
+        // Two same-named buttons in one card is a real ambiguity for anyone
+        // navigating by name (and it made the first version of the e2e spec
+        // match five controls where one was meant). The label disambiguates
+        // without changing what a sighted reader sees.
+        <button
+          type="button"
+          className="post-caption-more"
+          aria-label="Expand caption"
+          onClick={() => setExpanded(true)}
+        >
+          more
+        </button>
+      )}
+    </div>
+  );
+}
+
 export interface PostCardProps {
   post: FeedPost;
   viewerId: string; // signed-in user id — for the watermark overlay
@@ -207,6 +338,18 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
   // (client, 18 Aug 2026: "it shouldnt look like 1:1 with the fullscreen").
   const isReel = isReelMedia(post.media);
   const mediaBox = mediaBoxProps(post.media.aspectRatio, { video: isVideo });
+  // Empty unless this post genuinely has 2+ photos, which is what keeps every
+  // pre-round-6 card on exactly the path it took before.
+  //
+  // THIS CARD IS THE ONLY MOUNT. ENG-762's Surface also names
+  // `app/(member)/posts/[id]` as a post-detail mount; NO SUCH ROUTE EXISTS in
+  // this app — `app/(member)` has explore, following, saved, horses, horses/[id],
+  // trainers, trainers/[id], account and checkout, and `app/api/posts/[id]/playback`
+  // is an API route, not a page. ENG-761 recorded the same thing. Building one
+  // would be a new member screen with no confirmed mockup, which `.rx/guardrails.md`
+  // makes `needs-spec`, not part of this ticket. `PhotoCarousel` is shared, so
+  // the day that screen exists it mounts in one line. Flagged on the issue.
+  const isCarousel = isCarouselPost(post);
 
   return (
     <article className="post-web">
@@ -217,10 +360,13 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
           {post.raceBadge && (
             <div className={`race-badge${post.raceBadge.kind === "result" ? " result" : ""}`}>{post.raceBadge.text}</div>
           )}
-          {/* The `.post-badge` PILL IS RETIRED (Justin via Naufal, 18 Aug
-              2026: not needed — "the header will stay the same as the
-              others"). The horse heads EVERY card, update cards included,
-              which also means it leaves the update byline below. */}
+          {/* The `.post-badge` pill RETURNS in round 6 (ENG-761), but as DATA
+              rather than the card-type copy it used to be: it draws
+              `post.label`, one of the be's 13 presets (ENG-738), and nothing
+              at all when the column is null — which is every pre-round-6 post.
+              The 18 Aug retirement stands for the old derived-copy pill; the
+              horse name still heads every card variant beneath it. */}
+          {post.label && <span className="post-badge">{post.label}</span>}
           <h3 className="post-horse">{post.horseName}</h3>
           {/* `post.title` is not drawn AT ALL — on any variant (client, 18
               Aug 2026, in two steps: media cards first, then the update card:
@@ -236,7 +382,24 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
 
       {hasMedia && (
         <div {...mediaBox}>
-          <PostMediaImage postId={post.id} src={post.media.posterUrl} video={isVideo} />
+          {isCarousel ? (
+            // The carousel REPLACES the single poster image and brings its own
+            // chip + dots. The box, the Follow pill, the watermark overlay and
+            // the aspect ratio all stay exactly where they were.
+            //
+            // `posterUrl` is handed straight through as slide 0 — the batch
+            // minted it, so the first photo is painted before the carousel asks
+            // for anything, and index 0 has exactly one source.
+            <PhotoCarousel
+              postId={post.id}
+              slideCount={post.slideCount ?? 1}
+              firstUrl={post.media.posterUrl ?? null}
+            />
+          ) : (
+            // Every single-photo and video card takes this path unchanged: one
+            // PostMediaImage, no slide index, ENG-813's one-retry recovery.
+            <PostMediaImage postId={post.id} src={post.media.posterUrl} video={isVideo} />
+          )}
           {isReel && (
             /* THE REEL HEADER — the card's identity on a top scrim, with the
                Follow pill IN the row next to the name (mobile's 18 Aug
@@ -244,6 +407,9 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
             <div className="reel-head">
               <div className="post-avatar-web" aria-hidden="true">{initial}</div>
               <div className="reel-head-meta">
+                {/* The pill draws on EVERY web card variant, reel included —
+                    web has no separate reel treatment for it this round. */}
+                {post.label && <span className="post-badge">{post.label}</span>}
                 <h3 className="reel-horse">{post.horseName}</h3>
                 <div className="reel-byline">
                   <span className="by-trainer">{post.trainerName}</span> · {post.postedAgo}
@@ -256,6 +422,10 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
             <button className="media-play" type="button" aria-label="Play video" onClick={onPlay}><Play /></button>
           )}
           {isVideo && post.media.duration && <div className="media-duration">{post.media.duration}</div>}
+          {/* The photo's answer to the duration chip: same corner, same scrim.
+              A CAROUSEL draws its own chip (it owns the index the chip counts),
+              so the card only draws the plain one when there is no carousel. */}
+          {post.media.type === "photo" && !isCarousel && <MediaPhotoChip />}
           {post.watermarked && <PostOverlay viewerId={viewerId} />}
           {!isReel && canFollow && <FollowPill trainerName={post.trainerName} onFollow={onFollow} />}
         </div>
@@ -286,7 +456,7 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
       {/* The caption renders LAST in the DOM and is placed below the reaction bar
           by `order` in globals.css — Instagram's ordering, decided 5 Aug. An
           update card has no caption: its body IS the panel above. */}
-      {!isUpdate && post.body && <div className="post-body-web">{post.body}</div>}
+      {!isUpdate && post.body && <PostCaption body={post.body} />}
     </article>
   );
 }

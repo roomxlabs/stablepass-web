@@ -96,6 +96,82 @@ describe("POST /api/posts/media", () => {
     expect(body.error.code).toBe("subscription_required");
   });
 
+  // ENG-815 — the by-index mode. Forwarded as exactly `{ postId, slideIndex }`,
+  // never spread from the caller's body, and never a path.
+  it("forwards { postId, slideIndex } to edgeFetch and returns its data on success", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    edgeFetchMock.mockResolvedValue(
+      fakeRes(200, {
+        data: {
+          postId: "p1",
+          slideIndex: 2,
+          mediaUrl: "https://sb.local/p1-2?token=x",
+          expiresAt: "2026-08-01T00:00:00.000Z",
+        },
+      }),
+    );
+
+    const res = await POST(
+      new Request("http://localhost/api/posts/media", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ postId: "p1", slideIndex: 2 }),
+      }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data).toEqual({
+      postId: "p1",
+      slideIndex: 2,
+      mediaUrl: "https://sb.local/p1-2?token=x",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+    });
+    expect(edgeFetchMock).toHaveBeenCalledWith(expect.anything(), "post-media", {
+      method: "POST",
+      body: { postId: "p1", slideIndex: 2 },
+    });
+    // Never a path or a service key in the edge body.
+    const edgeBody = edgeFetchMock.mock.calls[0][2].body as { postId: string; slideIndex: number };
+    expect(edgeBody).toEqual({ postId: "p1", slideIndex: 2 });
+    expect(JSON.stringify(edgeBody)).not.toMatch(/path|SERVICE_ROLE|service.?key/i);
+  });
+
+  // A body carrying BOTH shapes is ambiguous, not a "pick one" — the mode must
+  // never be guessed.
+  it("returns 400 invalid_request when the body carries BOTH postIds and postId", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+
+    const res = await POST(
+      new Request("http://localhost/api/posts/media", {
+        method: "POST",
+        body: JSON.stringify({ postIds: ["p1"], postId: "p1", slideIndex: 0 }),
+      }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe("invalid_request");
+    expect(edgeFetchMock).not.toHaveBeenCalled();
+  });
+
+  // A body carrying NEITHER shape is equally ambiguous.
+  it("returns 400 invalid_request when the body carries NEITHER shape", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+
+    const res = await POST(
+      new Request("http://localhost/api/posts/media", {
+        method: "POST",
+        body: JSON.stringify({}),
+      }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe("invalid_request");
+    expect(edgeFetchMock).not.toHaveBeenCalled();
+  });
+
   it("returns 400 invalid_request when the edge fn reports 400", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
     edgeFetchMock.mockResolvedValue(fakeRes(400, {}));

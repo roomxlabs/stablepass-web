@@ -13,26 +13,17 @@ import { AccessWall } from "@/components/access-wall";
 import { PostCard, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { signPhotoMap, HORSE_PHOTO_BUCKET, TRAINER_PHOTO_BUCKET, signedPosterFor } from "@/lib/storage/photos";
-import { PostMediaError, resolvePostDisplayUrls } from "@/lib/api/post-media";
-import type { FeedPost, PostMedia, ReactionEmoji } from "@/components/types";
+import { signPhotoMap, HORSE_PHOTO_BUCKET, TRAINER_PHOTO_BUCKET } from "@/lib/storage/photos";
+import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@/lib/api/post-media";
+import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
+import type { FeedPost, ReactionEmoji } from "@/components/types";
+import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 
 const LIMIT = 10;
 
 // Bare be `post` row shape (the following feed returns post rows; names are enriched).
-type PostRow = {
-  id: string;
-  horse_id: string;
-  type: PostMedia["type"];
-  title: string | null;
-  body: string | null;
-  media_url: string | null;
-  poster_url: string | null;
-  aspect_ratio: number | null;
-  watermarked: boolean;
-  like_count: number;
-  published_at: string;
-};
+// Pinned by test/following-screen.test.tsx.
+type PostRow = PostIntrinsicRow & { horse_id: string };
 // `id` for the Follow pill (a name is not a key), `stable_name`/`location` for the
 // STABLE UPDATE panel footer. Stable identity only — no owner field, ever.
 type HorseTrainer = { id: string; name: string; stable_name: string | null; location: string | null };
@@ -49,18 +40,6 @@ type RailItem = { id: string; name: string; photoUrl: string | null; href: strin
 
 function one<T>(v: T | T[] | null): T | null {
   return Array.isArray(v) ? (v[0] ?? null) : v;
-}
-
-function relativeTime(iso: string | null): string {
-  if (!iso) return "";
-  const ms = Date.now() - new Date(iso).getTime();
-  const mins = Math.max(0, Math.round(ms / 60000));
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
 }
 
 // A circular "story"-style avatar (photo, or the initial-letter fallback) + name.
@@ -113,12 +92,6 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
   const [horses, setHorses] = useState<RailItem[]>([]);
   const [trainers, setTrainers] = useState<RailItem[]>([]);
   const [followsLoaded, setFollowsLoaded] = useState(false);
-  // The Follow pill's only input, from the trainer rail read this screen ALREADY
-  // makes — no extra query, and none per card. `null` means "not known yet",
-  // which is deliberately NOT the same as "follows nobody": the Following feed
-  // also carries posts from followed HORSES, whose trainer may be unfollowed, so
-  // the pill is meaningful here and must not flash on before the answer lands.
-  const [followedTrainerIds, setFollowedTrainerIds] = useState<Set<string> | null>(null);
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -129,8 +102,6 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
   const [playError, setPlayError] = useState<Record<string, boolean>>({});
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
-  // Trainer ids with a follow write in flight — see follow() below.
-  const followInFlight = useRef<Set<string>>(new Set());
   const loadingRef = useRef(false);
 
   // Load the follow rails once (own follows via RLS `follow_rw_self`, newest first).
@@ -156,7 +127,7 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
         setFollowsLoaded(true);
         return;
       }
-      const [{ data: hRows }, { data: tRows, error: tError }] = await Promise.all([
+      const [{ data: hRows }, { data: tRows }] = await Promise.all([
         sb.from("follow").select("created_at, horse:horse_id(id, display_name, racing_name, photo_url)").not("horse_id", "is", null).order("created_at", { ascending: false }),
         sb.from("follow").select("created_at, trainer:trainer_id(id, name, display_name, photo_url)").not("trainer_id", "is", null).order("created_at", { ascending: false }),
       ]);
@@ -173,10 +144,6 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
       // A FAILED read must also leave it `null`, not empty. Treating an error as
       // "follows nobody" collapses the exact distinction this state exists to
       // preserve, and would offer Follow on trainers the viewer already follows.
-      if (!tError) {
-        setFollowedTrainerIds(new Set(followedTrainers.map((t) => t.id)));
-      }
-
       // `photo_url` is a bare path in a PRIVATE bucket — sign it or the avatar
       // renders as a broken relative URL. One batch call per bucket.
       const [horsePhotos, trainerPhotos] = await Promise.all([
@@ -185,7 +152,10 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
       ]);
 
       const hItems: RailItem[] = followedHorses
-        .map((h) => ({ id: h.id, name: h.racing_name || h.display_name, photoUrl: h.photo_url ? horsePhotos.get(h.photo_url) ?? null : null, href: `/horses/${h.id}` }));
+        // Formatted per side of the `||`, not around it: a `racing_name` that is
+        // nothing but "(AUS)" formats to "" and must then fall through to the
+        // display name rather than rendering a blank row (ENG-761 item 6).
+        .map((h) => ({ id: h.id, name: displayHorseNameOrEmpty(h.racing_name) || displayHorseNameOrEmpty(h.display_name), photoUrl: h.photo_url ? horsePhotos.get(h.photo_url) ?? null : null, href: `/horses/${h.id}` }));
       const tItems: RailItem[] = followedTrainers
         .map((t) => ({ id: t.id, name: t.display_name || t.name, photoUrl: t.photo_url ? trainerPhotos.get(t.photo_url) ?? null : null, href: `/trainers/${t.id}` }));
       setHorses(hItems);
@@ -244,48 +214,35 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
       const horseById = new Map(((horseRows ?? []) as HorseRow[]).map((h) => [h.id, h]));
       const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
       const mySet = new Set(((bookmarkRows ?? []) as BookmarkRow[]).map((b) => b.post_id));
-      // Photos via POST /api/posts/media; video posters via playback?posterOnly=1.
-      // Absolute URLs pass through. A 402 surfaces the AccessWall (guardrail 3).
-      let postMedia: Map<string, string>;
+      // Photos + their slide counts via ONE POST /api/posts/media; video posters
+      // via playback?posterOnly=1. Absolute URLs pass through. A 402 surfaces the
+      // AccessWall (guardrail 3). `slideCounts` rides in on the same batch, which
+      // is what lets a carousel draw the right dots before it mints a thing.
+      let media: PostDisplayMedia;
       try {
-        postMedia = await resolvePostDisplayUrls(rows);
+        media = await resolvePostDisplayUrls(rows);
       } catch (e) {
         if (e instanceof PostMediaError && e.reason === "gated") {
           setGated(true);
           return;
         }
-        postMedia = new Map();
+        media = { urls: new Map(), slideCounts: new Map() };
       }
 
+      const intrinsics = { signedMedia: media.urls, slideCountByPost: media.slideCounts, reactionByPost: myReaction };
       const mapped: FeedPost[] = rows.map((r) => {
         const horse = horseById.get(r.horse_id);
         const trainer = one(horse?.trainer ?? null);
         return {
-          id: r.id,
+          ...postIntrinsics(r, intrinsics),
           horseId: r.horse_id,
-          horseName: horse?.display_name ?? "Unknown horse",
+          // Title-cased and (AUS)-stripped for display; the raw value stays on
+          // the row for keys and comparisons (ENG-761 item 6).
+          horseName: displayHorseNameOrEmpty(horse?.display_name) || "Unknown horse",
           trainerName: trainer?.name ?? "Stablepass",
           trainerId: trainer?.id ?? null,
           stableName: trainer?.stable_name ?? null,
           stableLocation: trainer?.location ?? null,
-          postedAgo: relativeTime(r.published_at),
-          title: r.title,
-          body: r.body,
-          // `aspectRatio` is RAW here. `resolveAspect` (post-card) owns the clamp,
-          // so exactly one place decides what an unusable value becomes. The
-          // `typeof` guard is load-bearing, not belt-and-braces: `'NaN'::numeric`
-          // passes the be's `CHECK (aspect_ratio > 0)` and `to_json` serialises it
-          // as the QUOTED string "NaN", which would otherwise widen a string into
-          // a field typed `number | null`.
-          media: {
-            type: r.type,
-            posterUrl: signedPosterFor(r, postMedia),
-            duration: null,
-            aspectRatio: typeof r.aspect_ratio === "number" ? r.aspect_ratio : null,
-          },
-          watermarked: r.watermarked,
-          count: r.like_count,
-          reacted: myReaction.get(r.id) ?? null,
           bookmarked: mySet.has(r.id),
         };
       });
@@ -348,40 +305,24 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
     if (bookmarkError) setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, bookmarked: prevBookmarked } : p)));
   }
 
-  // Follow, from the pill on the media. Optimistic like react/bookmark above,
-  // and it clears the pill on EVERY card by that trainer at once, which is the
-  // reason follow state lives on the screen rather than inside the card.
-  async function follow(trainerId: string) {
-    // `follow_no_duplicate` is `unique (user_id, trainer_id, horse_id)`, and a
-    // TRAINER follow has `horse_id IS NULL` — Postgres treats NULLs as distinct,
-    // so that constraint does NOT stop a second row. A fast double-click before
-    // the optimistic re-render would write two, and the Following rail would
-    // then list the trainer twice with a duplicate React key.
-    if (followInFlight.current.has(trainerId)) return;
-    followInFlight.current.add(trainerId);
-
-    setFollowedTrainerIds((prev) => new Set(prev ?? []).add(trainerId));
-
-    const sb = supabaseBrowser();
-    const { error: followError } = await sb.from("follow").insert({ user_id: viewerId, trainer_id: trainerId });
-    followInFlight.current.delete(trainerId);
-
-    // 23505 is unique_violation: the row already exists, so the viewer already
-    // follows this trainer. That IS the desired end state — rolling back would
-    // put the pill back on a trainer they follow, which is the bug, not the fix.
-    if (followError && followError.code !== "23505") {
-      setFollowedTrainerIds((prev) => {
-        const next = new Set(prev ?? []);
-        next.delete(trainerId);
-        return next;
-      });
-    }
-  }
-
-  // No pill until the follow read has answered, and none for a trainer already
-  // followed — there is no "Following" variant.
-  function canFollowTrainer(post: FeedPost): boolean {
-    return followedTrainerIds !== null && Boolean(post.trainerId) && !followedTrainerIds.has(post.trainerId!);
+  /**
+   * ROUND 6 / ENG-761 item 4 — the Following screen offers NO Follow pill, ever.
+   *
+   * This is the whole point of the screen: everything in it is here BECAUSE the
+   * viewer already follows it, so a "Follow" pill is either a no-op or, in the
+   * edge cases where an unfollowed trainer's post is surfaced here, an offer
+   * that contradicts the tab it is sitting in. Explore is where you follow
+   * things; Following is where you read them.
+   *
+   * Deliberately still a function returning a constant, and deliberately NOT
+   * unified with the identical-looking helper in `explore-feed.tsx`: the two
+   * screens' pill behaviour is now different BY DESIGN, and the duplication is
+   * what keeps them independently changeable. Merging them into a shared helper
+   * would re-couple exactly what this ticket separated (locked open question,
+   * ENG-761). If a third screen ever needs the Explore behaviour, copy Explore's.
+   */
+  function canFollowTrainer(): boolean {
+    return false;
   }
 
   async function play(postId: string) {
@@ -467,7 +408,15 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
                   }
                   return (
                     <Fragment key={p.id}>
-                      <PostCard post={p} viewerId={viewerId} onReact={(e) => react(p.id, e)} onBookmark={() => bookmark(p.id)} onPlay={() => play(p.id)} canFollow={canFollowTrainer(p)} onFollow={() => p.trainerId && follow(p.trainerId)} />
+                      {/* `canFollowTrainer()` is a constant `false` (ENG-761
+                          item 4), so no pill is ever drawn here. It is CALLED
+                          rather than simply omitted so the decision is live
+                          code a test can pin and a reader can find, instead of
+                          an absence that looks like an oversight. `onFollow`
+                          is deliberately not passed: there is nothing to
+                          follow from, so this screen holds no follow-write
+                          path at all. */}
+                      <PostCard post={p} viewerId={viewerId} onReact={(e) => react(p.id, e)} onBookmark={() => bookmark(p.id)} onPlay={() => play(p.id)} canFollow={canFollowTrainer()} />
                       {playError[p.id] && (
                         <p role="alert" style={{ color: "var(--red)", marginTop: -16, marginBottom: 24, fontSize: 13.5 }}>Couldn&rsquo;t load the video.</p>
                       )}

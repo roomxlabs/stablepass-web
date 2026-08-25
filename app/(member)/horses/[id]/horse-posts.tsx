@@ -9,24 +9,12 @@
 import { useEffect, useState } from "react";
 import { PostCard, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
-import { relativeTime } from "@/app/(member)/explore/explore-feed";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { signedPosterFor } from "@/lib/storage/photos";
-import { PostMediaError, resolvePostDisplayUrls } from "@/lib/api/post-media";
-import type { FeedPost, PostMedia, ReactionEmoji } from "@/components/types";
+import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@/lib/api/post-media";
+import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
+import type { FeedPost, ReactionEmoji } from "@/components/types";
 
-type PostRow = {
-  id: string;
-  type: PostMedia["type"];
-  title: string | null;
-  body: string | null;
-  media_url: string | null;
-  poster_url: string | null;
-  aspect_ratio: number | null;
-  watermarked: boolean;
-  like_count: number;
-  published_at: string;
-};
+type PostRow = PostIntrinsicRow;
 type ReactionRow = { post_id: string; emoji: ReactionEmoji };
 type BookmarkRow = { post_id: string };
 
@@ -75,44 +63,30 @@ export function HorsePosts({ horseId, horseName, trainerName, stableName = null,
         ]);
         const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
         const mySet = new Set(((bookmarkRows ?? []) as BookmarkRow[]).map((b) => b.post_id));
-        // Photos via POST /api/posts/media; video posters via playback?posterOnly=1.
-        let postMedia: Map<string, string>;
+        // Photos + their slide counts via ONE POST /api/posts/media; video posters
+        // via playback?posterOnly=1. Absolute URLs pass through. A 402 surfaces the
+        // AccessWall (guardrail 3). `slideCounts` rides in on the same batch, which
+        // is what lets a carousel draw the right dots before it mints a thing.
+        let media: PostDisplayMedia;
         try {
-          postMedia = await resolvePostDisplayUrls(rows);
+          media = await resolvePostDisplayUrls(rows);
         } catch (e) {
           if (e instanceof PostMediaError && e.reason === "gated") {
             // Profile pages already wall at the page level; mid-session 402 → error.
             if (!cancelled) setError(true);
             return;
           }
-          postMedia = new Map();
+          media = { urls: new Map(), slideCounts: new Map() };
         }
 
+        const intrinsics = { signedMedia: media.urls, slideCountByPost: media.slideCounts, reactionByPost: myReaction };
         const mapped: FeedPost[] = rows.map((r) => ({
-          id: r.id,
+          ...postIntrinsics(r, intrinsics),
           horseId,
           horseName,
           trainerName,
           stableName,
           stableLocation,
-          postedAgo: relativeTime(r.published_at),
-          title: r.title,
-          body: r.body,
-          // `aspectRatio` is RAW here. `resolveAspect` (post-card) owns the clamp,
-          // so exactly one place decides what an unusable value becomes. The
-          // `typeof` guard is load-bearing, not belt-and-braces: `'NaN'::numeric`
-          // passes the be's `CHECK (aspect_ratio > 0)` and `to_json` serialises it
-          // as the QUOTED string "NaN", which would otherwise widen a string into
-          // a field typed `number | null`.
-          media: {
-            type: r.type,
-            posterUrl: signedPosterFor(r, postMedia),
-            duration: null,
-            aspectRatio: typeof r.aspect_ratio === "number" ? r.aspect_ratio : null,
-          },
-          watermarked: r.watermarked,
-          count: r.like_count,
-          reacted: myReaction.get(r.id) ?? null,
           bookmarked: mySet.has(r.id),
         }));
         if (!cancelled) setPosts(mapped);

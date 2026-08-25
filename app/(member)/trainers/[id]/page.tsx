@@ -17,6 +17,7 @@ import { FollowNotify } from "./follow-notify";
 import { StableHorses } from "./stable-horses";
 import { TrainerPosts } from "./trainer-posts";
 import { WebsiteLink } from "./website-link";
+import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 
 type TrainerRow = {
   id: string;
@@ -83,7 +84,9 @@ export default async function TrainerProfilePage({ params }: { params: Promise<{
   const wins = horses.reduce((sum, h) => sum + (h.wins ?? 0), 0);
   const stableHorses: HorseSummary[] = horses.map((h) => ({
     id: h.id,
-    name: h.racing_name || h.display_name,
+    // Formatted per side of the `||` so a `racing_name` of just "(AUS)" falls
+    // through to the display name (ENG-761 item 6).
+    name: displayHorseNameOrEmpty(h.racing_name) || displayHorseNameOrEmpty(h.display_name),
     trainerName: displayName,
   }));
 

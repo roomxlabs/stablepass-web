@@ -12,6 +12,7 @@ import { AccessWall } from "@/components/access-wall";
 import { HorseCard } from "@/components/horse-card";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import type { HorseSummary } from "@/components/types";
+import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 
 type Trainer = { name: string };
 type HorseRow = { id: string; display_name: string; racing_name: string | null; trainer: Trainer | Trainer[] | null };
@@ -64,7 +65,9 @@ export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; eve
 
       const mapped: HorseSummary[] = ((data ?? []) as HorseRow[]).map((h) => {
         const trainer = one(h.trainer);
-        return { id: h.id, name: h.racing_name || h.display_name, trainerName: trainer?.name ?? "Stablepass" };
+        // Formatted per side of the `||` so a `racing_name` of just "(AUS)"
+        // falls through to the display name (ENG-761 item 6).
+        return { id: h.id, name: displayHorseNameOrEmpty(h.racing_name) || displayHorseNameOrEmpty(h.display_name), trainerName: trainer?.name ?? "Stablepass" };
       });
       setHorses(mapped);
       setLoading(false);

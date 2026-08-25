@@ -670,6 +670,78 @@ a { color: inherit; text-decoration: none; }
   background: rgba(0,0,0,0.6); color: #fff; font-size: 11.5px; font-weight: 500;
   padding: 4px 9px; border-radius: var(--radius-pill); font-variant-numeric: tabular-nums;
 }
+/* ROUND 6 / ENG-761 item 3 — the photo chip mirrors the duration chip above:
+   same corner, same scrim, same pill radius. Square rather than text-width
+   because it holds a glyph, not a timecode. */
+.post-media-web .media-photo-chip {
+  position: absolute; bottom: 14px; left: 14px;
+  display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px;
+  background: rgba(0,0,0,0.6); color: #fff;
+  border-radius: var(--radius-pill);
+}
+.post-media-web .media-photo-chip .ic { width: 15px; height: 15px; }
+/* ROUND 6 / ENG-762 — the SAME chip, carrying the position as well as the type
+   when a post has more than one photo. It stops being square and takes the
+   duration chip's exact type scale, because at that point it is doing the
+   duration chip's job: a number in the corner that says where you are. */
+.post-media-web .media-photo-chip.counted {
+  width: auto; gap: 5px; padding: 4px 9px;
+  font-size: 11.5px; font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ROUND 6 / ENG-762 — the multi-photo carousel (web half of mobile's R16).
+   The track fills the card's existing media box: ONE aspect box per post, so
+   every photo letterboxes into the same frame and the card never changes height
+   between slides. Paging is pure CSS scroll-snap — no library, and the swipe
+   still works with JS off. */
+.post-media-web .photo-track {
+  position: absolute; inset: 0;
+  display: flex;
+  overflow-x: auto; overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  /* The scrollbar is hidden because the dots ARE the position indicator, and a
+     native bar across the bottom of a photo is chrome the design does not draw.
+     Hiding it costs nothing: the track keeps its scrollbar BEHAVIOUR (wheel,
+     drag, arrow keys, swipe momentum) and stays focusable. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.post-media-web .photo-track::-webkit-scrollbar { display: none; }
+.post-media-web .photo-slide {
+  flex: 0 0 100%; height: 100%;
+  scroll-snap-align: center;
+  /* Never skip past a photo on a fast flick — one gesture, one slide. */
+  scroll-snap-stop: always;
+}
+/* A slide whose photo failed to sign shows the media ground, exactly as a
+   poster-less card does. Its siblings still render. */
+.post-media-web .photo-slide-empty { width: 100%; height: 100%; }
+/* Dots: bottom-centre over the media. 6px with a 4px gap fits the contract cap
+   of 10 photos in 96px, comfortably inside the 360px narrow card.
+   MATCHED TO MOBILE'S R16 (ENG-757), read off its shipped screenshots rather
+   than inferred: bare dots with NO scrim pill behind them, a solid grey for
+   inactive and flat brand green for active. An earlier revision here had a
+   dark scrim pill and a white rim on the active dot; both were dropped on
+   sight of mobile's build, because a web-only embellishment is exactly the
+   divergence this parity ticket exists to prevent. See the PR for the one
+   legibility caveat that came out of it. */
+.post-media-web .photo-dots {
+  position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+  z-index: 3;
+  display: flex; align-items: center; gap: 4px;
+}
+.post-media-web .photo-dot {
+  width: 6px; height: 6px; padding: 0;
+  border: none; border-radius: 50%;
+  /* A token, not an eyeballed grey. `--muted-light` is the palette's soft grey
+     and is the closest match to the inactive dot mobile draws; it stays
+     readable on both a dark and a cream frame. */
+  background: var(--muted-light);
+  cursor: pointer;
+}
+.post-media-web .photo-dot.active { background: var(--brand-green); }
 /* ROUND 5 / ENG-613 row 5 — the Follow pill, matching Instagram exactly, and the
    same component and corner as mobile's M3. Transparent fill with a white rim is
    a DRI decision that KNOWINGLY costs contrast on a bright frame: do not add a
@@ -757,6 +829,41 @@ a { color: inherit; text-decoration: none; }
 }
 
 .post-body-web { padding: 16px 22px; font-size: 15px; line-height: 1.55; color: var(--ink); }
+/* ROUND 6 / ENG-761 item 2 — the caption clamps to two lines with a "more".
+   The clamp sits on the inner `.post-caption`, NOT on `.post-body-web` itself:
+   the "more" button is a SIBLING inside `.post-body-web`, and a line-clamp on
+   the container would count the button as part of the clamped flow and hide the
+   very control that undoes the clamp. Same two lines either way; this is the
+   only arrangement where the affordance survives.
+   `-webkit-line-clamp` with `-webkit-box` is not legacy here — it is still the
+   only cross-browser multi-line clamp (the standard `line-clamp` shorthand is
+   not yet safe in the browsers this app supports). */
+/* A single unbreakable token — a pasted replay URL — otherwise lays ONE line box
+   wider than the column: `scrollHeight` never exceeds `clientHeight`, so no
+   "more" is offered, while `overflow: hidden` clips the tail. Wrapping it turns
+   that silent truncation into an ordinary clamped caption that expands. */
+.post-body-web .post-caption { overflow-wrap: anywhere; }
+.post-body-web .post-caption.clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* A text button, not a link: it expands the caption in place (there is no
+   post-detail route on web). Inherits the caption's size so it reads as part of
+   the same sentence rather than as a control bolted underneath. */
+.post-caption-more {
+  display: inline-block;
+  margin-top: 2px;
+  padding: 0;
+  background: none;
+  border: 0;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.post-caption-more:hover { color: var(--ink); }
 /* position: relative anchors the save toast, which sits ABOVE this row.
    ROUND 5 / ENG-613: the top padding is now UNCONDITIONAL. It used to come from
    two adjacent-sibling rules (`.post-media-web + .post-actions-web`,
@@ -963,6 +1070,21 @@ a { color: inherit; text-decoration: none; }
   letter-spacing: 0.08em;
   text-transform: uppercase;
   margin-top: 6px;
+  /* ROUND 6 / ENG-761 item 5 — PRIZEMONEY is the longest of the four labels and
+     the uppercase + 0.08em tracking above makes it longer still, so in a quarter
+     of a 360px viewport it used to wrap to two lines and shove that one stat's
+     number out of line with the other three. `nowrap` keeps it on one line. */
+  white-space: nowrap;
+}
+/* The nowrap alone would merely overflow the cell. These are the guard that
+   gives it somewhere to go: the columns may shrink below their content
+   (`minmax(0, 1fr)` — a grid track's default `min-width: auto` refuses to), the
+   padding tightens at narrow widths, and the tracking that costs the most width
+   is relaxed. Measured on the 360px viewport the ticket names. */
+@media (max-width: 420px) {
+  .profile-stats-web { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .profile-stats-web .stat-w { padding: 0 2px; }
+  .profile-stats-web .stat-label { font-size: 10px; letter-spacing: 0.02em; }
 }
 .stats-note-web {
   font-size: 12px;

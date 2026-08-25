@@ -90,10 +90,10 @@ describe("fetchPostMedia", () => {
 describe("resolvePostDisplayUrls", () => {
   it("passes absolute URLs through keyed by post id", async () => {
     global.fetch = vi.fn() as unknown as typeof fetch;
-    const map = await resolvePostDisplayUrls([
+    const result = await resolvePostDisplayUrls([
       { id: "p1", type: "photo", media_url: "https://placehold.co/x", poster_url: null },
     ]);
-    expect(map.get("p1")).toBe("https://placehold.co/x");
+    expect(result.urls.get("p1")).toBe("https://placehold.co/x");
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
@@ -110,19 +110,75 @@ describe("resolvePostDisplayUrls", () => {
       throw new Error(`unexpected fetch ${url}`);
     }) as unknown as typeof fetch;
 
-    const map = await resolvePostDisplayUrls([
+    const result = await resolvePostDisplayUrls([
       { id: "v1", type: "video", poster_url: "posters/v1.jpg", media_url: null },
     ]);
-    expect(map.get("v1")).toBe("https://signed.test/poster?token=z");
+    expect(result.urls.get("v1")).toBe("https://signed.test/poster?token=z");
     expect(global.fetch).toHaveBeenCalledWith("/api/posts/v1/playback?posterOnly=1");
   });
 
   it("skips voice with no poster (no mint)", async () => {
     global.fetch = vi.fn() as unknown as typeof fetch;
-    const map = await resolvePostDisplayUrls([
+    const result = await resolvePostDisplayUrls([
       { id: "voice-1", type: "voice", poster_url: null, media_url: "voice/a.m4a" },
     ]);
-    expect(map.size).toBe(0);
+    expect(result.urls.size).toBe(0);
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  // ENG-815 — `slideCount` rides in on the SAME batch response as the url, so a
+  // carousel can draw its dots before any further slide is minted.
+  it("carries a batch item's slideCount into slideCounts", async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: {
+          items: [{ postId: "p1", mediaUrl: "https://signed.test/p1?token=a", slideCount: 4 }],
+          expiresAt: "x",
+        },
+      }),
+    })) as unknown as typeof fetch;
+
+    const result = await resolvePostDisplayUrls([
+      { id: "p1", type: "photo", media_url: "media/p1.jpg", poster_url: null },
+    ]);
+    expect(result.urls.get("p1")).toBe("https://signed.test/p1?token=a");
+    expect(result.slideCounts.get("p1")).toBe(4);
+  });
+
+  it("an item with no slideCount lands as 1 — the legacy single-photo case", async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: { items: [{ postId: "p1", mediaUrl: "https://signed.test/p1?token=a" }], expiresAt: "x" },
+      }),
+    })) as unknown as typeof fetch;
+
+    const result = await resolvePostDisplayUrls([
+      { id: "p1", type: "photo", media_url: "media/p1.jpg", poster_url: null },
+    ]);
+    expect(result.slideCounts.get("p1")).toBe(1);
+  });
+
+  // A bad count must cost the carousel, never the photo: anything that is not
+  // a whole number >= 1 degrades to 1 rather than drawing a broken pager.
+  it.each([0, -3, "7", null, NaN])("a bogus slideCount (%p) lands as 1", async (bogus) => {
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: {
+          items: [{ postId: "p1", mediaUrl: "https://signed.test/p1?token=a", slideCount: bogus }],
+          expiresAt: "x",
+        },
+      }),
+    })) as unknown as typeof fetch;
+
+    const result = await resolvePostDisplayUrls([
+      { id: "p1", type: "photo", media_url: "media/p1.jpg", poster_url: null },
+    ]);
+    expect(result.slideCounts.get("p1")).toBe(1);
   });
 });

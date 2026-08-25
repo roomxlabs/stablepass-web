@@ -254,13 +254,40 @@ describe("FollowingScreen — ENG-613 view model + Follow pill", () => {
     expect(document.querySelector(".post-badge")).toBeNull();
   });
 
-  // The feed post's trainer (`G. Waterhouse`) is NOT in TRAINER_FOLLOWS, which
-  // only holds Chris Waller — exactly the followed-horse-unfollowed-trainer case.
-  it("offers the pill for a post whose trainer is not followed", async () => {
+  // ROUND 6 / ENG-761 item 4 — the Following screen offers NO Follow pill,
+  // ever, not even here: a post surfaced via a FOLLOWED horse (Mahogany) whose
+  // trainer (`G. Waterhouse`) is itself unfollowed (only Chris Waller is in
+  // TRAINER_FOLLOWS) — exactly the case row 5's pill used to cover pre-round-6.
+  // `canFollowTrainer()` is now a constant `false` and PostCard is never given
+  // `canFollow`/`onFollow` on this screen, by design (see following-screen.tsx).
+  it("shows no pill even for a post whose trainer is unfollowed — Following never offers Follow", async () => {
     render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
     await screen.findByText("Mahogany");
 
-    expect(await screen.findByRole("button", { name: "Follow G. Waterhouse" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Follow / })).not.toBeInTheDocument();
+  });
+
+  // ROUND 6 / ENG-761 item 1 — `post.label` (ENG-738's 13 presets, or null)
+  // read at the DATA LAYER: the row carries it, the mapper puts it on the view
+  // model, and the card draws it as the `.post-badge` pill.
+  it("puts post.label on the view model and renders it as the pill", async () => {
+    feedPosts = [{ ...FEED_POSTS[0], label: "Race Replay" }];
+
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    const badge = document.querySelector(".post-badge");
+    expect(badge).not.toBeNull();
+    expect(badge!.textContent).toBe("Race Replay");
+  });
+
+  it("renders no pill when the row's label is null", async () => {
+    feedPosts = [{ ...FEED_POSTS[0], label: null }];
+
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    expect(document.querySelector(".post-badge")).toBeNull();
   });
 
   // A walled member is shown no content at all, so an "absent pill" assertion
@@ -280,6 +307,9 @@ describe("FollowingScreen — ENG-613 view model + Follow pill", () => {
   });
 });
 
+// ===========================================================================
+// ENG-799 — post-media mint via BFF (no client createSignedUrls)
+// ===========================================================================
 describe("FollowingScreen — ENG-799 post-media mint", () => {
   it("makes exactly one POST /api/posts/media for a photo page", async () => {
     feedPosts = [
@@ -320,5 +350,90 @@ describe("FollowingScreen — ENG-799 post-media mint", () => {
     await screen.findByText("Mahogany");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(container.querySelector(".post-media-web img")).toBeNull();
+  });
+});
+
+// ===========================================================================
+// ENG-762 / ENG-815 — the multi-photo carousel, rendered through
+// FollowingScreen's REAL mapper. Not a hand-built FeedPost/PostCard render:
+// bypassing the mapper is exactly the bug class ENG-772 exists to catch.
+// `slideCount` now rides in on the SAME /api/posts/media batch the ENG-799
+// mint tests above already stub, and slides 1+ mint one at a time by
+// `{ postId, slideIndex }` through that same route (ENG-809 decision 2) —
+// there is no more client-side `post_media` read to mock.
+// ===========================================================================
+describe("FollowingScreen — ENG-762 multi-photo carousel", () => {
+  function fetchWithCarousel(slideCount: number) {
+    feedPosts = [
+      { id: "p1", horse_id: "fh1", type: "photo", body: "Trackwork.", media_url: "media/p1.jpg", poster_url: null, watermarked: false, like_count: 3, published_at: "2026-07-10T00:00:00.000Z" },
+    ];
+    return vi.fn((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/feed/seen")) return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
+      if (url === "/api/posts/media") {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        if ("postId" in body) {
+          // Slide N minted by index (usePostSlides), never a batch of ids.
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              data: {
+                postId: body.postId,
+                slideIndex: body.slideIndex,
+                mediaUrl: `https://sb.local/${body.postId}-${body.slideIndex}.jpg`,
+                expiresAt: "2026-08-01T00:00:00.000Z",
+              },
+            }),
+          });
+        }
+        // `slideCount` rides in on the SAME batch as slide 0's url, which is
+        // what lets the dots be right before any further slide is minted.
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              items: [{ postId: "p1", mediaUrl: "https://sb.local/p1-0.jpg", slideCount }],
+              expiresAt: "2026-08-01T00:00:00.000Z",
+            },
+          }),
+        });
+      }
+      if (url.startsWith("/api/feed/following")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: feedPosts, meta: { nextCursor: null, hasMore: false } }) });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    });
+  }
+
+  it("renders the multi-photo carousel (ENG-762 / ENG-815)", async () => {
+    const fetchMock = fetchWithCarousel(3);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    expect(screen.getAllByTestId("photo-slide")).toHaveLength(3);
+    expect(screen.getByTestId("photo-dots").querySelectorAll("button")).toHaveLength(3);
+    expect(screen.getByTestId("media-photo-count")).toHaveTextContent("1/3");
+
+    // WHICH IDS the screen actually asked for, on the SAME batch that carries
+    // slideCount — the ENG-772 silent-drop class, moved onto the mint path.
+    const mediaCalls = fetchMock.mock.calls.filter((c) => String(c[0]) === "/api/posts/media");
+    const batch = mediaCalls
+      .map((c) => JSON.parse(String(c[1]?.body)))
+      .find((b) => "postIds" in b);
+    expect(batch).toEqual({ postIds: ["p1"] });
+  });
+
+  it("renders no carousel for a single-photo post (ENG-762 / ENG-815)", async () => {
+    global.fetch = fetchWithCarousel(1) as unknown as typeof fetch;
+
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    expect(screen.queryByTestId("photo-dots")).toBeNull();
+    expect(screen.queryByTestId("photo-track")).toBeNull();
   });
 });

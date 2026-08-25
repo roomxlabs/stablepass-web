@@ -375,6 +375,31 @@ describe("ExploreFeed — ENG-613 view model + Follow pill", () => {
     expect(document.querySelector(".post-panel-foot")!.textContent).toContain("Waller Racing · Rosehill");
   });
 
+  // ROUND 6 / ENG-761 item 1 — `post.label` (ENG-738's 13 presets, or null)
+  // read at the DATA LAYER: the row carries it, the mapper puts it on the view
+  // model, and the card draws it as the `.post-badge` pill.
+  it("puts post.label on the view model and renders it as the pill", async () => {
+    mockTables();
+    global.fetch = feedWith([{ id: "p1", horse_id: "h1", type: "photo", title: null, label: "Race Replay", body: "x", media_url: null, poster_url: null, aspect_ratio: null, watermarked: false, like_count: 1, published_at: "2026-07-10T00:00:00.000Z" }]) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    const badge = document.querySelector(".post-badge");
+    expect(badge).not.toBeNull();
+    expect(badge!.textContent).toBe("Race Replay");
+  });
+
+  it("renders no pill when the row's label is null", async () => {
+    mockTables();
+    global.fetch = feedWith([{ id: "p1", horse_id: "h1", type: "photo", title: null, label: null, body: "x", media_url: null, poster_url: null, aspect_ratio: null, watermarked: false, like_count: 1, published_at: "2026-07-10T00:00:00.000Z" }]) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    expect(document.querySelector(".post-badge")).toBeNull();
+  });
+
   it("offers the Follow pill when the viewer follows nobody", async () => {
     mockTables({ follows: [] });
     global.fetch = feedWith([{ id: "p1", horse_id: "h1", type: "photo", title: null, body: "x", media_url: null, poster_url: null, aspect_ratio: null, watermarked: false, like_count: 1, published_at: "2026-07-10T00:00:00.000Z" }]) as unknown as typeof fetch;
@@ -630,5 +655,111 @@ describe("ExploreFeed — ENG-799 post-media mint", () => {
     render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={true} />);
     expect(await screen.findByText(/your access has paused/i)).toBeInTheDocument();
     expect(screen.queryByText("Mahogany")).not.toBeInTheDocument();
+  });
+});
+
+// ===========================================================================
+// ENG-762 / ENG-815 — the multi-photo carousel, rendered through ExploreFeed's
+// REAL mapper. Not a hand-built FeedPost/PostCard render: bypassing the mapper
+// is exactly the bug class ENG-772 exists to catch. `slideCount` now rides in
+// on the SAME /api/posts/media batch the ENG-799 mint tests above already
+// stub, and slides 1+ mint one at a time by `{ postId, slideIndex }` through
+// that same route (ENG-809 decision 2) — there is no more client-side
+// `post_media` read to mock.
+// ===========================================================================
+describe("ExploreFeed — ENG-762 multi-photo carousel", () => {
+  const CAROUSEL_POSTS = [
+    { ...POSTS[0], media_url: "media/p1.jpg", poster_url: null },
+    { ...POSTS[1], media_url: "media/p2.jpg", poster_url: null },
+  ];
+
+  beforeEach(() => {
+    fromMock.mockReset();
+    fromMock.mockImplementation((table: string) => {
+      if (table === "horse") return chainable({ data: HORSES, error: null });
+      return chainable({ data: [], error: null });
+    });
+  });
+
+  function fetchWithCarousel(slideCount: number) {
+    return vi.fn((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/feed/seen")) {
+        return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
+      }
+      if (url === "/api/posts/media") {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        if ("postId" in body) {
+          // Slide N minted by index (usePostSlides), never a batch of ids.
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              data: {
+                postId: body.postId,
+                slideIndex: body.slideIndex,
+                mediaUrl: `https://sb.local/${body.postId}-${body.slideIndex}.jpg`,
+                expiresAt: "2026-08-01T00:00:00.000Z",
+              },
+            }),
+          });
+        }
+        // `slideCount` rides in on the SAME batch as slide 0's url, which is
+        // what lets the dots be right before any further slide is minted.
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              items: [
+                { postId: "p1", mediaUrl: "https://sb.local/p1-0.jpg", slideCount },
+                { postId: "p2", mediaUrl: "https://sb.local/p2.jpg" },
+              ],
+              expiresAt: "2026-08-01T00:00:00.000Z",
+            },
+          }),
+        });
+      }
+      if (url.startsWith("/api/feed")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ data: CAROUSEL_POSTS, meta: { nextCursor: null, hasMore: false } }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    });
+  }
+
+  it("renders the multi-photo carousel (ENG-762 / ENG-815)", async () => {
+    const fetchMock = fetchWithCarousel(3);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    expect(screen.getAllByTestId("photo-slide")).toHaveLength(3);
+    expect(screen.getByTestId("photo-dots").querySelectorAll("button")).toHaveLength(3);
+    expect(screen.getByTestId("media-photo-count")).toHaveTextContent("1/3");
+
+    // WHICH IDS the screen actually asked for, on the SAME batch that carries
+    // slideCount — the ENG-772 silent-drop class, moved onto the mint path. A
+    // mapper that asked the batch for the wrong ids would still pass every
+    // assertion above, since the fixture answers unconditionally.
+    const mediaCalls = fetchMock.mock.calls.filter((c) => String(c[0]) === "/api/posts/media");
+    const batch = mediaCalls
+      .map((c) => JSON.parse(String(c[1]?.body)))
+      .find((b) => "postIds" in b);
+    expect(batch).toEqual({ postIds: ["p1", "p2"] });
+  });
+
+  it("renders no carousel for a single-photo post (ENG-762 / ENG-815)", async () => {
+    global.fetch = fetchWithCarousel(1) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    expect(screen.queryByTestId("photo-dots")).toBeNull();
+    expect(screen.queryByTestId("photo-track")).toBeNull();
   });
 });

@@ -15,26 +15,16 @@ import { ReactionBar } from "@/components/reaction-bar";
 import { RaceDayBand } from "@/components/race-day-band";
 import { TrainerCard } from "@/components/trainer-card";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { signedPosterFor } from "@/lib/storage/photos";
-import { PostMediaError, resolvePostDisplayUrls } from "@/lib/api/post-media";
-import type { FeedPost, PostMedia, ReactionEmoji, RaceDayEntry, TrainerSummary } from "@/components/types";
+import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@/lib/api/post-media";
+import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
+import type { FeedPost, ReactionEmoji, RaceDayEntry, TrainerSummary } from "@/components/types";
+import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 
 const LIMIT = 10;
 
 // Bare be `post` row shape (no horse/trainer names — see module comment).
-type PostRow = {
-  id: string;
-  horse_id: string;
-  type: PostMedia["type"];
-  title: string | null;
-  body: string | null;
-  media_url: string | null;
-  poster_url: string | null;
-  aspect_ratio: number | null;
-  watermarked: boolean;
-  like_count: number;
-  published_at: string;
-};
+// Pinned by test/explore-feed.test.tsx.
+type PostRow = PostIntrinsicRow & { horse_id: string };
 
 // `id` for the Follow pill (a name is not a key), `stable_name`/`location` for the
 // STABLE UPDATE panel footer. Stable identity only — there is no owner field here
@@ -76,18 +66,6 @@ const Bell = () => (
     <path d="M10 20a2 2 0 0 0 4 0" />
   </svg>
 );
-
-export function relativeTime(iso: string | null): string {
-  if (!iso) return "";
-  const ms = Date.now() - new Date(iso).getTime();
-  const mins = Math.max(0, Math.round(ms / 60000));
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
-}
 
 function formatClock(iso: string): string {
   const d = new Date(iso);
@@ -189,48 +167,35 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
       const horseById = new Map(((horseRows ?? []) as HorseRow[]).map((h) => [h.id, h]));
       const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
       const mySet = new Set(((bookmarkRows ?? []) as BookmarkRow[]).map((b) => b.post_id));
-      // Photos via POST /api/posts/media; video posters via playback?posterOnly=1.
-      // Absolute URLs pass through. A 402 surfaces the AccessWall (guardrail 3).
-      let postMedia: Map<string, string>;
+      // Photos + their slide counts via ONE POST /api/posts/media; video posters
+      // via playback?posterOnly=1. Absolute URLs pass through. A 402 surfaces the
+      // AccessWall (guardrail 3). `slideCounts` rides in on the same batch, which
+      // is what lets a carousel draw the right dots before it mints a thing.
+      let media: PostDisplayMedia;
       try {
-        postMedia = await resolvePostDisplayUrls(rows);
+        media = await resolvePostDisplayUrls(rows);
       } catch (e) {
         if (e instanceof PostMediaError && e.reason === "gated") {
           setGated(true);
           return;
         }
-        postMedia = new Map();
+        media = { urls: new Map(), slideCounts: new Map() };
       }
 
+      const intrinsics = { signedMedia: media.urls, slideCountByPost: media.slideCounts, reactionByPost: myReaction };
       const mapped: FeedPost[] = rows.map((r) => {
         const horse = horseById.get(r.horse_id);
         const trainer = one(horse?.trainer ?? null);
         return {
-          id: r.id,
+          ...postIntrinsics(r, intrinsics),
           horseId: r.horse_id,
-          horseName: horse?.display_name ?? "Unknown horse",
+          // Title-cased and (AUS)-stripped for display; the raw value stays on
+          // the row for keys and comparisons (ENG-761 item 6).
+          horseName: displayHorseNameOrEmpty(horse?.display_name) || "Unknown horse",
           trainerName: trainer?.name ?? "Stablepass",
           trainerId: trainer?.id ?? null,
           stableName: trainer?.stable_name ?? null,
           stableLocation: trainer?.location ?? null,
-          postedAgo: relativeTime(r.published_at),
-          title: r.title,
-          body: r.body,
-          // `aspectRatio` is RAW here. `resolveAspect` (post-card) owns the clamp,
-          // so exactly one place decides what an unusable value becomes. The
-          // `typeof` guard is load-bearing, not belt-and-braces: `'NaN'::numeric`
-          // passes the be's `CHECK (aspect_ratio > 0)` and `to_json` serialises it
-          // as the QUOTED string "NaN", which would otherwise widen a string into
-          // a field typed `number | null`.
-          media: {
-            type: r.type,
-            posterUrl: signedPosterFor(r, postMedia),
-            duration: null,
-            aspectRatio: typeof r.aspect_ratio === "number" ? r.aspect_ratio : null,
-          },
-          watermarked: r.watermarked,
-          count: r.like_count,
-          reacted: myReaction.get(r.id) ?? null,
           bookmarked: mySet.has(r.id),
         };
       });
@@ -276,7 +241,7 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
             if (!horse) continue;
             entries.push({
               horseId: horse.id,
-              horseName: horse.display_name,
+              horseName: displayHorseNameOrEmpty(horse.display_name),
               info: `${r.venue ?? "TBC"} R${r.race_number ?? "?"} · ${r.race_class ?? ""} · ${r.distance_m ?? "?"}m`,
               when: raceWhen(r.scheduled_at),
             });
