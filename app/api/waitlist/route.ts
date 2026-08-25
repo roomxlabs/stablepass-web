@@ -60,8 +60,16 @@
  * back with `"details": "Failing row contains (…, not-an-email, null, …)"` —
  * the table's whole column list and order, echoed to an anonymous caller. The
  * `error` binding below is deliberately typed as `{ code?: string }` and nothing
- * else, so `details` and `message` are not merely unused but unreachable: the
- * only thing that can ever leave this handler is our own fixed copy.
+ * else, so `details` and `message` cannot be read without first widening that
+ * type. Treat the type as the FIRST barrier, not the only one -- widening it is
+ * a one-word edit that typechecks cleanly, so the real guard is the test: case 9
+ * in test/waitlist-route.test.ts drives the 500 branch with a populated
+ * `details` and asserts the failing row reaches neither the body nor the log.
+ *
+ * Note WHICH branch that is. The 23514 path answers through `rejectEmail()`,
+ * whose envelope is a fixed literal, so nothing can escape there even
+ * deliberately; every OTHER error, including a definer-unmasked `details`,
+ * arrives at the generic 500 below. That is the branch worth guarding.
  *
  * ── NO ENUMERATION THROUGH THIS ROUTE ────────────────────────────────────────
  * A duplicate answers byte-identically to a fresh join — now because the
