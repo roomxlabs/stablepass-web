@@ -2,12 +2,19 @@
 
 // post-card — the shared feed/profile post: head (horse/trainer byline + optional
 // race badge), media (photo, or a video with a play button), the watermark overlay
-// when `watermarked`, body, and the reaction bar. Presentational + callback-driven;
-// it never fetches (the consumer supplies data + wires reactions/bookmark/play).
+// when `watermarked`, body, and the reaction bar. Callback-driven: the consumer
+// supplies the data and wires reactions/bookmark/play.
+//
+// One exception to "never fetches" (ENG-813): the media <img> is PostMediaImage,
+// which on an error re-mints THAT post's signed URL once before falling back to
+// the placeholder. The card still owns no page-level fetching, and the
+// subscription gate still lives on the screen, not here — a re-mint that comes
+// back 402 renders the placeholder, never gated bytes.
 import type { CSSProperties } from "react";
 import { ReactionBar } from "./reaction-bar";
 import { PostOverlay } from "./post-overlay";
 import { FollowPill } from "./follow-pill";
+import { PostMediaImage } from "./post-media-image";
 import type { FeedPost, PostMedia, ReactionEmoji } from "./types";
 
 /**
@@ -229,12 +236,7 @@ export function PostCard({ post, viewerId, onReact, onBookmark, onPlay, canFollo
 
       {hasMedia && (
         <div {...mediaBox}>
-          {post.media.posterUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element -- arbitrary Storage/Mux poster URL, cover-fit
-            <img src={post.media.posterUrl} alt="" />
-          ) : (
-            <div style={{ width: "100%", height: "100%" }} />
-          )}
+          <PostMediaImage postId={post.id} src={post.media.posterUrl} video={isVideo} />
           {isReel && (
             /* THE REEL HEADER — the card's identity on a top scrim, with the
                Follow pill IN the row next to the name (mobile's 18 Aug
