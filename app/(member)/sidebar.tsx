@@ -14,7 +14,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { Wordmark, BrandMark } from "@/components/wordmark";
 
-type IconName = "home" | "user" | "horseshoe" | "heart" | "bookmark" | "bell" | "account";
+type IconName = "home" | "user" | "horseshoe" | "heart" | "tag" | "bookmark" | "bell" | "account";
 
 function Icon({ name }: { name: IconName }) {
   const paths: Record<IconName, React.ReactNode> = {
@@ -32,6 +32,14 @@ function Icon({ name }: { name: IconName }) {
       </>
     ),
     heart: <path d="M12 20s-7-4.5-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.5-7 10-7 10Z" />,
+    // Shares — a tag (acquisition surface). No price glyph: guardrail 8 forbids
+    // betting/prices in the UI; the tab is for for-sale horses, not markets.
+    tag: (
+      <>
+        <path d="M20.6 13.4 12.4 21.6a2 2 0 0 1-2.8 0L2.4 14.4a2 2 0 0 1 0-2.8L10.6 3.4a2 2 0 0 1 1.4-.6H19a1 1 0 0 1 1 1v6.9a2 2 0 0 1-.4 1.3Z" />
+        <circle cx="16" cy="8" r="1.2" fill="currentColor" stroke="none" />
+      </>
+    ),
     bookmark: <path d="M6 3h12v18l-6-4-6 4Z" />,
     bell: <><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6Z" /><path d="M10 20a2 2 0 0 0 4 0" /></>,
     // Account = person in a ring. The ring is what distinguishes it from Trainers,
@@ -52,6 +60,9 @@ const PRIMARY_NAV: { href: string; label: string; icon: IconName }[] = [
   { href: "/trainers", label: "Trainers", icon: "user" },
   { href: "/horses", label: "Horses", icon: "horseshoe" },
   { href: "/following", label: "Following", icon: "heart" },
+  // ENG-831 — needs-design-check: Explore mockup has no Shares; icon + placement
+  // match existing primary items (after Following, before Your stable).
+  { href: "/shares", label: "Shares", icon: "tag" },
 ];
 const STABLE_NAV: { href: string; label: string; icon: IconName }[] = [
   { href: "/saved", label: "Saved", icon: "bookmark" },
