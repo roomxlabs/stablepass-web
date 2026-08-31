@@ -562,9 +562,10 @@ describe("marketing home — copy matches the frozen fixture", () => {
    */
   const WAITLIST_ADDITIONS: Record<string, string[]> = {
     "header#top.hero": [
-      // The locked pre-launch line and fine print (ENG-721 decisions 5 and 6).
-      "Join the waitlist to enable your 30-day free trial",
-      "$19 a month after your free trial",
+      // The locked pre-launch line and fine print (ENG-721 decisions 5 and 6),
+      // reworded to the $9x6 -> $19 intro offer to match the legal.
+      "Join the waitlist to lock in $9/month for your first 6 months",
+      "$9/month for 6 months, then $19/month thereafter",
       // ENG-726's form: its field label and its submit button.
       "Email address",
       "Join the waitlist",

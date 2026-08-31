@@ -55,7 +55,7 @@ export default function Hero({ joined, reason }: { joined?: string | null; reaso
                 RACING EXPERIENCE SUBSCRIPTION
               </span>
               <span className="chip-sep">·</span>
-              <b>FIRST 30 DAYS FREE</b>
+              <b>$9/MONTH FOR YOUR FIRST 6 MONTHS</b>
             </span>
             <h1>The racing experience made simple.</h1>
             <p className="hero-sub">
@@ -65,21 +65,21 @@ export default function Hero({ joined, reason }: { joined?: string | null; reaso
               place.
             </p>
             <p className="hero-price cta-trial">
-              Join for $19 per month. Cancel anytime.
+              $9/month for your first 6 months, then $19/month. Cancel anytime.
               <br />
               Follow the journey. Feel part of the action.
             </p>
             {/* The locked pre-launch line (ENG-721 decision 6), in the same
                 serif treatment the price line uses, so the hero keeps its
                 shape when the mode flips. */}
-            <p className="hero-price cta-waitlist">Join the waitlist to enable your 30-day free trial</p>
+            <p className="hero-price cta-waitlist">Join the waitlist to lock in $9/month for your first 6 months</p>
             <div className="cta-waitlist wl-mount">
               <WaitlistForm initialJoined={joined} initialReason={reason} />
             </div>
-            <p className="hero-fine cta-waitlist">$19 a month after your free trial</p>
+            <p className="hero-fine cta-waitlist">$9/month for 6 months, then $19/month thereafter</p>
             <div className="hero-actions">
               <a className="btn btn-green cta-trial" href="/start">
-                Start your free 30 day trial
+                Get the $9/month offer
               </a>
               <a className="btn btn-green cta-join" href="/start">
                 Join stablepass.
@@ -89,7 +89,7 @@ export default function Hero({ joined, reason }: { joined?: string | null; reaso
               </a>
             </div>
             <p className="hero-fine cta-trial">
-              Free for 30 days, no credit card required. $19 per month after that, cancel anytime.
+              $9/month for your first 6 months, then $19/month. Cancel anytime.
             </p>
           </div>
           <div className="hero-vis">

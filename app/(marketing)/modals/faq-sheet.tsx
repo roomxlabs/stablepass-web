@@ -33,10 +33,10 @@ const FAQS: ReadonlyArray<{ q: string; a: string }> = [
     a: "stablepass. is a monthly racing experience subscription that gives subscribers access to behind-the-scenes content from participating thoroughbred racing stables.",
   },
   {
-    q: "Is there a free trial?",
-    a: "Yes. Every new subscriber starts with a free 30 day trial. No credit card is required to start, and you can cancel any time before the trial ends without being charged.",
+    q: "Is there an introductory offer?",
+    a: "Yes. New subscribers who join on or before 30 November 2026 pay $9 per month for their first 6 months, then $19 per month thereafter. Cancel anytime.",
   },
-  { q: "How much does stablepass. cost?", a: "stablepass. subscription is $19 per month." },
+  { q: "How much does stablepass. cost?", a: "stablepass. is $9 per month for your first 6 months, then $19 per month thereafter." },
   {
     q: "What do subscribers receive?",
     a: "Subscribers receive access to stable updates, photos, videos, horse progress reports, race previews, race follow-ups, and other subscription-only racing content from participating stables.",
