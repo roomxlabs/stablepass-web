@@ -26,6 +26,13 @@ export type Trainer = {
   photo: string;
   /** Two-letter fallback disc, shown when the photograph fails to load. */
   initials: string;
+  /**
+   * The stable's real marketing bio. Present on admin-driven trainers (the
+   * `public_trainer` view); absent on the static fallback cards, which fall back
+   * to `TRAINER_BIO_PLACEHOLDER` at the render site. Still a public marketing
+   * field only — never owner or contact detail (Guardrail #2).
+   */
+  bio?: string;
 };
 
 /**

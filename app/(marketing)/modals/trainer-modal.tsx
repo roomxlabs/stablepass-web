@@ -3,11 +3,7 @@
 "use client";
 
 import Sheet from "./sheet";
-import {
-  TRAINER_BIO_PLACEHOLDER,
-  TRAINER_HORSES_PLACEHOLDER,
-  type Trainer,
-} from "../sections/trainers.data";
+import { TRAINER_BIO_PLACEHOLDER, type Trainer } from "../sections/trainers.data";
 
 /**
  * `#tr-modal` — the trainer click state (ENG-589 / W3).
@@ -22,14 +18,6 @@ import {
  * bio, which is every field `Trainer` has. There is no owner or contact detail
  * in scope to leak.
  */
-
-/**
- * Kept VERBATIM from v2.6 at the ticket's instruction. It describes a trainer
- * page that does not exist in this epic, but it is client-signed-off copy and
- * the real page arrives with the admin-CMS epic. Not ours to reword.
- */
-export const TRAINER_MODAL_NOTE =
-  "On the live site this opens the trainer's own page, where you can see every horse they have nominated and follow the stable.";
 
 export type TrainerModalProps = {
   /** `null` closes it. */
@@ -59,11 +47,7 @@ export default function TrainerModal({ trainer, onClose }: TrainerModalProps) {
             <p className="trm-loc" id="trm-loc">
               {trainer.location}
             </p>
-            <span className="trm-badge" id="trm-horses">
-              {TRAINER_HORSES_PLACEHOLDER}
-            </span>
-            <p id="trm-bio">{TRAINER_BIO_PLACEHOLDER}</p>
-            <p className="trm-note">{TRAINER_MODAL_NOTE}</p>
+            <p id="trm-bio">{trainer.bio ?? TRAINER_BIO_PLACEHOLDER}</p>
           </div>
         </>
       )}

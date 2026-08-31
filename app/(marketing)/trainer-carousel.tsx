@@ -5,11 +5,7 @@
 import { useState, type KeyboardEvent } from "react";
 
 import TrainerModal from "./modals/trainer-modal";
-import {
-  TRAINER_BIO_PLACEHOLDER,
-  TRAINER_HORSES_PLACEHOLDER,
-  type Trainer,
-} from "./sections/trainers.data";
+import { TRAINER_BIO_PLACEHOLDER, type Trainer } from "./sections/trainers.data";
 import { useMarquee } from "./use-marquee";
 
 /**
@@ -117,6 +113,8 @@ type TrainerCardProps = {
  */
 function TrainerCard({ trainer, onOpen, duplicate = false }: TrainerCardProps) {
   const open = () => onOpen(trainer);
+  // Admin-driven trainers carry a real bio; the static fallback cards do not.
+  const bio = trainer.bio ?? TRAINER_BIO_PLACEHOLDER;
 
   // The source's Enter/Space handler, scoped to the card that owns it.
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
@@ -135,8 +133,7 @@ function TrainerCard({ trainer, onOpen, duplicate = false }: TrainerCardProps) {
       className="tr-card"
       onClick={open}
       data-loc={trainer.location}
-      data-horses={TRAINER_HORSES_PLACEHOLDER}
-      data-bio={TRAINER_BIO_PLACEHOLDER}
+      data-bio={bio}
       {...interaction}
     >
       <span className="tr-init">{trainer.initials}</span>
@@ -145,8 +142,7 @@ function TrainerCard({ trainer, onOpen, duplicate = false }: TrainerCardProps) {
       <div className="tr-over">
         <b>{trainer.name}</b>
         <span className="loc">{trainer.location}</span>
-        <span className="hz">{TRAINER_HORSES_PLACEHOLDER}</span>
-        <p className="bio">{TRAINER_BIO_PLACEHOLDER}</p>
+        <p className="bio">{bio}</p>
         <span className="more">Read more</span>
       </div>
     </figure>
