@@ -13,7 +13,7 @@ const STEPS = [
   {
     n: "1",
     title: "Join stablepass.",
-    body: "Start with your free 30 day trial, no credit card required. Get inside access to behind the scenes of some of the best trainers.",
+    body: "Join for $9/month for your first 6 months, then $19/month. Get inside access to behind the scenes of some of the best trainers.",
   },
   {
     n: "2",
