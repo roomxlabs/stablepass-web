@@ -111,7 +111,15 @@
   .marketing .hero-oval{position:absolute;top:-120px;right:-260px;width:900px;height:640px;border:1.5px dashed rgba(40,93,80,.22);border-radius:50%;transform:rotate(-16deg);pointer-events:none}
   .marketing .hero-oval::after{content:"";position:absolute;inset:44px;border:1.5px solid rgba(40,93,80,.1);border-radius:50%}
   .marketing .hero-in{display:grid;grid-template-columns:1.05fr .95fr;gap:64px;align-items:center;position:relative}
-  .marketing .hero-copy{display:flex;flex-direction:column;gap:24px;align-items:flex-start}
+  /* `min-width:0` is load-bearing. A grid item's automatic minimum size is its
+     min-content, not zero, so a long copy column can refuse to shrink and take
+     space from the `.95fr` visual column beside it. That is what happened when
+     the launch-offer wording landed: this column held 720px against a 556px
+     track, the visual column collapsed 504 -> 323, and `.hero-photo`
+     (`width:min(410px,88%)`) shrank with it to 297px — narrow enough to
+     disappear behind the phone, which is what Justin saw. Opting out of the
+     automatic minimum lets the declared 1.05fr/.95fr split actually hold. */
+  .marketing .hero-copy{display:flex;flex-direction:column;gap:24px;align-items:flex-start;min-width:0}
   .marketing .hero-chip{display:inline-flex;align-items:center;gap:9px;background:var(--sage);color:var(--brand);font-family:var(--mono);font-size:11px;letter-spacing:.16em;font-weight:600;padding:9px 16px;border-radius:999px}
   .marketing .hero-chip i{width:7px;height:7px;border-radius:50%;background:var(--gold)}
   .marketing .chip-l1{display:inline-flex;align-items:center;gap:9px;white-space:nowrap}
@@ -130,13 +138,12 @@
   .marketing .hero-price-sub{margin-top:6px}
   .marketing .hero-actions{display:flex;flex-wrap:wrap;gap:14px}
 
-  /* 560 in the mockup, when the hero copy was ~630px tall. Justin's 1 Sep launch-offer
-     wording added three lines, taking the copy column to ~719px — and because the photo
-     is pinned to the TOP of this box and the phone to its BOTTOM, a box shorter than the
-     phone (538px) stacked them on top of each other and buried the photograph
-     ("You covered over the other photo on the website"). Sizing the box to the copy puts
-     the phone back over the photo's lower corner, which is the mockup's composition. */
-  .marketing .hero-vis{position:relative;min-height:720px}
+  /* Back to the mockup's 560. #76 raised this to 720 to pull the phone down off the
+     photograph, but that was treating the symptom: the photo had been squeezed to
+     297px wide by the grid (see `.hero-copy{min-width:0}` above), so no amount of
+     vertical separation was going to make it read. With the width restored, the
+     mockup's own value composes correctly again. */
+  .marketing .hero-vis{position:relative;min-height:560px}
   .marketing .hero-photo{position:absolute;right:0;top:14px;width:min(410px,88%);border-radius:26px;overflow:hidden;transform:rotate(2.2deg);box-shadow:0 34px 70px rgba(30,43,38,.22)}
   .marketing .hero-photo img{width:100%;aspect-ratio:4/4.7;object-fit:cover}
   .marketing .hero-vis .phone{position:absolute;left:0;bottom:0;z-index:3}
