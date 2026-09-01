@@ -33,6 +33,16 @@ export type Trainer = {
    * field only — never owner or contact detail (Guardrail #2).
    */
   bio?: string;
+  /**
+   * The stable's own website, shown as a link under the bio.
+   *
+   * Absent on the static fallback cards, and absent for any trainer whose
+   * `website_url` the backend refused to publish — the `public_trainer` view
+   * only emits absolute http(s), so a `javascript:`/`data:`/malformed value
+   * arrives as an empty string and is dropped in the mapper. The render sites
+   * therefore never have to re-validate the scheme.
+   */
+  website?: string;
 };
 
 /**

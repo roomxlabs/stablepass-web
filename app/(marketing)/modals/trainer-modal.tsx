@@ -48,6 +48,20 @@ export default function TrainerModal({ trainer, onClose }: TrainerModalProps) {
               {trainer.location}
             </p>
             <p id="trm-bio">{trainer.bio ?? TRAINER_BIO_PLACEHOLDER}</p>
+            {/*
+              The stable's own site (Justin, 1 Sep 2026: the bios carried no
+              link). Only ever an absolute http(s) URL — `public_trainer`
+              scheme-checks it and the mapper drops whatever it refused — so
+              there is no unsafe-href case to guard here. External, hence
+              `rel="noopener noreferrer"`.
+            */}
+            {trainer.website && (
+              <p className="trm-site">
+                <a href={trainer.website} target="_blank" rel="noopener noreferrer">
+                  Visit {trainer.name}
+                </a>
+              </p>
+            )}
           </div>
         </>
       )}

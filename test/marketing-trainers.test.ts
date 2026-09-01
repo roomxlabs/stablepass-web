@@ -38,7 +38,10 @@ beforeEach(() => {
   orderResult.data = [];
   orderResult.error = null;
   fromMock.mockClear();
-  selectSpy.mockClear();
+  // mockReset, not mockClear: the fallback case installs an implementation that
+  // would otherwise keep firing (and blanking orderResult) in later tests. The
+  // chain ignores this spy's return value, so dropping the implementation is safe.
+  selectSpy.mockReset();
 });
 
 describe("initialsOf", () => {
@@ -64,6 +67,7 @@ describe("getMarketingTrainers", () => {
         location: "Eagle Farm, QLD",
         bio: "  A real bio from the stable.  ",
         marketing_photo_path: "trainers/2f4f.jpg",
+        website_url: "https://heathcoteracing.com.au",
       },
     ];
     const [t] = await getMarketingTrainers();
@@ -71,9 +75,51 @@ describe("getMarketingTrainers", () => {
       name: "Rob Heathcote",
       location: "Eagle Farm, QLD",
       bio: "A real bio from the stable.",
+      website: "https://heathcoteracing.com.au",
       photo: `${BASE}/storage/v1/object/public/marketing-photos/trainers/2f4f.jpg`,
       initials: "RH",
     });
+  });
+
+  /**
+   * The view publishes '' both for a stable with no site and for a value that
+   * failed its absolute-http(s) check, so the mapper treats '' as "no link" and
+   * the render sites never have to re-validate a scheme.
+   */
+  it("drops an empty website_url rather than carrying a blank link", async () => {
+    orderResult.data = [
+      { name: "No Site", display_name: null, location: "Nowhere", bio: null, marketing_photo_path: null, website_url: "" },
+    ];
+    const [t] = await getMarketingTrainers();
+    expect(t.website).toBeUndefined();
+  });
+
+  /**
+   * `website_url` arrives in its own backend migration. Until that is deployed,
+   * PostgREST rejects the whole request for the unknown column — so a single
+   * unconditional select would drop EVERY trainer to the static fallback. The
+   * fetch retries on the older column set instead.
+   */
+  it("falls back to the pre-website column set when the view has no website_url yet", async () => {
+    let call = 0;
+    selectSpy.mockImplementation(() => {
+      call += 1;
+      if (call === 1) {
+        orderResult.data = null;
+        orderResult.error = { message: 'column public_trainer.website_url does not exist' };
+      } else {
+        orderResult.data = [
+          { name: "Jack Bruce", display_name: null, location: "Eagle Farm", bio: null, marketing_photo_path: null },
+        ];
+        orderResult.error = null;
+      }
+    });
+
+    const rows = await getMarketingTrainers();
+    expect(selectSpy).toHaveBeenNthCalledWith(1, "name,display_name,location,bio,marketing_photo_path,website_url");
+    expect(selectSpy).toHaveBeenNthCalledWith(2, "name,display_name,location,bio,marketing_photo_path");
+    expect(rows.map((r) => r.name)).toEqual(["Jack Bruce"]);
+    expect(rows[0].website).toBeUndefined();
   });
 
   it("never selects or exposes the horses field (Guardrail #2: trainer info only)", async () => {
@@ -81,7 +127,7 @@ describe("getMarketingTrainers", () => {
       { name: "X", display_name: "Danny Williams", location: "Goulburn", bio: null, marketing_photo_path: "trainers/x.png" },
     ];
     const [t] = await getMarketingTrainers();
-    expect(selectSpy).toHaveBeenCalledWith("name,display_name,location,bio,marketing_photo_path");
+    expect(selectSpy).toHaveBeenCalledWith("name,display_name,location,bio,marketing_photo_path,website_url");
     expect(t).not.toHaveProperty("horses");
   });
 

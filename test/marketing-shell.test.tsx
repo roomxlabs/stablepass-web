@@ -442,7 +442,20 @@ if (MOCKUP) {
 
     // `:root`, `body`, `html` and the `*` reset are the documented exceptions,
     // asserted separately below. Everything else must survive untouched.
-    const EXCEPTIONS = new Set([":root", "body", "html", "*,*::before,*::after", "*"]);
+    // `.trm-site` is sanctioned, not drift: the mockup's trainer sheet had no
+    // link to the stable's own website, and Justin asked for one on 1 Sep 2026
+    // ("There are no links to the trainer's websites in their bios"). The rules
+    // style that anchor and nothing else, so they are pinned here rather than
+    // loosening the ordered diff.
+    const EXCEPTIONS = new Set([
+      ":root",
+      "body",
+      "html",
+      "*,*::before,*::after",
+      "*",
+      ".trm-site a",
+      ".trm-site a:hover",
+    ]);
     const isException = (selector: string) =>
       EXCEPTIONS.has(selector) || selector.includes(".marketing") || selector.startsWith("body:has");
 
