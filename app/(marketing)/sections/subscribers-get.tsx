@@ -56,32 +56,32 @@ const TILES = [
 
 const APP_SCREENS: AppScreen[] = [
   {
-    src: "/marketing/2abf5618.jpg",
+    src: "/marketing/d6e62668.jpg",
     alt: "stablepass app: a written update posted by the trainer",
     caption: "Stable updates",
   },
   {
-    src: "/marketing/1c515ac1.jpg",
+    src: "/marketing/2bbf844d.jpg",
     alt: "stablepass app: a photo update posted from the stable",
     caption: "Photos from the stable",
   },
   {
-    src: "/marketing/df701113.jpg",
+    src: "/marketing/920fdd8c.jpg",
     alt: "stablepass app: a trackwork update with the morning's gallop times",
     caption: "Training & trackwork",
   },
   {
-    src: "/marketing/8c0fa420.jpg",
+    src: "/marketing/371330c2.jpg",
     alt: "stablepass app: the horses you follow and where each one is up to",
     caption: "Horse progress reports",
   },
   {
-    src: "/marketing/daa70248.jpg",
+    src: "/marketing/0d9afc88.jpg",
     alt: "stablepass app: horse profile with the next race card",
     caption: "Race previews",
   },
   {
-    src: "/marketing/42017d50.jpg",
+    src: "/marketing/9cb6314a.jpg",
     alt: "stablepass app: a short video posted from the stable",
     caption: "Videos & short clips",
   },
@@ -90,12 +90,12 @@ const APP_SCREENS: AppScreen[] = [
     // asset showed a market price there, which guardrail #8 does not allow to be
     // rendered as product UI. Do not "restore" the older file to match the live
     // preview, which is still serving v2.6.
-    src: "/marketing/3334430f.jpg",
+    src: "/marketing/3c6f4043.jpg",
     alt: "stablepass app: a race result with the stable's post-race comment",
     caption: "Post-race comments",
   },
   {
-    src: "/marketing/27c52a38.jpg",
+    src: "/marketing/94d05aaf.jpg",
     alt: "stablepass app: race day alerts for the horses you follow",
     caption: "Race day alerts",
   },

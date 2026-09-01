@@ -81,7 +81,7 @@ export default function Hero() {
                 <span className="ph-island" />
                 <img
                   className="shot"
-                  src="/marketing/42017d50.jpg"
+                  src="/marketing/9cb6314a.jpg"
                   alt="stablepass app: explore feed with a trackwork video update"
                 />
                 <span className="ph-home" />

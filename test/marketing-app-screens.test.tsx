@@ -175,6 +175,6 @@ describe("subscribers-get section", () => {
     const sources = Array.from(container.querySelectorAll(".ma-row .ma img")).map((img) =>
       img.getAttribute("src"),
     );
-    expect(sources).toContain("/marketing/3334430f.jpg");
+    expect(sources).toContain("/marketing/3c6f4043.jpg");
   });
 });

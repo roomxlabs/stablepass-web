@@ -359,7 +359,7 @@ describe("marketing home — assets", () => {
     const { container } = render(<HomeSections />);
     const sources = [...container.querySelectorAll("img")].map((img) => img.getAttribute("src"));
 
-    expect(sources).toContain("/marketing/3334430f.jpg");
+    expect(sources).toContain("/marketing/3c6f4043.jpg");
     expect(sources).not.toContain("/marketing/f70905af.jpg");
   });
 
