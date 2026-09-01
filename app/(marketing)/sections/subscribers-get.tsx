@@ -61,17 +61,17 @@ const APP_SCREENS: AppScreen[] = [
     caption: "Stable updates",
   },
   {
-    src: "/marketing/2bbf844d.jpg",
+    src: "/marketing/dadd5658.jpg",
     alt: "stablepass app: a photo update posted from the stable",
     caption: "Photos from the stable",
   },
   {
-    src: "/marketing/d3569fe7.jpg",
+    src: "/marketing/ee6a6f65.jpg",
     alt: "stablepass app: a trackwork update with the morning's gallop times",
     caption: "Training & trackwork",
   },
   {
-    src: "/marketing/371330c2.jpg",
+    src: "/marketing/3398990e.jpg",
     alt: "stablepass app: the horses you follow and where each one is up to",
     caption: "Horse progress reports",
   },
@@ -81,7 +81,7 @@ const APP_SCREENS: AppScreen[] = [
     caption: "Race previews",
   },
   {
-    src: "/marketing/9cb6314a.jpg",
+    src: "/marketing/63a46fb0.jpg",
     alt: "stablepass app: a short video posted from the stable",
     caption: "Videos & short clips",
   },

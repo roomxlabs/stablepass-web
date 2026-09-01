@@ -455,6 +455,13 @@ if (MOCKUP) {
       "*",
       ".trm-site a",
       ".trm-site a:hover",
+      // Justin's 1 Sep pricing structure: the standing $19 leads and the
+      // introductory price sits prominently under it as a "Launch Offer".
+      // The mockup only ever had a single price line, so these are sanctioned
+      // additions rather than drift.
+      ".hero-launch",
+      ".hero-price-sub",
+      ".price-launch",
     ]);
     const isException = (selector: string) =>
       EXCEPTIONS.has(selector) || selector.includes(".marketing") || selector.startsWith("body:has");

@@ -37,19 +37,21 @@ export default function Pricing() {
           <span className="eyebrow">Subscription</span>
           <h2>One simple subscription.</h2>
           <p className="lead">
-            $9/month for your first 6 months, then $19/month for behind-the-scenes racing content from participating
-            stables. Simple monthly billing. Cancel anytime.
+            $19 per month for behind-the-scenes racing content from participating stables. Simple monthly billing.
+            Cancel anytime. No lock-in contract.
           </p>
         </div>
         <div className="price-card rv" suppressHydrationWarning>
           <div className="pc-top">
             <span>STABLEPASS. SUBSCRIBER</span>
-            <span style={{ color: "#EDD9A8", fontWeight: 700 }}>INTRO OFFER</span>
+            <span style={{ color: "#EDD9A8", fontWeight: 700 }}>LAUNCH OFFER</span>
           </div>
+          {/* Standing price leads; the launch price sits prominently under it. */}
           <div className="price-num">
-            $9<small>/month</small>
+            $19<small>/month</small>
           </div>
-          <p className="price-intro">for your first 6 months, then $19/month</p>
+          <p className="price-launch">Launch Offer — $9/month for your first 6 months.</p>
+          <p className="price-intro">$19/month thereafter. Cancel anytime. No lock-in contract.</p>
           <ul className="price-list">
             {INCLUDED.map((item) => (
               <li key={item}>
@@ -67,8 +69,8 @@ export default function Pricing() {
             Start Your Subscription
           </a>
           <p className="price-fine">
-            $9/month for your first 6 months, then $19/month. stablepass. provides content access and racing
-            experiences only.
+            $9/month for your first 6 months when you sign up on or before 30 November 2026. stablepass. provides
+            content access and racing experiences only.
           </p>
           <img className="pc-mark" src="/marketing/ec7c405b.png" alt="" aria-hidden="true" />
         </div>
