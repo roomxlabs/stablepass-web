@@ -38,7 +38,14 @@ export default function Hero() {
               <span className="chip-sep">·</span>
               <b>LAUNCH OFFER · $9/MONTH FOR YOUR FIRST 6 MONTHS</b>
             </span>
-            <h1>The racing experience made simple.</h1>
+            {/* Justin, 1 Sep: "Experience needs to be on the second line." The
+                break is explicit because `text-wrap: balance` otherwise pulls
+                "experience" up onto the first line at desktop widths. */}
+            <h1>
+              The racing
+              <br />
+              experience made simple.
+            </h1>
             <p className="hero-sub">
               Get closer to the horse, stables and stories in thoroughbred racing with behind-the-scenes updates,
               photos, videos, race previews and stable content from participating trainers. stablepass. gives
@@ -51,7 +58,9 @@ export default function Hero() {
               rather than replacing it — so the $19 is what a subscriber reads
               as the real price and the $9 is plainly temporary.
             */}
-            <p className="hero-price">$19 per month</p>
+            {/* Justin, 1 Sep: "Maybe take out the first $19 per month line" — it
+                repeated the "$19/month thereafter" line two rows below, so the
+                launch price now leads and the standing price follows it once. */}
             <p className="hero-launch">Launch Offer — $9/month for your first 6 months.</p>
             <p className="hero-price hero-price-sub">
               $19/month thereafter. Cancel anytime. No lock-in contract.

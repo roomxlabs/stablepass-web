@@ -462,6 +462,10 @@ if (MOCKUP) {
       ".hero-launch",
       ".hero-price-sub",
       ".price-launch",
+      // Same change, one knock-on: the hero visual's min-height grew from the
+      // mockup's 560px to 720px so the taller copy column does not drag the
+      // bottom-pinned phone up over the top-pinned photograph.
+      ".hero-vis",
     ]);
     const isException = (selector: string) =>
       EXCEPTIONS.has(selector) || selector.includes(".marketing") || selector.startsWith("body:has");
