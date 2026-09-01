@@ -38,13 +38,16 @@ export default function Hero() {
               <span className="chip-sep">·</span>
               <b>LAUNCH OFFER · $9/MONTH FOR YOUR FIRST 6 MONTHS</b>
             </span>
-            {/* Justin, 1 Sep: "Experience needs to be on the second line." The
-                break is explicit because `text-wrap: balance` otherwise pulls
-                "experience" up onto the first line at desktop widths. */}
+            {/* Justin, 1 Sep: "Experience needs to be on the second line", then
+                "made simple needs to be a new line" — so all three breaks are
+                explicit. This is the mockup's own three-line setting; without
+                the breaks `text-wrap: balance` re-flows it to two. */}
             <h1>
               The racing
               <br />
-              experience made simple.
+              experience
+              <br />
+              made simple.
             </h1>
             <p className="hero-sub">
               Get closer to the horse, stables and stories in thoroughbred racing with behind-the-scenes updates,
