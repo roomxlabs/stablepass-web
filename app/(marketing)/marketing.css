@@ -83,7 +83,14 @@
   .marketing .btn-green{background:var(--brand);color:#fff;box-shadow:0 10px 24px rgba(40,93,80,.24)}
   .marketing .btn-green:hover{background:var(--deep)}
   .marketing .btn-ghost{border-color:#C9CFC2;color:var(--ink)}
-  .marketing .btn-ghost:hover{border-color:var(--brand);color:var(--brand)}
+  /* `background` is load-bearing here. globals.css carries its own
+     `.btn-ghost:hover{background:var(--brand-green);color:var(--cream)}` for the
+     member app; this rule is more specific and was overriding only the COLOUR,
+     so the button kept globals' green fill and painted green text on it —
+     "the See how it works tab goes all green, you lose the text" (Justin,
+     1 Sep). The marketing ghost button stays transparent on hover; only its
+     border and label take the brand colour. */
+  .marketing .btn-ghost:hover{background:transparent;border-color:var(--brand);color:var(--brand)}
   .marketing .btn-cream{background:var(--paper);color:var(--brand)}
   .marketing .btn-cream:hover{background:#fff}
 
@@ -124,11 +131,18 @@
   .marketing .hero-chip i{width:7px;height:7px;border-radius:50%;background:var(--gold)}
   .marketing .chip-l1{display:inline-flex;align-items:center;gap:9px;white-space:nowrap}
   .marketing .hero-chip b{white-space:nowrap}
-  /* phones: the one long pill becomes two stacked pills, nothing mid-wraps */
+  /* phones: the one long pill becomes two stacked pills.
+     They used to keep `white-space:nowrap` from the desktop rules, which was
+     fine for "FIRST 30 DAYS FREE" but not for the launch-offer wording — at
+     360px the second pill measured 426px and ran off the screen ("On the
+     mobile it cuts off the light green bar", Justin, 1 Sep). Each pill now
+     wraps inside the viewport instead of extending past it. */
   @media (max-width:520px){
-    .marketing .hero-chip{background:none;padding:0;flex-direction:column;align-items:flex-start;gap:7px}
+    .marketing .hero-chip{background:none;padding:0;flex-direction:column;align-items:flex-start;gap:7px;max-width:100%}
     .marketing .hero-chip .chip-sep{display:none}
-    .marketing .chip-l1,.marketing .hero-chip b{background:var(--sage);border-radius:999px;padding:9px 16px}
+    .marketing .chip-l1,.marketing .hero-chip b{background:var(--sage);border-radius:999px;padding:9px 16px;
+      white-space:normal;max-width:100%}
+    .marketing .chip-l1{flex-wrap:wrap;row-gap:2px}
   }
   .marketing .hero h1{font-size:clamp(2.6rem,5.6vw,4.3rem)}
   .marketing .hero-sub{color:var(--mut);font-size:17.5px;max-width:50ch}
@@ -580,7 +594,11 @@
   .marketing .cta:hover .cta-veil{opacity:0;transition:opacity .4s ease}
   .marketing .cta-trial-line{font-family:var(--serif);font-style:italic;font-size:1.3rem;color:#EDD9A8;
     max-height:0;opacity:0;overflow:hidden;transition:max-height .4s ease,opacity .35s ease,margin .4s ease}
-  .marketing .cta:hover .cta-trial-line{max-height:4em;opacity:1}
+  /* 4em fitted "Enjoy your free 30 day trial."; the launch-offer sentence runs to
+     four or five lines on a narrow screen and was being sliced through the middle
+     of a glyph ("There is a glitch in the text", Justin, 1 Sep). The value only
+     has to EXCEED the content for the reveal to animate, so it is generous now. */
+  .marketing .cta:hover .cta-trial-line{max-height:16em;opacity:1}
   .marketing .cta:hover .btn-cream{background:#fff}
 
   /* ── footer: socials, contact, and the important note in its enlarged home ── */
@@ -711,8 +729,10 @@
     .marketing .ma:hover,.marketing .tr-card:hover{transform:none}          /* sticky hover after a tap */
     .marketing .tr-card:hover .tr-over{opacity:1}
 
-    /* the trial line lives on the banner's hover state, which never fires here */
-    .marketing .cta-trial-line{max-height:4em;opacity:1}
+    /* the trial line lives on the banner's hover state, which never fires here.
+       This is the rule Justin's phone actually hit: 4em cut the launch-offer
+       sentence off mid-glyph, so it is raised to clear the longest wrap. */
+    .marketing .cta-trial-line{max-height:16em;opacity:1}
 
     /* trainer details, condensed, always on */
     .marketing .tr-nm{display:none}

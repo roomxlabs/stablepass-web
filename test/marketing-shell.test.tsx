@@ -467,6 +467,23 @@ if (MOCKUP) {
       // minimum is its min-content, the copy column holds 720px against a 556px
       // track, and the visual column (and with it the photograph) collapses.
       ".hero-copy",
+      // Justin's 1 Sep responsive round. The mockup was drawn around the old,
+      // shorter strings; the launch-offer wording overflows the containers it
+      // sized, so three of them are deliberately re-fitted:
+      //   .btn-ghost:hover  — pins `background:transparent`. globals.css sets a
+      //     green fill for the member app and this rule was overriding only the
+      //     colour, giving green text on green ("you lose the text").
+      //   .hero-chip / .chip-l1 / .hero-chip b  — the phone pills may wrap and
+      //     are capped to the viewport; at 360px the second pill measured 426px
+      //     and ran off screen ("it cuts off the light green bar").
+      //   .cta-trial-line  — the 4em reveal clamp sliced the longer sentence
+      //     mid-glyph ("there is a glitch in the text").
+      ".btn-ghost:hover",
+      ".hero-chip",
+      ".chip-l1,.hero-chip b",
+      ".chip-l1",
+      ".cta-trial-line",
+      ".cta:hover .cta-trial-line",
     ]);
     const isException = (selector: string) =>
       EXCEPTIONS.has(selector) || selector.includes(".marketing") || selector.startsWith("body:has");
