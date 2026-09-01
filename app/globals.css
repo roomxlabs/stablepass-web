@@ -986,6 +986,10 @@ a { color: inherit; text-decoration: none; }
 .profile-cover-web img {
   width: 100%; height: 100%;
   object-fit: cover;
+  /* Crop anchors to the TOP of the photo, not the center (Justin, 31 Aug
+     2026: the horse's head lives in the top half and a center crop chops it).
+     Mirrors the mobile horse-profile cover fix. */
+  object-position: top center;
 }
 .profile-cover-web .gradient {
   position: absolute; inset: 0;
