@@ -462,10 +462,11 @@ if (MOCKUP) {
       ".hero-launch",
       ".hero-price-sub",
       ".price-launch",
-      // Same change, one knock-on: the hero visual's min-height grew from the
-      // mockup's 560px to 720px so the taller copy column does not drag the
-      // bottom-pinned phone up over the top-pinned photograph.
-      ".hero-vis",
+      // `.hero-vis` is back on the mockup's 560px, so it no longer differs.
+      // `.hero-copy` gains `min-width:0` — without it a grid item's automatic
+      // minimum is its min-content, the copy column holds 720px against a 556px
+      // track, and the visual column (and with it the photograph) collapses.
+      ".hero-copy",
     ]);
     const isException = (selector: string) =>
       EXCEPTIONS.has(selector) || selector.includes(".marketing") || selector.startsWith("body:has");
