@@ -37,18 +37,19 @@ export default function Pricing() {
           <span className="eyebrow">Subscription</span>
           <h2>One simple subscription.</h2>
           <p className="lead">
-            Start with a free 30 day trial, no credit card required. After that stablepass. is just $19 per month for
-            behind-the-scenes racing content from participating stables. Simple monthly billing. Cancel anytime.
+            $9/month for your first 6 months, then $19/month for behind-the-scenes racing content from participating
+            stables. Simple monthly billing. Cancel anytime.
           </p>
         </div>
         <div className="price-card rv" suppressHydrationWarning>
           <div className="pc-top">
             <span>STABLEPASS. SUBSCRIBER</span>
-            <span style={{ color: "#EDD9A8", fontWeight: 700 }}>30 DAYS FREE</span>
+            <span style={{ color: "#EDD9A8", fontWeight: 700 }}>INTRO OFFER</span>
           </div>
           <div className="price-num">
-            $19<small>/month after your free trial</small>
+            $9<small>/month</small>
           </div>
+          <p className="price-intro">for your first 6 months, then $19/month</p>
           <ul className="price-list">
             {INCLUDED.map((item) => (
               <li key={item}>
@@ -60,14 +61,14 @@ export default function Pricing() {
             ))}
           </ul>
           <a className="btn cta-trial" href="/start">
-            Start your free 30 day trial
+            Get the $9/month offer
           </a>
           <a className="btn cta-join" href="/start">
             Start Your Subscription
           </a>
           <p className="price-fine">
-            Free for 30 days, no credit card required. stablepass. provides content access and racing experiences
-            only.
+            $9/month for your first 6 months, then $19/month. stablepass. provides content access and racing
+            experiences only.
           </p>
           <img className="pc-mark" src="/marketing/ec7c405b.png" alt="" aria-hidden="true" />
         </div>
