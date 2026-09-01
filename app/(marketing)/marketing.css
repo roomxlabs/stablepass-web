@@ -130,7 +130,13 @@
   .marketing .hero-price-sub{margin-top:6px}
   .marketing .hero-actions{display:flex;flex-wrap:wrap;gap:14px}
 
-  .marketing .hero-vis{position:relative;min-height:560px}
+  /* 560 in the mockup, when the hero copy was ~630px tall. Justin's 1 Sep launch-offer
+     wording added three lines, taking the copy column to ~719px — and because the photo
+     is pinned to the TOP of this box and the phone to its BOTTOM, a box shorter than the
+     phone (538px) stacked them on top of each other and buried the photograph
+     ("You covered over the other photo on the website"). Sizing the box to the copy puts
+     the phone back over the photo's lower corner, which is the mockup's composition. */
+  .marketing .hero-vis{position:relative;min-height:720px}
   .marketing .hero-photo{position:absolute;right:0;top:14px;width:min(410px,88%);border-radius:26px;overflow:hidden;transform:rotate(2.2deg);box-shadow:0 34px 70px rgba(30,43,38,.22)}
   .marketing .hero-photo img{width:100%;aspect-ratio:4/4.7;object-fit:cover}
   .marketing .hero-vis .phone{position:absolute;left:0;bottom:0;z-index:3}
