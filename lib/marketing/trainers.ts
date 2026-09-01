@@ -22,6 +22,9 @@ import { createClient } from "@supabase/supabase-js";
 
 import type { Trainer } from "@/app/(marketing)/sections/trainers.data";
 
+/** The columns every deployment of `public_trainer` has. */
+const BASE_COLUMNS = "name,display_name,location,bio,marketing_photo_path";
+
 /** Columns of `public_trainer` we actually render. `horses` is deliberately omitted. */
 type PublicTrainerRow = {
   name: string;
@@ -29,6 +32,12 @@ type PublicTrainerRow = {
   location: string | null;
   bio: string | null;
   marketing_photo_path: string | null;
+  /**
+   * Already scheme-checked by the view: absolute http(s) or an empty string.
+   * Optional here because an older deployment of `public_trainer` does not
+   * select it at all — see the fetch below.
+   */
+  website_url?: string | null;
 };
 
 /**
@@ -62,6 +71,9 @@ function mapRow(baseUrl: string, row: PublicTrainerRow): Trainer {
     name,
     location: (row.location ?? "").trim(),
     bio: row.bio?.trim() || undefined,
+    // The view publishes '' for a trainer with no site, and for anything that
+    // failed its absolute-http(s) check — both mean "no link" here.
+    website: row.website_url?.trim() || undefined,
     photo: photoUrl(baseUrl, row.marketing_photo_path),
     initials: initialsOf(name),
   };
@@ -79,13 +91,21 @@ export async function getMarketingTrainers(): Promise<Trainer[]> {
 
   try {
     const supabase = createClient(url, key, { auth: { persistSession: false } });
-    const { data, error } = await supabase
-      .from("public_trainer")
-      .select("name,display_name,location,bio,marketing_photo_path")
-      .order("display_name", { ascending: true });
+    const select = (columns: string) =>
+      supabase.from("public_trainer").select(columns).order("display_name", { ascending: true });
+
+    // `website_url` reaches the view in its own backend migration, which may not
+    // be deployed yet. PostgREST answers a request for a column the view does
+    // not have with an error and no rows, so asking for it unconditionally would
+    // drop EVERY trainer back to the static list until that migration lands.
+    // Ask for it, and fall back to the older column set on failure.
+    let { data, error } = await select(BASE_COLUMNS + ",website_url");
+    if (error || !data) ({ data, error } = await select(BASE_COLUMNS));
 
     if (error || !data) return [];
-    return (data as PublicTrainerRow[]).map((row) => mapRow(url, row)).filter((t) => t.name.length > 0);
+    return (data as unknown as PublicTrainerRow[])
+      .map((row) => mapRow(url, row))
+      .filter((t) => t.name.length > 0);
   } catch {
     return [];
   }

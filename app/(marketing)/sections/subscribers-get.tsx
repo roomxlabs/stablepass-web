@@ -66,7 +66,7 @@ const APP_SCREENS: AppScreen[] = [
     caption: "Photos from the stable",
   },
   {
-    src: "/marketing/920fdd8c.jpg",
+    src: "/marketing/d3569fe7.jpg",
     alt: "stablepass app: a trackwork update with the morning's gallop times",
     caption: "Training & trackwork",
   },
