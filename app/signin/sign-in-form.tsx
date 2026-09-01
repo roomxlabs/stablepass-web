@@ -7,6 +7,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
+import PasswordInput from "@/components/password-input";
 
 const GoogleMark = () => (
   <svg className="google-icon" viewBox="0 0 18 18" aria-hidden="true">
@@ -76,10 +77,9 @@ export function SignInForm() {
       </div>
       <div className="input-group">
         <label className="input-label" htmlFor="password">Password</label>
-        <input
+        <PasswordInput
           id="password"
           className="input"
-          type="password"
           autoComplete="current-password"
           placeholder="••••••••••"
           value={password}

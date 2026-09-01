@@ -20,6 +20,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import PasswordInput from "@/components/password-input";
 
 const MIN_PASSWORD = 8;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -291,7 +292,7 @@ export function TrialStartForm() {
 
       <div className="input-group">
         <label className="input-label" htmlFor="password">Password</label>
-        <input id="password" className="input" type="password" autoComplete="new-password"
+        <PasswordInput id="password" className="input" autoComplete="new-password"
           placeholder="At least 8 characters" minLength={MIN_PASSWORD}
           value={form.password} onChange={set("password")} required />
       </div>
