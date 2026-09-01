@@ -1,4 +1,15 @@
+import { getMarketingTrainers } from "@/lib/marketing/trainers";
+
 import HomeSections from "./sections";
+import { TRAINERS } from "./sections/trainers.data";
+
+/**
+ * ISR: the page is otherwise static, but the trainer strip now reads the
+ * admin-driven `public_trainer` view (ENG-766). Revalidate every 5 minutes so a
+ * stable toggling "Show on marketing site" appears without a redeploy. The read
+ * itself falls back to the static list, so a failed revalidation is invisible.
+ */
+export const revalidate = 300;
 
 /**
  * `/` — the public marketing home.
@@ -10,8 +21,11 @@ import HomeSections from "./sections";
  * which ENG-587 decision 4 accepts.
  *
  * Nav and footer come from the layout, so the legal routes W4 adds get the same
- * shell for free. Nothing here touches Supabase, which keeps the page static.
+ * shell for free. The trainer strip is the one admin-driven part: this reads the
+ * marketing-visible trainers server-side (under ISR) and falls back to the static
+ * list, so a backend failure leaves the signed-off page intact.
  */
-export default function MarketingHome() {
-  return <HomeSections />;
+export default async function MarketingHome() {
+  const live = await getMarketingTrainers();
+  return <HomeSections trainers={live.length > 0 ? live : TRAINERS} />;
 }

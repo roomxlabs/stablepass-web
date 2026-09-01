@@ -7,6 +7,7 @@ import ImportantNote from "./important-note";
 import Pricing from "./pricing";
 import SubscribersGet from "./subscribers-get";
 import TheApp from "./the-app";
+import { type Trainer } from "./trainers.data";
 import TrainersStrip from "./trainers-strip";
 import WhatIs from "./what-is";
 import Why from "./why";
@@ -50,7 +51,17 @@ import Why from "./why";
  * The alternative (moving the reveal script) lives in layout.tsx, which is W1's
  * file and ENG-591's live surface. This fix stays inside this ticket's own files.
  */
-export default function HomeSections() {
+/**
+ * `trainers` is threaded from the server page (`page.tsx`), which reads the
+ * admin-driven list and falls back to the static one. Omitted — as in the
+ * composition tests and any sync render — the strip uses its own static default,
+ * so this component stays synchronous and the data fetch lives at the page edge.
+ */
+export type HomeSectionsProps = {
+  trainers?: Trainer[];
+};
+
+export default function HomeSections({ trainers }: HomeSectionsProps = {}) {
   return (
     <main>
       <Hero />
@@ -60,7 +71,7 @@ export default function HomeSections() {
       <SubscribersGet />
       <Pricing />
       <Why />
-      <TrainersStrip />
+      <TrainersStrip trainers={trainers} />
       <CtaBand />
       <Faq />
       <ForTrainers />

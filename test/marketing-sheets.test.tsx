@@ -217,13 +217,11 @@ describe("trainer modal", () => {
     expect(modal.querySelector("#trm-img")).toHaveAttribute("src", trainer.photo);
   });
 
-  it("keeps the client-signed-off placeholder note verbatim", () => {
+  it("no longer shows the 'opens the trainer's own page' note (removed by request)", () => {
     const { container } = render(<TrainerCarousel trainers={TRAINERS} />);
     fireEvent.click(container.querySelector(".tr-card")!);
 
-    expect(container.querySelector(".trm-note")?.textContent).toBe(
-      "On the live site this opens the trainer's own page, where you can see every horse they have nominated and follow the stable.",
-    );
+    expect(container.querySelector(".trm-note")).toBeNull();
   });
 
   it("is closed, and renders no trainer, until a card is clicked", () => {

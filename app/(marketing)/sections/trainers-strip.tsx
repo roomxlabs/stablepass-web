@@ -32,14 +32,19 @@ import { TRAINERS, type Trainer } from "./trainers.data";
  */
 
 export type TrainersStripProps = {
-  /** Defaults to the static list; W3 and the later CMS epic pass their own. */
+  /**
+   * Defaults to the static list. `TrainersSection` passes the admin-driven list
+   * (already fallen back to the static list on an empty/failed read), and the
+   * strip tests pass their own. Presentational only — it never learns where the
+   * data came from.
+   */
   trainers?: Trainer[];
 };
 
 export default function TrainersStrip({ trainers = TRAINERS }: TrainersStripProps) {
   // No participating stables means no section at all, rather than a heading
-  // over an empty strip. Not reachable from the static list, but the list
-  // becomes admin-driven in the CMS epic.
+  // over an empty strip. `TrainersSection` never passes an empty list (it falls
+  // back to the static one), so this is reached only from an explicit test prop.
   if (trainers.length === 0) return null;
 
   // The mockup's marquee reads this count off the section to decide static vs

@@ -21,17 +21,22 @@ import path from "node:path";
  */
 
 /** Slugs that render a document of their own. */
-export const LEGAL_DOCUMENT_SLUGS = ["privacy", "terms"] as const;
+export const LEGAL_DOCUMENT_SLUGS = ["privacy", "terms", "cancellation", "acceptable-use"] as const;
 export type LegalDocumentSlug = (typeof LEGAL_DOCUMENT_SLUGS)[number];
 
-/** Slugs that exist only to redirect onto a document that does exist. */
-export const LEGAL_REDIRECT_SLUGS = ["cancellation", "acceptable-use"] as const;
+/**
+ * Slugs that exist only to redirect onto a document that does exist.
+ *
+ * `cancellation` and `acceptable-use` used to 308 onto `/legal/terms` because the
+ * stables had no distinct copy for them. Justin has since supplied the final
+ * standalone Subscription/Refund/Cancellation and Acceptable Use policies, so
+ * both are now real documents (above) with their own `content/legal/*.md`, and
+ * nothing redirects.
+ */
+export const LEGAL_REDIRECT_SLUGS = [] as const;
 export type LegalRedirectSlug = (typeof LEGAL_REDIRECT_SLUGS)[number];
 
-export const LEGAL_REDIRECTS: Readonly<Record<LegalRedirectSlug, LegalDocumentSlug>> = {
-  cancellation: "terms",
-  "acceptable-use": "terms",
-};
+export const LEGAL_REDIRECTS: Readonly<Record<LegalRedirectSlug, LegalDocumentSlug>> = {};
 
 export type LegalSlug = LegalDocumentSlug | LegalRedirectSlug;
 

@@ -23,9 +23,9 @@ export default function CtaBand() {
           <p>
             Join stablepass. and follow the stories, stables, horses, and race day moments that make racing exciting.
           </p>
-          <p className="cta-trial-line">Join stablepass. Enjoy your free 30 day trial.</p>
+          <p className="cta-trial-line">Join stablepass. $9/month for your first 6 months, then $19/month.</p>
           <a className="btn btn-cream cta-trial" href="/start">
-            Start your free 30 day trial
+            Get the $9/month offer
           </a>
           <a className="btn btn-cream cta-join" href="/start">
             Join stablepass.

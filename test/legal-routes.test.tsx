@@ -88,66 +88,6 @@ async function statusFor(slug: string): Promise<{ status: number; location?: str
   }
 }
 
-/* ── the mockup, the content's only source of truth ──────────────────── */
-
-const MOCKUP_SUFFIX = "10-marketing-site/deploy/src/mockup.html";
-function findMockup(): string | null {
-  let dir = REPO;
-  for (;;) {
-    const candidate = path.join(dir, MOCKUP_SUFFIX);
-    if (existsSync(candidate)) return candidate;
-    const parent = path.dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
-}
-const MOCKUP = findMockup();
-
-const decode = (html: string) =>
-  html
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .trim();
-
-/**
- * Slice one `<div class="sheet" id="…">` out of the mockup by counting div
- * depth. The sheets nest exactly one div (`.sheet-card`) and hold no others,
- * so this is exact rather than approximate.
- */
-function sheetHtml(mockup: string, id: string): string {
-  const at = mockup.indexOf(`id="${id}"`);
-  if (at === -1) throw new Error(`mockup has no #${id}`);
-  const start = mockup.lastIndexOf("<div", at);
-
-  let depth = 0;
-  const tag = /<(\/?)div\b/g;
-  tag.lastIndex = start;
-  for (let match = tag.exec(mockup); match; match = tag.exec(mockup)) {
-    depth += match[1] ? -1 : 1;
-    if (depth === 0) return mockup.slice(start, mockup.indexOf(">", match.index) + 1);
-  }
-  throw new Error(`#${id} is never closed`);
-}
-
-type Sheet = { title: string; banner: string; headings: string[]; paragraphs: string[] };
-
-function readSheet(id: string): Sheet {
-  const html = sheetHtml(readFileSync(MOCKUP!, "utf8"), id);
-  const paragraphs = [...html.matchAll(/<p>([\s\S]*?)<\/p>/g)].map((m) => decode(m[1]));
-  return {
-    title: decode(/<h3[^>]*>([\s\S]*?)<\/h3>/.exec(html)![1]),
-    // Decision 4: the sheet opens with a preview disclaimer. It must not ship.
-    banner: paragraphs[0],
-    headings: [...html.matchAll(/<h4>([\s\S]*?)<\/h4>/g)].map((m) => decode(m[1])),
-    paragraphs: paragraphs.slice(1),
-  };
-}
-
-const SHEET_OF: Record<string, string> = { privacy: "sheet-privacy", terms: "sheet-terms" };
-
 /* ── routing ─────────────────────────────────────────────────────────── */
 
 describe("/legal/[slug] routing", () => {
@@ -166,10 +106,12 @@ describe("/legal/[slug] routing", () => {
     expect(await statusFor(slug)).toEqual({ status: 200 });
   });
 
-  // Four slugs, two documents. No distinct cancellation or acceptable-use copy
-  // exists, and 308 (not 307) says these aliases are permanent.
-  it.each(REDIRECT_SLUGS)("308s /legal/%s onto the terms", async (slug) => {
-    expect(await statusFor(slug)).toEqual({ status: 308, location: "/legal/terms" });
+  // Four slugs, four documents now. `cancellation` and `acceptable-use` used to
+  // 308 onto the terms; Justin has since supplied the standalone Subscription/
+  // Refund/Cancellation and Acceptable Use policies, so they are real pages and
+  // nothing redirects — REDIRECT_SLUGS is empty.
+  it("has no redirect slugs left", () => {
+    expect(REDIRECT_SLUGS).toEqual([]);
   });
 
   it.each(["nonsense", "privacy-policy", "terms/extra", "PRIVACY"])(
@@ -276,23 +218,11 @@ describe("content", () => {
     }
   });
 
-  // The copy is the client's, frozen in the signed-off mockup. Anything other
-  // than the banner differing means the port drifted.
-  it.skipIf(!MOCKUP).each(DOCUMENT_SLUGS)(
-    "reproduces the mockup's %s sheet verbatim, minus the banner",
-    async (slug) => {
-      const sheet = readSheet(SHEET_OF[slug]);
-      const { container } = await renderSlug(slug);
-      const article = container.querySelector("article")!;
-
-      expect(container.querySelector("h1")?.textContent).toBe(sheet.title);
-      expect([...container.querySelectorAll("h2")].map((h) => h.textContent)).toEqual(sheet.headings);
-      for (const paragraph of sheet.paragraphs) expect(article.textContent).toContain(paragraph);
-
-      expect(sheet.banner).toMatch(/^This preview shows/);
-      expect(article.textContent).not.toContain(sheet.banner);
-    },
-  );
+  // The legal copy's source of truth moved off the signed-off mockup: Justin
+  // supplied the final standalone v4 policy documents (Terms, Privacy,
+  // Subscription/Refund/Cancellation, Acceptable Use), and `content/legal/*.md`
+  // is now transcribed verbatim from those. The old "reproduces the mockup sheet
+  // verbatim" check retired with that move — the mockup's legal sheets are stale.
 });
 
 /* ── the tiny markdown reader ────────────────────────────────────────── */
@@ -462,11 +392,13 @@ describe("guardrails", () => {
       }),
     );
 
-    // Every occurrence is a statement of what stablepass. is NOT.
+    // Any occurrence that ever appears must be a statement of what stablepass. is NOT.
     for (const hit of hits) expect(hit.sentence, hit.where).toMatch(/does not sell/i);
 
-    // And the approved set is exact.
-    expect(hits.map((hit) => hit.where)).toEqual(["content/legal/terms.md:betting"]);
+    // Justin's v4 policy documents carry NO betting vocabulary at all, so the
+    // approved set is empty. Any betting word introduced by future copy fails
+    // here and has to be re-approved by a human rather than sliding in.
+    expect(hits.map((hit) => hit.where)).toEqual([]);
   });
 
   it("adds no markdown dependency", () => {

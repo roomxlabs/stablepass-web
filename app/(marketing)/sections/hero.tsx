@@ -36,7 +36,7 @@ export default function Hero() {
                 RACING EXPERIENCE SUBSCRIPTION
               </span>
               <span className="chip-sep">·</span>
-              <b>FIRST 30 DAYS FREE</b>
+              <b>$9/MONTH FOR YOUR FIRST 6 MONTHS</b>
             </span>
             <h1>The racing experience made simple.</h1>
             <p className="hero-sub">
@@ -46,13 +46,15 @@ export default function Hero() {
               place.
             </p>
             <p className="hero-price">
-              Join for $19 per month. Cancel anytime.
+              $9/month for your first 6 months, then $19/month.
+              <br />
+              Cancel anytime.
               <br />
               Follow the journey. Feel part of the action.
             </p>
             <div className="hero-actions">
               <a className="btn btn-green cta-trial" href="/start">
-                Start your free 30 day trial
+                Get the $9/month offer
               </a>
               <a className="btn btn-green cta-join" href="/start">
                 Join stablepass.
@@ -62,7 +64,7 @@ export default function Hero() {
               </a>
             </div>
             <p className="hero-fine cta-trial">
-              Free for 30 days, no credit card required. $19 per month after that, cancel anytime.
+              $9/month for your first 6 months, then $19/month. Cancel anytime.
             </p>
           </div>
           <div className="hero-vis">
@@ -79,7 +81,7 @@ export default function Hero() {
                 <span className="ph-island" />
                 <img
                   className="shot"
-                  src="/marketing/42017d50.jpg"
+                  src="/marketing/9cb6314a.jpg"
                   alt="stablepass app: explore feed with a trackwork video update"
                 />
                 <span className="ph-home" />
