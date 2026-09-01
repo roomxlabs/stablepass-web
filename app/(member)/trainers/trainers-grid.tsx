@@ -61,9 +61,15 @@ export function TrainersGrid({ viewerId, everSubscribed }: { viewerId: string; e
 
       // horse:trainer_id returns the trainer's horses via RLS. We count only
       // shares_for_sale=false (ENG-831) so for-sale horses never inflate browse.
+      // ACTIVE ONLY (Justin, 1 Sep 2026: "there is a deleted trainer... on
+      // the website"). Admin "deletes" a trainer by flipping status to
+      // 'onboarding', and `trainer_select_sub` does NOT filter status — mobile
+      // adds this same filter in lib/browse.ts, and web never did, so removed
+      // trainers stayed listed here. All four web trainer reads carry it now.
       const { data, error: fetchError } = await sb
         .from("trainer")
         .select("id, name, display_name, stable_name, location, horses:horse!trainer_id(id, shares_for_sale)")
+        .eq("status", "active")
         .order("name");
 
       if (cancelled) return;

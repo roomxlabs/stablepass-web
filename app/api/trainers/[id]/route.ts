@@ -37,6 +37,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     .from("trainer")
     .select("id, name, display_name, stable_name, location, bio, photo_url")
     .eq("id", id)
+    .eq("status", "active") // deleted = onboarding; see trainers-grid.tsx
     .maybeSingle();
   if (!trainerRow) return fail("not_found", "Trainer not found.", 404);
   const t = trainerRow as TrainerRow;

@@ -34,7 +34,12 @@ type HorseRow = { id: string; display_name: string; racing_name: string | null; 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const sb = await supabaseServer();
-  const { data: t } = await sb.from("trainer").select("name, display_name").eq("id", id).maybeSingle();
+  const { data: t } = await sb
+    .from("trainer")
+    .select("name, display_name")
+    .eq("id", id)
+    .eq("status", "active") // deleted = onboarding; see trainers-grid.tsx
+    .maybeSingle();
   const name = t ? t.display_name || t.name : "Trainer";
   return { title: `${name} · StablePass` };
 }
@@ -63,6 +68,7 @@ export default async function TrainerProfilePage({ params }: { params: Promise<{
     .from("trainer")
     .select("id, name, display_name, stable_name, location, bio, photo_url, website_url")
     .eq("id", id)
+    .eq("status", "active") // deleted = onboarding; see trainers-grid.tsx
     .maybeSingle();
   if (!trainerRow) notFound();
   const t = trainerRow as TrainerRow;
