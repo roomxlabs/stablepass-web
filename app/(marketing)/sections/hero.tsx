@@ -36,7 +36,7 @@ export default function Hero() {
                 RACING EXPERIENCE SUBSCRIPTION
               </span>
               <span className="chip-sep">·</span>
-              <b>$9/MONTH FOR YOUR FIRST 6 MONTHS</b>
+              <b>LAUNCH OFFER · $9/MONTH FOR YOUR FIRST 6 MONTHS</b>
             </span>
             <h1>The racing experience made simple.</h1>
             <p className="hero-sub">
@@ -45,10 +45,16 @@ export default function Hero() {
               subscribers a simple way to follow real racehorses, real stables, and real racing stories, all in one
               place.
             </p>
-            <p className="hero-price">
-              $9/month for your first 6 months, then $19/month.
-              <br />
-              Cancel anytime.
+            {/*
+              Justin's wording, 1 Sep 2026: the standing price leads, and the
+              introductory price sits PROMINENTLY under it as a "Launch Offer"
+              rather than replacing it — so the $19 is what a subscriber reads
+              as the real price and the $9 is plainly temporary.
+            */}
+            <p className="hero-price">$19 per month</p>
+            <p className="hero-launch">Launch Offer — $9/month for your first 6 months.</p>
+            <p className="hero-price hero-price-sub">
+              $19/month thereafter. Cancel anytime. No lock-in contract.
               <br />
               Follow the journey. Feel part of the action.
             </p>
@@ -64,7 +70,7 @@ export default function Hero() {
               </a>
             </div>
             <p className="hero-fine cta-trial">
-              $9/month for your first 6 months, then $19/month. Cancel anytime.
+              $9/month for your first 6 months when you sign up on or before 30 November 2026.
             </p>
           </div>
           <div className="hero-vis">
@@ -81,7 +87,7 @@ export default function Hero() {
                 <span className="ph-island" />
                 <img
                   className="shot"
-                  src="/marketing/9cb6314a.jpg"
+                  src="/marketing/63a46fb0.jpg"
                   alt="stablepass app: explore feed with a trackwork video update"
                 />
                 <span className="ph-home" />

@@ -40,8 +40,14 @@
  *
  * CONFIRMED 17 Aug 2026: use Justin's own address. If per-subject aliases are
  * created later, this becomes a three-entry map and nothing else changes.
+ *
+ * UPDATED 1 Sep 2026: the shared inbox now exists, and Justin asked for every
+ * contact point on the site to go to it ("change all the email correspondence
+ * in the website to go to hello@stablepass.co"). This one constant drives the
+ * footer's contact links and the FAQ sheet, so the whole site moves together —
+ * and it matches the address his own v4 policy documents already publish.
  */
-export const CONTACT_EMAIL = "justin@stablepass.co";
+export const CONTACT_EMAIL = "hello@stablepass.co";
 
 /**
  * Build the `mailto:` for a trigger's `data-subject`.
