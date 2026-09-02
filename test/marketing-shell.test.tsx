@@ -114,6 +114,43 @@ describe("marketing nav", () => {
 });
 
 describe("marketing footer", () => {
+  /**
+   * The social icons shipped twice: ENG-600 removed them because they were
+   * `href="#"` placeholders, and the delegate in `faq-sheet.tsx` swallowed
+   * clicks on `[data-social]` so a placeholder could not jump the page to the
+   * top. When the real accounts arrived the markup came back but that delegate
+   * did not, so every icon rendered correctly and opened nothing.
+   *
+   * This pins both halves: real outbound hrefs, AND no surviving handler that
+   * cancels the click.
+   */
+  it("gives every social icon a real outbound link", () => {
+    const { container } = render(<MarketingFooter />);
+    const links = [...container.querySelectorAll<HTMLAnchorElement>(".foot-social a")];
+    expect(links.map((a) => a.dataset.social)).toEqual(["Instagram", "Facebook", "X"]);
+
+    for (const a of links) {
+      const href = a.getAttribute("href") ?? "";
+      expect(href, `${a.dataset.social} href`).toMatch(/^https:\/\//);
+      expect(href, `${a.dataset.social} is not a placeholder`).not.toBe("#");
+      // opened in a new tab, and never handing the opener to the destination
+      expect(a.getAttribute("target")).toBe("_blank");
+      expect(a.getAttribute("rel") ?? "").toContain("noopener");
+      expect(a.getAttribute("aria-label") ?? "").toContain(a.dataset.social!);
+      expect(a.querySelector("svg"), `${a.dataset.social} icon`).not.toBeNull();
+    }
+  });
+
+  it("does not cancel a click on a social icon", () => {
+    const { container } = render(<MarketingFooter />);
+    const link = container.querySelector<HTMLAnchorElement>(".foot-social a")!;
+    // jsdom would follow the href; assert only that nothing called preventDefault,
+    // which is exactly what the removed [data-social] delegate used to do.
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+    link.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
   it("renders the brand line and all three columns", () => {
     const { container } = render(<MarketingFooter />);
     const headings = [...container.querySelectorAll(".foot-col h4")].map((h) => h.textContent);

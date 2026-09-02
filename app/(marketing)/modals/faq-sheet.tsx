@@ -91,15 +91,13 @@ export default function FaqSheet() {
       if (event.defaultPrevented || !(event.target instanceof Element)) return;
 
       /**
-       * The source's last delegate branch, ported: the footer's social icons
-       * are `<a href="#">` placeholders until real accounts exist, and without
-       * this a click jumps to the top of the page and pushes a bare `#` into
-       * the URL.
+       * The source's last delegate branch used to swallow clicks on the footer's
+       * social icons, because they were `<a href="#">` placeholders and a click
+       * would otherwise jump to the top of the page and push a bare `#` into the
+       * URL. The accounts are real now and the anchors carry real hrefs, so that
+       * branch has been removed — leaving it in place is what stopped the icons
+       * from opening anything at all.
        */
-      if (event.target.closest("[data-social]")) {
-        event.preventDefault();
-        return;
-      }
 
       const trigger = event.target.closest<HTMLElement>("[data-sheet]");
       if (!trigger) return;
