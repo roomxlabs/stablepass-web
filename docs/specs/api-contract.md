@@ -48,7 +48,6 @@ Derived from the Stage 1 blueprint (API Design 03, Auth & RBAC 04). REST over HT
 | GET | `/api/feed/following?cursor=` | Ranked feed restricted to followed trainers/horses. | `cursor?`, `limit?` | `{ data:[ post… ], meta }` | 200 · 401 · 402 |
 | GET | `/api/trainers/:id/feed?cursor=` | One trainer's posts, chronological *(may be a direct PostgREST read)*. | `cursor?` | `{ data:[ post… ], meta }` | 200 · 401 · 402 · 404 |
 | GET | `/api/horses/:id/feed?cursor=` | One horse's posts, chronological *(may be direct PostgREST)*. | `cursor?` | `{ data:[ post… ], meta }` | 200 · 401 · 402 · 404 |
-| POST | `/api/feed/seen` | Batch-record impressions when items scroll into view. | `{ postIds: uuid[] }` | `204` | 204 · 401 · 429 |
 | GET | `/api/posts/:id/playback` | Mint a **short-lived Mux signed playback URL** for a video post; subscription re-checked at mint time. | *(JWT)* | `{ data: { playbackUrl, expiresAt } }` | 200 · 401 · 402 · 404 |
 
 > **Feed tabs vs Race Day.** The top tab bar is **Explore · Trainers · Horses · Following** — Explore/Following are the ranked feed (above); Trainers/Horses are browse lists (Profiles section). **Race Day is not a tab** — it's an inline "today's racing" band woven into the Explore/Following feed, a direct PostgREST read over today's `race` events joined to `race_horse` (upcoming: venue, class, distance, `scheduled_at`, barrier, jockey; finished: `result`) plus published race-result posts, under the gate. The horse profile's "Next race" card reads the same `race_horse` → `race`. No separate endpoint.
@@ -126,6 +125,6 @@ Derived from the Stage 1 blueprint (API Design 03, Auth & RBAC 04). REST over HT
 | **push dispatch** | on publish / result / race-day / milestone | Sends Expo Push to `device_token`s + writes `notification` rows (`pushed=true`). Recipients = `notify_optin` on the **horse or its trainer**, **and** whose `app_user` type pref for that event is on. Types: **`new_post`**, **`race_day`** (2h before), **`race_result`**, **`milestone`**. General feed activity is **in-app red-dot only** (no push). |
 | **poll-racing-api** | *FUTURE*, cron | Licensed feed (The Racing API + AU add-on) → find-or-creates the `race` event (`source='api'`) and a `race_horse` runner matched by `horse.racing_api_id` → `race_result` fan-out. Contingent on licensed access. **No scraping.** |
 
-**Rate limits (indicative):** general reads 120/min per subscriber · signup 5/hour per IP · checkout 10/hour · `/api/feed/seen` 60/min · admin 300/min · admin uploads 30/hour · Stripe webhook not user-limited (signature-verified, idempotent). Over limit → **429** + `Retry-After`.
+**Rate limits (indicative):** general reads 120/min per subscriber · signup 5/hour per IP · checkout 10/hour · admin 300/min · admin uploads 30/hour · Stripe webhook not user-limited (signature-verified, idempotent). Over limit → **429** + `Retry-After`.
 
 **No betting / bookmaker endpoints exist in v1.**

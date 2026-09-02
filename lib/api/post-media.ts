@@ -188,12 +188,15 @@ type DisplayRow = {
   type?: string | null;
   poster_url?: string | null;
   media_url?: string | null;
+  /** Signed poster (300s) shipped per row by the be `feed` fn — see below. */
+  posterUrl?: string | null;
 };
 
 /**
  * Resolve display images for a page of posts, plus each post's slide count.
+ * - Row carrying the feed fn's own `posterUrl` → used as-is, no request
  * - Absolute URL → passthrough keyed by post id
- * - Video with a poster key → GET playback?posterOnly=1 (no Mux stream)
+ * - Video with a poster key and no `posterUrl` → GET playback?posterOnly=1
  * - Photo/other with a non-absolute key → ONE batched fetchPostMediaItems
  * - Voice with no poster / text with no media → skip
  *
@@ -203,7 +206,13 @@ type DisplayRow = {
  * legacy single-photo case and draws no carousel at all.
  */
 export async function resolvePostDisplayUrls(
-  rows: { id: string; type?: string | null; poster_url?: string | null; media_url?: string | null }[],
+  rows: {
+    id: string;
+    type?: string | null;
+    poster_url?: string | null;
+    media_url?: string | null;
+    posterUrl?: string | null;
+  }[],
 ): Promise<PostDisplayMedia> {
   const out = new Map<string, string>();
   const slideCounts = new Map<string, number>();
@@ -211,6 +220,22 @@ export async function resolvePostDisplayUrls(
   const videoIds: string[] = [];
 
   for (const row of rows as DisplayRow[]) {
+    // The be `feed` fn now signs a poster (300s) for every row it serves and
+    // ships it as `posterUrl`. When it is there, a video card is already
+    // resolved — taking it saves ONE playback?posterOnly=1 round-trip PER VIDEO
+    // POST on every page. The per-post mint stays as the fallback for the rows
+    // that don't carry one: the profile feeds (trainers/:id, horses/:id) are
+    // direct PostgREST reads that never go through the feed fn, and an older
+    // deployed fn simply omits the field.
+    //
+    // Photo rows deliberately still go through the batch below even when they
+    // carry a `posterUrl` — that batch is ONE request for the whole page and it
+    // is also where `slideCount` comes from, so short-circuiting it would cost a
+    // carousel its dots (ENG-809 decision 3) to save nothing.
+    if (row.type === "video" && typeof row.posterUrl === "string" && row.posterUrl.length > 0) {
+      out.set(row.id, row.posterUrl);
+      continue;
+    }
     const key = postPosterKey(row);
     if (key && isAbsoluteUrl(key)) {
       out.set(row.id, key);

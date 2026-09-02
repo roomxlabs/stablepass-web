@@ -1,9 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { getUserMock, singleMock, insertMock, fromMock, edgeFetchMock, subSelectMock } = vi.hoisted(() => {
+const { getUserMock, singleMock, fromMock, edgeFetchMock, subSelectMock } = vi.hoisted(() => {
   const getUserMock = vi.fn();
   const singleMock = vi.fn();
-  const insertMock = vi.fn();
 
   const subChain: { select: ReturnType<typeof vi.fn>; eq: ReturnType<typeof vi.fn>; single: ReturnType<typeof vi.fn> } = {
     select: vi.fn(),
@@ -13,15 +12,12 @@ const { getUserMock, singleMock, insertMock, fromMock, edgeFetchMock, subSelectM
   subChain.select.mockImplementation(() => subChain);
   subChain.eq.mockImplementation(() => subChain);
 
-  const fromMock = vi.fn((table: string) => {
-    if (table === "impression") return { insert: insertMock };
-    return subChain;
-  });
+  const fromMock = vi.fn(() => subChain);
 
   const edgeFetchMock = vi.fn();
   const subSelectMock = subChain.select;
 
-  return { getUserMock, singleMock, insertMock, fromMock, edgeFetchMock, subSelectMock };
+  return { getUserMock, singleMock, fromMock, edgeFetchMock, subSelectMock };
 });
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -36,7 +32,6 @@ vi.mock("@/lib/api/edge", () => ({
 }));
 
 import { GET } from "@/app/api/feed/route";
-import { POST } from "@/app/api/feed/seen/route";
 import { GET as followingGET } from "@/app/api/feed/following/route";
 import { GET as sharesGET } from "@/app/api/feed/shares/route";
 
@@ -52,7 +47,6 @@ describe("GET /api/feed", () => {
   beforeEach(() => {
     getUserMock.mockReset();
     singleMock.mockReset();
-    insertMock.mockReset();
     edgeFetchMock.mockReset();
     fromMock.mockClear();
     subSelectMock.mockClear();
@@ -189,7 +183,6 @@ describe("GET /api/feed/following", () => {
   beforeEach(() => {
     getUserMock.mockReset();
     singleMock.mockReset();
-    insertMock.mockReset();
     edgeFetchMock.mockReset();
     fromMock.mockClear();
     subSelectMock.mockClear();
@@ -273,7 +266,6 @@ describe("GET /api/feed/shares", () => {
   beforeEach(() => {
     getUserMock.mockReset();
     singleMock.mockReset();
-    insertMock.mockReset();
     edgeFetchMock.mockReset();
     fromMock.mockClear();
     subSelectMock.mockClear();
@@ -331,67 +323,5 @@ describe("GET /api/feed/shares", () => {
     await sharesGET(req("http://localhost/api/feed/shares"));
 
     expect(subSelectMock).toHaveBeenCalledWith("status,trial_ends_at,current_period_end");
-  });
-});
-
-describe("POST /api/feed/seen", () => {
-  beforeEach(() => {
-    getUserMock.mockReset();
-    insertMock.mockReset();
-    fromMock.mockClear();
-  });
-
-  function seenReq(body: unknown) {
-    return new Request("http://localhost/api/feed/seen", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  }
-
-  it("returns 401 when there is no session", async () => {
-    getUserMock.mockResolvedValue({ data: { user: null } });
-
-    const res = await POST(seenReq({ postIds: ["p1"] }));
-    const body = await res.json();
-
-    expect(res.status).toBe(401);
-    expect(body.error.code).toBe("unauthorized");
-  });
-
-  it("inserts an impression row per postId and returns 204", async () => {
-    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    insertMock.mockResolvedValue({ error: null });
-
-    const res = await POST(seenReq({ postIds: ["p1", "p2"] }));
-
-    expect(res.status).toBe(204);
-    expect(fromMock).toHaveBeenCalledWith("impression");
-    expect(insertMock).toHaveBeenCalledWith([
-      { user_id: "user-1", post_id: "p1" },
-      { user_id: "user-1", post_id: "p2" },
-    ]);
-  });
-
-  it("returns 400 validation_failed when postIds is empty", async () => {
-    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-
-    const res = await POST(seenReq({ postIds: [] }));
-    const body = await res.json();
-
-    expect(res.status).toBe(400);
-    expect(body.error.code).toBe("validation_failed");
-    expect(insertMock).not.toHaveBeenCalled();
-  });
-
-  it("returns 400 validation_failed when postIds is not an array of strings", async () => {
-    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-
-    const res = await POST(seenReq({ postIds: [1, 2] }));
-    const body = await res.json();
-
-    expect(res.status).toBe(400);
-    expect(body.error.code).toBe("validation_failed");
-    expect(insertMock).not.toHaveBeenCalled();
   });
 });

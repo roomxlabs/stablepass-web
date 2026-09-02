@@ -7,7 +7,7 @@ const VIEWER_ID = "8f3c1a2b-1234-4abc-9def-0123456789ab";
 
 function chainable(result: { data: unknown; error: unknown }) {
   const obj: Record<string, unknown> = {};
-  for (const method of ["select", "eq", "in", "not", "order", "maybeSingle", "single"]) {
+  for (const method of ["select", "eq", "in", "not", "order", "range", "maybeSingle", "single"]) {
     obj[method] = vi.fn(() => obj);
   }
   obj.then = (onFulfilled: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) =>

@@ -181,12 +181,6 @@ export function SharesFeed({ viewerId, everSubscribed }: { viewerId: string; eve
       setPosts((prev) => (forCursor ? [...prev, ...mapped] : mapped));
       setCursor(meta.nextCursor ?? null);
       setHasMore(Boolean(meta.hasMore));
-
-      fetch("/api/feed/seen", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ postIds: ids }),
-      }).catch(() => {});
     } finally {
       loadingRef.current = false;
       setLoading(false);
