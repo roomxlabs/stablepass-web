@@ -11,7 +11,9 @@
  * the band rather than sized by the intrinsic image. It therefore needs
  * `role="img"` + `aria-label` to carry the description an `<img alt>` would.
  */
-export default function CtaBand() {
+import WaitlistForm from "../waitlist-form";
+
+export default function CtaBand({ joined, reason }: { joined?: string | null; reason?: string | null }) {
   return (
     <section style={{ padding: "96px 28px 0" }}>
       <div className="wrap cta rv" suppressHydrationWarning style={{ paddingLeft: 40, paddingRight: 40 }}>
@@ -23,7 +25,10 @@ export default function CtaBand() {
           <p>
             Join stablepass. and follow the stories, stables, horses, and race day moments that make racing exciting.
           </p>
-          <p className="cta-trial-line">Join stablepass. $9/month for your first 6 months, then $19/month.</p>
+          <p className="cta-trial-line launch-only">Join stablepass. $9/month for your first 6 months, then $19/month.</p>
+          <div className="cta-waitlist wl-mount">
+            <WaitlistForm initialJoined={joined} initialReason={reason} />
+          </div>
           <a className="btn btn-cream cta-trial" href="/start">
             Get the $9/month offer
           </a>

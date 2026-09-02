@@ -20,7 +20,9 @@
  * so it runs with scripting off and stops under prefers-reduced-motion, both from
  * W1's stylesheet. Nothing in this file needs JS.
  */
-export default function Hero() {
+import WaitlistForm from "../waitlist-form";
+
+export default function Hero({ joined, reason }: { joined?: string | null; reason?: string | null }) {
   return (
     <>
       <header className="hero" id="top">
@@ -64,12 +66,22 @@ export default function Hero() {
             {/* Justin, 1 Sep: "Maybe take out the first $19 per month line" — it
                 repeated the "$19/month thereafter" line two rows below, so the
                 launch price now leads and the standing price follows it once. */}
-            <p className="hero-launch">Launch Offer — $9/month for your first 6 months.</p>
-            <p className="hero-price hero-price-sub">
+            <p className="hero-launch cta-trial">Launch Offer — $9/month for your first 6 months.</p>
+            <p className="hero-price hero-price-sub cta-trial">
               $19/month thereafter. Cancel anytime. No lock-in contract.
               <br />
               Follow the journey. Feel part of the action.
             </p>
+            {/* Pre-launch, the offer copy above is hidden with the rest of the
+                pricing and this line leads instead. Deliberately says nothing
+                about a trial: the 30-day trial is not the offer any more
+                (Naufal, 2 Sep). */}
+            <p className="hero-price cta-waitlist">
+              Join the waitlist to be first to receive exclusive updates on our launch and special offers.
+            </p>
+            <div className="cta-waitlist wl-mount">
+              <WaitlistForm initialJoined={joined} initialReason={reason} />
+            </div>
             <div className="hero-actions">
               <a className="btn btn-green cta-trial" href="/start">
                 Get the $9/month offer

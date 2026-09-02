@@ -25,7 +25,19 @@ export const revalidate = 300;
  * marketing-visible trainers server-side (under ISR) and falls back to the static
  * list, so a backend failure leaves the signed-off page intact.
  */
-export default async function MarketingHome() {
+export default async function MarketingHome({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const live = await getMarketingTrainers();
-  return <HomeSections trainers={live.length > 0 ? live : TRAINERS} />;
+  const params = (await searchParams) ?? {};
+  const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? null;
+  return (
+    <HomeSections
+      trainers={live.length > 0 ? live : TRAINERS}
+      joined={one(params.joined)}
+      reason={one(params.reason)}
+    />
+  );
 }

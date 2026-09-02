@@ -29,7 +29,7 @@ export default function MarketingNav() {
         <div className="nav-links">
           <a href="#how">How it works</a>
           <a href="#app">The app</a>
-          <a href="#subscription">Subscription</a>
+          <a className="launch-only" href="#subscription">Subscription</a>
           <a href="#trainers">For trainers</a>
           <a href="#faq">FAQ</a>
         </div>
@@ -39,10 +39,10 @@ export default function MarketingNav() {
             it. Muted against the solid CTA: returning subscribers are the
             smaller audience, so it must be findable without competing. */}
         <div className="nav-actions">
-          <a className="nav-signin" href="/signin">
+          <a className="nav-signin launch-only" href="/signin">
             Sign in
           </a>
-          <a className="nav-cta" href="/start">
+          <a className="nav-cta launch-only" href="/start">
             Join stablepass.
           </a>
         </div>
