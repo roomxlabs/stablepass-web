@@ -6,7 +6,7 @@
       "runs": [
         "S",
         "RACING EXPERIENCE SUBSCRIPTION",
-        "·",
+        "\u00b7",
         "LAUNCH OFFER \u00b7 $9/MONTH FOR YOUR FIRST 6 MONTHS",
         "The racing",
         "experience",
@@ -28,20 +28,20 @@
     {
       "signature": "div#.ribbon",
       "runs": [
-        "STABLE UPDATES",
         "RACE PREVIEWS",
-        "BEHIND-THE-SCENES PHOTOS",
-        "SHORT VIDEOS",
-        "RACE DAY ALERTS",
-        "STABLE INSIGHTS",
+        "BEHIND-THE-SCENES ACCESS",
+        "STABLE PHOTOS",
         "SUBSCRIBER-ONLY CONTENT",
-        "STABLE UPDATES",
-        "RACE PREVIEWS",
-        "BEHIND-THE-SCENES PHOTOS",
-        "SHORT VIDEOS",
-        "RACE DAY ALERTS",
         "STABLE INSIGHTS",
-        "SUBSCRIBER-ONLY CONTENT"
+        "RACE DAY ALERTS",
+        "STABLE VIDEOS",
+        "RACE PREVIEWS",
+        "BEHIND-THE-SCENES ACCESS",
+        "STABLE PHOTOS",
+        "SUBSCRIBER-ONLY CONTENT",
+        "STABLE INSIGHTS",
+        "RACE DAY ALERTS",
+        "STABLE VIDEOS"
       ],
       "images": []
     },
