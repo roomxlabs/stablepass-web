@@ -95,7 +95,11 @@ export default function Hero({ joined, reason }: { joined?: string | null; reaso
               <a className="btn btn-green cta-join" href="/start">
                 Join stablepass.
               </a>
-              <a className="btn btn-ghost" href="#how">
+              {/* Hidden pre-launch (Naufal, 2 Sep). `launch-only` rather than
+                  deleted, like every other hide in this mode: the copy freeze
+                  requires the text to stay in the DOM, and the switch-back is
+                  then a mode flip with no markup to restore. */}
+              <a className="btn btn-ghost launch-only" href="#how">
                 See how it works
               </a>
             </div>
