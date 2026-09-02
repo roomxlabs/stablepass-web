@@ -121,14 +121,19 @@ export default function Hero() {
   );
 }
 
+/**
+ * Justin's list for the scrolling banner, 2 Sep 2026, in his order. Set in caps
+ * because the ribbon has no `text-transform` — the casing lives in the strings,
+ * and the mono treatment is the mockup's.
+ */
 const RIBBON_WORDS = [
-  "STABLE UPDATES",
   "RACE PREVIEWS",
-  "BEHIND-THE-SCENES PHOTOS",
-  "SHORT VIDEOS",
-  "RACE DAY ALERTS",
-  "STABLE INSIGHTS",
+  "BEHIND-THE-SCENES ACCESS",
+  "STABLE PHOTOS",
   "SUBSCRIBER-ONLY CONTENT",
+  "STABLE INSIGHTS",
+  "RACE DAY ALERTS",
+  "STABLE VIDEOS",
 ];
 
 function RibbonSet() {
