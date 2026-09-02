@@ -45,6 +45,13 @@ export default function MarketingNav() {
           <a className="nav-cta launch-only" href="/start">
             Join stablepass.
           </a>
+          {/* Pre-launch only. Same `.nav-cta` geometry and colour as the button
+              above, so the two are interchangeable by definition rather than by
+              a second set of rules kept in sync by hand. Anchors to the hero,
+              where the capture form actually lives. */}
+          <a className="nav-cta cta-waitlist" href="#top">
+            Join waitlist
+          </a>
         </div>
       </div>
     </nav>

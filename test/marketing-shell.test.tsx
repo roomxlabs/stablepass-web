@@ -85,7 +85,21 @@ describe("marketing nav", () => {
     // returning visitors. They are root-relative on purpose: middleware already
     // 307s a non-shared apex path onto the app host, and an absolute URL would
     // send local dev at production.
-    expect(hrefs).toEqual(["#top", "#how", "#app", "#subscription", "#trainers", "#faq", "/signin", "/start"]);
+    // ENG-729 appends a ninth: the pre-launch "Join waitlist" button, which
+    // scrolls to the hero capture form rather than leaving for a route. All
+    // eight originals stay in the DOM — waitlist mode hides four of them with
+    // CSS, so the launch switch-back needs no markup back.
+    expect(hrefs).toEqual([
+      "#top",
+      "#how",
+      "#app",
+      "#subscription",
+      "#trainers",
+      "#faq",
+      "/signin",
+      "/start",
+      "#top",
+    ]);
   });
 
   it("keeps the two product destinations reachable and relative", () => {
