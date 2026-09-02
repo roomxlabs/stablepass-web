@@ -48,6 +48,42 @@ const CONTACT_LINKS: ReadonlyArray<{ label: string; subject: string }> = [
   { label: "Trainer partnerships", subject: "Trainer partnerships" },
 ];
 
+/**
+ * The three accounts, in the mockup's order, with its own icon paths — restoring
+ * the block ENG-600 removed rather than drawing new ones.
+ */
+const SOCIAL_LINKS: ReadonlyArray<{ label: string; href: string; path: React.ReactNode }> = [
+  {
+    label: "Instagram",
+    href: "https://www.instagram.com/stablepass/",
+    path: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
+        <rect x="3" y="3" width="18" height="18" rx="5" />
+        <circle cx="12" cy="12" r="4" />
+        <circle cx="17.2" cy="6.8" r="1.1" fill="currentColor" stroke="none" />
+      </svg>
+    ),
+  },
+  {
+    label: "Facebook",
+    href: "https://www.facebook.com/profile.php?id=61581768621041",
+    path: (
+      <svg viewBox="0 0 24 24" fill="currentColor">
+        <path d="M14.1 21v-7.4h2.5l.4-2.9h-2.9V8.9c0-.8.2-1.4 1.4-1.4h1.6V4.9c-.3 0-1.2-.1-2.3-.1-2.3 0-3.9 1.4-3.9 4v2.2H8.4v2.9h2.5V21Z" />
+      </svg>
+    ),
+  },
+  {
+    label: "X",
+    href: "https://x.com/stablepass",
+    path: (
+      <svg viewBox="0 0 24 24" fill="currentColor">
+        <path d="M17.2 4h2.8l-6.1 7 7.2 9h-5.6l-4.4-5.7L5.9 20H3.1l6.5-7.5L2.7 4h5.8l4 5.3Zm-1 14.3h1.5L8 5.6H6.4Z" />
+      </svg>
+    ),
+  },
+];
+
 export default function MarketingFooter() {
   return (
     <footer>
@@ -58,11 +94,33 @@ export default function MarketingFooter() {
                 plain <img>, sized by CSS exactly as the mockup does. */}
             <img src="/marketing/3499d96c.png" alt="stablepass." />
             <p>A thoroughbred racing experience and entertainment subscription.</p>
-            {/* ENG-600: the Instagram / Facebook / X icons were removed. All three were
-                `href="#"` in the mockup — no account URLs exist anywhere in the project.
-                Three icons that go nowhere are worse than none on a live site. The SVG
-                paths and the `.foot-social` styles are kept in git history; re-add the
-                block once the handles exist, which is a one-commit change. */}
+            {/* ENG-600 pulled these icons because all three were `href="#"` in the
+                mockup and no account URLs existed yet — three icons going nowhere
+                being worse than none. The accounts now exist, so the block is back,
+                which is the one-commit change that note anticipated.
+
+                The URLs are taken from the footer of the live Wix site at
+                stablepass.co rather than typed from memory: Justin asked us to
+                "grab the links" precisely because copying them while signed in can
+                yield a session-scoped URL rather than the public profile. The
+                Facebook one is the `profile.php?id=` form that page uses; it is the
+                canonical link for that Page until a vanity handle is claimed.
+
+                External, so each carries rel="noopener noreferrer". */}
+            <div className="foot-social">
+              {SOCIAL_LINKS.map(({ label, href, path }) => (
+                <a
+                  key={label}
+                  href={href}
+                  data-social={label}
+                  aria-label={`stablepass. on ${label}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {path}
+                </a>
+              ))}
+            </div>
           </div>
           <div className="foot-col">
             <h4>Explore</h4>
