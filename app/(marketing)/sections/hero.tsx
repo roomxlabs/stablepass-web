@@ -37,8 +37,14 @@ export default function Hero({ joined, reason }: { joined?: string | null; reaso
                 <i />
                 RACING EXPERIENCE SUBSCRIPTION
               </span>
-              <span className="chip-sep">·</span>
-              <b>LAUNCH OFFER · $9/MONTH FOR YOUR FIRST 6 MONTHS</b>
+              {/* Hidden pre-launch with the rest of the pricing: the badge
+                  advertises the launch offer, and waitlist mode does not sell a
+                  price. Marked `launch-only` rather than deleted — the copy
+                  freeze requires every hide in this mode to be CSS-only, so the
+                  text stays in the DOM and the launch switch-back needs no
+                  markup back. */}
+              <span className="chip-sep launch-only">·</span>
+              <b className="launch-only">LAUNCH OFFER · $9/MONTH FOR YOUR FIRST 6 MONTHS</b>
             </span>
             {/* Justin, 1 Sep: "Experience needs to be on the second line", then
                 "made simple needs to be a new line" — so all three breaks are
