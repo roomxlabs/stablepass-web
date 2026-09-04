@@ -41,7 +41,6 @@ Derived from `docs/dev-handover/mockups/` (mobile · web · admin) against the A
 | Action | API | Status | Cov |
 |---|---|---|---|
 | Load ranked feed | `GET /api/feed?cursor=` | 200 · 401 · 402 · 400 | ✅ |
-| Record seen (scroll) | `POST /api/feed/seen` | 204 · 401 · 429 | ✅ |
 | Inline "Race day · today" band | `[PG] race + race_horse` | 200 · 401 · 402 | ✅ |
 | React / un-react | `[PG] upsert/delete reaction` | 201 · 204 · 401 · 400 | ✅ |
 | Bookmark / un-bookmark | `[PG] insert/delete bookmark` | 201 · 204 · 401 | ✅ |
@@ -60,7 +59,6 @@ Derived from `docs/dev-handover/mockups/` (mobile · web · admin) against the A
 | Action | API | Status | Cov |
 |---|---|---|---|
 | Load followed feed | `GET /api/feed/following?cursor=` | 200 · 401 · 402 | ✅ |
-| Record seen | `POST /api/feed/seen` | 204 · 401 · 429 | ✅ |
 | React / bookmark | `[PG] reaction` / `bookmark` | 201 · 204 · 401 · 400 | ✅ |
 
 ### 08 · Horse profile
@@ -148,7 +146,6 @@ Derived from `docs/dev-handover/mockups/` (mobile · web · admin) against the A
 |---|---|---|---|
 | Explore / Following tabs | `GET /api/feed` · `/api/feed/following` | 200 · 401 · 402 · 400 | ✅ |
 | Trainers / Horses tabs (browse) | `[PG] GET trainer` / `horse` | 200 · 401 · 402 | ✅ |
-| Record seen | `POST /api/feed/seen` | 204 · 401 · 429 | ✅ |
 | Inline Race Day | `[PG] race + race_horse` | 200 · 401 · 402 | ✅ |
 | React / bookmark | `[PG] reaction` / `bookmark` | 201 · 204 · 401 · 400 | ✅ |
 | Play video | `GET /api/posts/:id/playback` | 200 · 401 · 402 · 404 | ✅ |

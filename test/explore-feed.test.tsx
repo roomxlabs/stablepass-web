@@ -59,9 +59,6 @@ vi.mock("@/lib/supabase/client", () => ({
 function fetchImpl(feedStatus: 200 | 402) {
   return vi.fn((input: string | URL, _init?: RequestInit) => {
     const url = String(input);
-    if (url.startsWith("/api/feed/seen")) {
-      return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
-    }
     if (url === "/api/posts/media" || url.startsWith("/api/posts/media?")) {
       return Promise.resolve({
         ok: true,
@@ -134,20 +131,17 @@ describe("ExploreFeed", () => {
     expect(screen.getByText("Winx")).toBeInTheDocument();
   });
 
-  it("records impressions for the fetched page via POST /api/feed/seen", async () => {
+  // The `feed` edge fn records an impression for every row it serves, so the
+  // client POST that used to mirror it was a redundant round-trip per page AND
+  // failed RLS on every insert in production. Deleted with /api/feed/seen.
+  it("does not post client-side impressions — the feed fn already records them", async () => {
     const fetchMock = fetchImpl(200);
     global.fetch = fetchMock as unknown as typeof fetch;
 
     render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
     await screen.findByText("Mahogany");
 
-    await waitFor(() => {
-      const call = fetchMock.mock.calls.find((c) => String(c[0]) === "/api/feed/seen");
-      expect(call).toBeTruthy();
-      const init = call?.[1];
-      expect(init?.method).toBe("POST");
-      expect(JSON.parse(String(init?.body))).toEqual({ postIds: ["p1", "p2"] });
-    });
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).startsWith("/api/feed/seen"))).toBe(false);
   });
 
   it("shows the free-trial-ended wall (no posts) when the feed is gated (402) and the member never subscribed", async () => {
@@ -207,9 +201,6 @@ describe("ExploreFeed", () => {
     function fetchWithAspect(aspectRatio: number | null) {
       return vi.fn((input: string | URL) => {
         const url = String(input);
-        if (url.startsWith("/api/feed/seen")) {
-          return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
-        }
         if (url === "/api/posts/media" || url.startsWith("/api/posts/media?")) {
           return Promise.resolve({
             ok: true,
@@ -284,7 +275,6 @@ describe("ExploreFeed — ENG-613 view model + Follow pill", () => {
   function feedWith(rows: unknown[]) {
     return vi.fn((input: string | URL) => {
       const url = String(input);
-      if (url.startsWith("/api/feed/seen")) return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
       if (url === "/api/posts/media" || url.startsWith("/api/posts/media?")) {
         return Promise.resolve({
           ok: true,
@@ -554,9 +544,6 @@ describe("ExploreFeed — ENG-799 post-media mint", () => {
     ];
     const fetchMock = vi.fn((input: string | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/feed/seen")) {
-        return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
-      }
       if (url === "/api/posts/media") {
         return Promise.resolve({
           ok: true,
@@ -599,9 +586,6 @@ describe("ExploreFeed — ENG-799 post-media mint", () => {
     const photoPosts = [{ ...POSTS[0], media_url: "media/draft.jpg", poster_url: null }];
     global.fetch = vi.fn((input: string | URL) => {
       const url = String(input);
-      if (url.startsWith("/api/feed/seen")) {
-        return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
-      }
       if (url === "/api/posts/media") {
         return Promise.resolve({
           ok: true,
@@ -632,9 +616,6 @@ describe("ExploreFeed — ENG-799 post-media mint", () => {
     const photoPosts = [{ ...POSTS[0], media_url: "media/p1.jpg", poster_url: null }];
     global.fetch = vi.fn((input: string | URL) => {
       const url = String(input);
-      if (url.startsWith("/api/feed/seen")) {
-        return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
-      }
       if (url === "/api/posts/media") {
         return Promise.resolve({
           ok: false,
@@ -684,9 +665,6 @@ describe("ExploreFeed — ENG-762 multi-photo carousel", () => {
   function fetchWithCarousel(slideCount: number) {
     return vi.fn((input: string | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/feed/seen")) {
-        return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
-      }
       if (url === "/api/posts/media") {
         const body = init?.body ? JSON.parse(String(init.body)) : {};
         if ("postId" in body) {

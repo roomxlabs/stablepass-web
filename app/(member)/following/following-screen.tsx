@@ -248,13 +248,6 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
       });
 
       setPosts((prev) => (forCursor ? [...prev, ...mapped] : mapped));
-
-      // Best-effort impression tracking (the following feed is unseen-first).
-      fetch("/api/feed/seen", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ postIds: ids }),
-      }).catch(() => {});
     } finally {
       loadingRef.current = false;
       setLoading(false);

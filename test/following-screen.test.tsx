@@ -58,7 +58,6 @@ function followBuilder() {
 function fetchImpl() {
   return vi.fn((input: string | URL, init?: RequestInit) => {
     const url = String(input);
-    if (url.startsWith("/api/feed/seen")) return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
     if (url === "/api/posts/media" || url.startsWith("/api/posts/media?")) {
       return Promise.resolve({
         ok: true,
@@ -332,7 +331,6 @@ describe("FollowingScreen — ENG-799 post-media mint", () => {
     ];
     global.fetch = vi.fn((input: string | URL) => {
       const url = String(input);
-      if (url.startsWith("/api/feed/seen")) return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
       if (url === "/api/posts/media") {
         return Promise.resolve({
           ok: true,
@@ -369,7 +367,6 @@ describe("FollowingScreen — ENG-762 multi-photo carousel", () => {
     ];
     return vi.fn((input: string | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/feed/seen")) return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
       if (url === "/api/posts/media") {
         const body = init?.body ? JSON.parse(String(init.body)) : {};
         if ("postId" in body) {

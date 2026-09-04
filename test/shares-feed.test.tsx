@@ -50,9 +50,6 @@ vi.mock("@/lib/supabase/client", () => ({
 function fetchImpl() {
   return vi.fn((input: string | URL) => {
     const url = String(input);
-    if (url.startsWith("/api/feed/seen")) {
-      return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
-    }
     if (url === "/api/posts/media" || url.startsWith("/api/posts/media?")) {
       return Promise.resolve({
         ok: true,

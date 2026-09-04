@@ -2,7 +2,7 @@
 
 // ExploreFeed — the Explore screen (06-explore.html). Composes the W4 shared
 // components (PostCard/ReactionBar/RaceDayBand/TrainerCard) against the W5 BFF
-// (`/api/feed`, `/api/feed/seen`, `/api/posts/:id/playback`). The followed feed now
+// (`/api/feed`, `/api/posts/:id/playback`). The followed feed now
 // lives on the dedicated /following screen (W13), so Explore is a single view.
 //
 // DATA REALITY: the be `feed` fn returns bare `post` rows (no horse/trainer names),
@@ -203,13 +203,6 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
       setPosts((prev) => (forCursor ? [...prev, ...mapped] : mapped));
       setCursor(meta.nextCursor ?? null);
       setHasMore(Boolean(meta.hasMore));
-
-      // Best-effort impression tracking — never blocks rendering on failure.
-      fetch("/api/feed/seen", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ postIds: ids }),
-      }).catch(() => {});
     } finally {
       loadingRef.current = false;
       setLoading(false);

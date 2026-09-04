@@ -129,9 +129,7 @@ flowchart TD
     U --> F
     F -- "402 subscription_required" --> G[Prompt to reactivate -> Checkout]
     F -- Yes --> H[Render items; feed records impressions for returned posts]
-    H --> I[Scroll: batch new impressions]
-    I --> J["POST /api/feed/seen { postIds[] }"]
-    J --> K[Seen posts sink on next load]
+    H --> K[Seen posts sink on next load]
     H --> L[Tap a post -> Post detail]
     H --> M[Tap a horse/trainer -> Profile]
 ```
@@ -324,7 +322,6 @@ Notes: the admin is a normal `app_user` row with `is_admin = true` — there is 
 | 4 Feed | Following tab | `GET /api/feed/following` | `post`, `follow` |
 | 4 Feed | Trainers / Horses tabs (browse) | `[PostgREST] GET trainer` / `horse` list | `trainer`, `horse` |
 | 4 Feed | Race Day (inline band) | `[PostgREST] race + race_horse` + race-result `post` | `race`, `race_horse`, `post` |
-| 4 Feed | Record impressions | `POST /api/feed/seen` | `impression` |
 | 5 Post detail | Video playback URL | `GET /api/posts/:id/playback` | `post`, `subscription` (re-gate), Mux |
 | 5 Post detail | React / un-react | `[PostgREST] upsert/delete reaction` | `reaction`, `post.like_count` |
 | 5 Post detail | Bookmark | `[PostgREST] insert/delete bookmark` | `bookmark` |

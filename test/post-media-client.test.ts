@@ -117,6 +117,55 @@ describe("resolvePostDisplayUrls", () => {
     expect(global.fetch).toHaveBeenCalledWith("/api/posts/v1/playback?posterOnly=1");
   });
 
+  it("uses the feed fn's own posterUrl for a video row — no per-post mint", async () => {
+    global.fetch = vi.fn() as unknown as typeof fetch;
+
+    const result = await resolvePostDisplayUrls([
+      {
+        id: "v1",
+        type: "video",
+        poster_url: "posters/v1.jpg",
+        media_url: null,
+        posterUrl: "https://signed.test/from-feed?token=q",
+      },
+    ]);
+
+    expect(result.urls.get("v1")).toBe("https://signed.test/from-feed?token=q");
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("uses posterUrl even when the row has no poster_url/media_url key", async () => {
+    global.fetch = vi.fn() as unknown as typeof fetch;
+
+    const result = await resolvePostDisplayUrls([
+      { id: "v2", type: "video", poster_url: null, media_url: null, posterUrl: "https://signed.test/v2?token=q" },
+    ]);
+
+    expect(result.urls.get("v2")).toBe("https://signed.test/v2?token=q");
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("falls back to playback?posterOnly=1 when the row carries no posterUrl", async () => {
+    global.fetch = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes("/playback?posterOnly=1")) {
+        return { ok: true, status: 200, json: async () => ({ data: { posterUrl: "https://signed.test/minted" } }) };
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }) as unknown as typeof fetch;
+
+    const result = await resolvePostDisplayUrls([
+      { id: "v1", type: "video", poster_url: "posters/v1.jpg", media_url: null, posterUrl: null },
+      { id: "v2", type: "video", poster_url: "posters/v2.jpg", media_url: null, posterUrl: "https://signed.test/feed-v2" },
+    ]);
+
+    expect(result.urls.get("v1")).toBe("https://signed.test/minted");
+    expect(result.urls.get("v2")).toBe("https://signed.test/feed-v2");
+    // Exactly ONE mint — v2 was already resolved by the feed fn.
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledWith("/api/posts/v1/playback?posterOnly=1");
+  });
+
   it("skips voice with no poster (no mint)", async () => {
     global.fetch = vi.fn() as unknown as typeof fetch;
     const result = await resolvePostDisplayUrls([

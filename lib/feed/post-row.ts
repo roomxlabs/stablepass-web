@@ -70,6 +70,16 @@ export type PostIntrinsicRow = {
   label: string | null;
   media_url: string | null;
   poster_url: string | null;
+  /**
+   * A poster the be `feed` fn has ALREADY signed (300s) for this row — camelCase
+   * because it is a response field of that function, not a `post` column. It is
+   * therefore optional, and must NEVER be added to `POST_INTRINSIC_COLUMNS`:
+   * naming it in a `.select()` is a 42703 that blanks the whole feed. Present on
+   * the three edge-backed feeds (/explore, /following, /shares), absent on the
+   * profile feeds, which read Postgres directly and fall back to the per-post
+   * playback?posterOnly=1 mint (see `resolvePostDisplayUrls`).
+   */
+  posterUrl?: string | null;
   aspect_ratio: number | null;
   watermarked: boolean;
   like_count: number;
