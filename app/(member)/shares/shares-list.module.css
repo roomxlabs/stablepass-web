@@ -1,0 +1,203 @@
+/*
+ * The Shares LIST (ENG-956) — a port of mobile's `.horse-row` browse row
+ * (`src/components/horse-row.tsx`, itself the round-5 re-cut of
+ * `screens/07-horses.html`). Scoped as a CSS module: `app/globals.css` is a
+ * shared surface this ticket does not own. Values are `app/globals.css` tokens.
+ */
+
+/* The list is full-bleed white bands, so it adds NO horizontal padding of its
+   own — each row carries the mockup's 12px/20px. Mobile's `.horse-list` 8px
+   top padding is kept. */
+.list {
+  padding: 8px 0 0;
+  margin: 0;
+  list-style: none;
+}
+
+/* `.horse-row` — white, gap 14, padding 12px 20px, 1px --line bottom rule. The
+   12 vertical (not the trainer row's 14) is the mockup's: the 72px thumb makes
+   this the taller row already. */
+.row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 20px;
+  background: var(--white);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-sans);
+}
+
+.row:hover {
+  background: var(--cream);
+}
+
+/* The horse-profile tap target. A SIBLING of the website link, never its
+   ancestor: an <a> inside an <a> (or inside a <button>) is invalid HTML and
+   browsers recover from it by splitting the row apart. */
+.rowMain {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 14px;
+  color: inherit;
+  text-decoration: none;
+}
+
+/* `.horse-row-thumb` — a 72px ROUNDED box (ENG-833), not a circle, clipped,
+   on the MUTED cream-dark ground. Never the branded green gradient: ten green
+   thumbnails stacked in a column was half of the client's "green screen"
+   report. */
+.thumb {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--cream-dark);
+  color: var(--muted);
+  font-family: var(--font-serif);
+  font-size: 26px;
+  font-weight: 600;
+}
+
+/* `.horse-row-meta` — BOTH `flex: 1` and `min-width: 0` are load-bearing:
+   without them the name column refuses to shrink and the row overflows
+   instead of the name truncating. */
+.meta {
+  display: block;
+  flex: 1;
+  min-width: 0;
+}
+
+.name {
+  /* `display: block` is load-bearing on a <span>: `overflow`/`text-overflow` do
+     nothing at all on an inline box, so without it a long racing name overflows
+     the row instead of truncating (.rx/gotchas.md). */
+  display: block;
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.15;
+  color: var(--name-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The trainer line. One line — a long trainer name truncates, and that is
+   correct: the horse's name matters more. */
+.trainer {
+  display: block;
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The status pill sits BELOW the name line (round 6), not beside it: that is
+   the half of the truncation fix the font size cannot do on its own. */
+.status {
+  display: inline-block;
+  margin-top: 6px;
+}
+
+/* The row's trailing action — a quiet outline button, so the row's tap target
+   (the horse profile) stays the primary affordance and the outbound link reads
+   as secondary. Absent entirely when the trainer has no absolute http(s) URL. */
+.website {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line);
+  background: var(--white);
+  color: var(--brand-green);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.website:hover {
+  background: var(--brand-green-soft);
+  border-color: var(--brand-green-soft);
+}
+
+.website svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Empty / error states — the list's own column, matching the browse screens. */
+.message {
+  padding: 40px 20px;
+  text-align: center;
+}
+
+.messageTitle {
+  margin: 0 0 6px;
+  font-family: var(--font-serif);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.messageBody {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+/* The loading skeleton mirrors the row's own height so nothing jumps when the
+   rows land. */
+.skeleton {
+  height: 96px;
+  border-bottom: 1px solid var(--line);
+  background: var(--cream-dark);
+}
+
+/* The screen column: the disclaimer strip is full-bleed, so the heading keeps
+   the page padding while the strip and the rows do not. */
+.screen {
+  max-width: var(--content-max);
+  width: 100%;
+  padding-bottom: 60px;
+}
+
+.head {
+  padding: 32px 20px 12px;
+}
+
+.title {
+  margin: 0;
+}
+
+/* Narrow: the action WRAPS under the meta column rather than disappearing —
+   "Visit trainer website" is the point of this screen, not decoration. The
+   thumb keeps its column, so the button lines up under the name. */
+@media (max-width: 720px) {
+  .row {
+    flex-wrap: wrap;
+  }
+
+  .website {
+    margin-left: 86px; /* 72px thumb + the row's 14px gap */
+    margin-top: 10px;
+  }
+}

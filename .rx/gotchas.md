@@ -1206,3 +1206,66 @@ spec reports as a product failure.
 - Same class as the `foaling_year: new Date().getFullYear() - 5` seeds, which
   ENG-617's repo-wide "no date arithmetic" guard flags in `e2e/` too. Use an
   absolute year in fixtures.
+
+## `getByLabel("Password")` is AMBIGUOUS since the eye toggle — 10 e2e specs use it (ENG-956, 4 Sep 2026)
+
+`7cc153e` (1 Sep) added `components/password-input.tsx`, whose reveal button is
+`<button aria-label="Show password">`. Playwright's `getByLabel` matches it as
+well as the `<input id="password">`, so **every** sign-in helper written as
+`page.getByLabel("Password").fill(...)` now dies with `strict mode violation:
+resolved to 2 elements` — *before* any assertion, so it reads as a product
+failure on whatever screen the spec was testing.
+
+- **Do this:** `page.locator("#password").fill(...)`.
+- Ten specs still carry the ambiguous form (`screenshots`, `checkout`,
+  `trial-start`, `expiry-banner`, `video-poster`, `shell-responsive`,
+  `eng-585`, `eng-772`, `eng-775`, and — now fixed — `eng-956`). They are
+  latently red; fixing them is a sweep, not any one ticket's surface.
+
+## A PostgREST builder is a THENABLE, not a Promise — `.catch()` is not a function (ENG-956, 4 Sep 2026)
+
+Best-effort e2e teardown written as
+`await admin.from("horse").delete().eq(...).catch(() => {})` throws
+`TypeError: …eq(...).catch is not a function` and fails the test *after* every
+assertion passed. `PostgrestFilterBuilder` implements `then`, not `catch`.
+`admin.auth.admin.deleteUser(...)` IS a real Promise, so the two sit next to
+each other in the same `finally` and only one of them works.
+
+- **Do this:** wrap PostgREST teardown in `try { … } catch {}`, not `.catch()`.
+
+## The guardrail-2 owner grep trips on the word "ownership" (ENG-956, 4 Sep 2026)
+
+`test/owner-pii-guard.test.ts` greps every member component for `/\bowner/i`.
+Mobile's Shares empty state — "Horses with ownership shares for sale will show
+up here." — matches it, so porting that copy verbatim fails the guard.
+
+- **Do this:** allow-list the *sentence*, not the word: scrub the literal string
+  out of the source before scanning and leave `/\bowner/i` untouched. A
+  `/\bowner(?!ship\b)/` lookahead is the tempting fix and is **wrong** — it
+  exempts the whole word family, so a future `sb.from("ownership")` or
+  `ownership.email` (the natural spelling for a syndicate entity, on the shares
+  surface of all places) passes the guard silently. Three independent reviews
+  converged on the string form.
+
+## A guard test can assert the BUG once its ticket is reversed (ENG-956, 4 Sep 2026)
+
+`test/shares-segregation-guard.test.ts` (ENG-831) required `"Contact trainer"`
+to be PRESENT in `post-card.tsx`. R8/ENG-862 deleted that CTA, so the guard
+became a test that fails the fix and passes the defect — and it also read
+`shares-feed.tsx`, which the same ticket deletes (ENOENT).
+
+- **Do this:** when a ticket reverses an earlier decision, `grep` the test tree
+  for guards that PIN the old behaviour before assuming the suite is a neutral
+  gate. Rewriting one is in scope; check what coverage the old assertion also
+  carried (this one silently dropped `prize_money|odds|price_cents` from
+  `post-card.tsx` — `prize_money_cents` is a real deployed column).
+
+## Asserting a projection against its own exported constant is a tautology (ENG-956, 4 Sep 2026)
+
+`expect(chain.select).toHaveBeenCalledWith(SHARES_HORSE_SELECT)` looks like it
+pins the 42703 rule from the entries above. It does not: adding an undeployed
+column to the constant leaves the suite green, because both sides move together.
+Measured, not assumed.
+
+- **Do this:** spell the projection out as a LITERAL string in the test — the
+  same way the disclaimer copy is pinned to a typed-out `VERBATIM`.

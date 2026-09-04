@@ -1,4 +1,6 @@
-import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
@@ -357,98 +359,35 @@ describe("PostCard — row 5, the Follow pill", () => {
   });
 });
 
-describe("PostCard — Shares variant (ENG-831)", () => {
-  const SHARES_POST: FeedPost = {
+describe("no shares CTA (ENG-956)", () => {
+  const WEBSITE_POST: FeedPost = {
     ...BASE,
     trainerId: "3f1c9b2e-5a4d-4c8b-9e7a-1d2b3c4d5e6f",
-    websiteUrl: "https://wallerracing.example",
+    websiteUrl: "https://example.com",
   };
 
-  beforeEach(() => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 204 })));
-  });
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("never shows Follow even when canFollow is true", () => {
-    render(
-      <PostCard
-        post={SHARES_POST}
-        viewerId={VIEWER_ID}
-        onReact={noop}
-        onBookmark={noop}
-        canFollow
-        variant="shares"
-      />,
-    );
-    expect(screen.queryByRole("button", { name: /^Follow / })).not.toBeInTheDocument();
-  });
-
-  it("renders the green Contact-trainer CTA to the public website_url", () => {
-    render(
-      <PostCard post={SHARES_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} variant="shares" />,
-    );
-    const cta = screen.getByRole("link", { name: "Contact trainer" });
-    expect(cta).toHaveAttribute("href", "https://wallerracing.example");
-    expect(cta).toHaveAttribute("target", "_blank");
-    expect(cta).toHaveAttribute("rel", "noopener noreferrer");
-    expect(cta).toHaveClass("btn", "btn-primary");
-  });
-
-  it("keeps react and save on the Shares card", () => {
-    render(
-      <PostCard post={SHARES_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} variant="shares" />,
-    );
-    expect(screen.getByRole("button", { name: "Like" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Bookmark" })).toBeInTheDocument();
-  });
-
-  it("omits the CTA when website_url is missing or not absolute http(s)", () => {
-    for (const websiteUrl of [null, "", "   ", "wallerracing.com.au", "javascript:alert(1)"]) {
-      const { unmount } = render(
-        <PostCard
-          post={{ ...SHARES_POST, websiteUrl }}
-          viewerId={VIEWER_ID}
-          onReact={noop}
-          onBookmark={noop}
-          variant="shares"
-        />,
-      );
-      expect(screen.queryByRole("link", { name: "Contact trainer" })).not.toBeInTheDocument();
-      unmount();
-    }
-  });
-
-  it("GUARDRAIL: CTA href is only website_url — never owner/contact PII or a price", () => {
+  it("never renders a Contact-trainer CTA, even when websiteUrl is set", () => {
     const { container } = render(
-      <PostCard post={SHARES_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} variant="shares" />,
+      <PostCard post={WEBSITE_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />,
     );
-    const text = container.textContent ?? "";
-    expect(text).not.toMatch(/owner/i);
-    expect(text).not.toMatch(/\$\d/);
-    expect(text).not.toMatch(/odds|bet|bookmaker/i);
-    expect(screen.getByRole("link", { name: "Contact trainer" }).getAttribute("href")).toBe(
-      "https://wallerracing.example",
-    );
+
+    // positive anchor first — prove the card actually rendered before asserting absence.
+    expect(screen.getByText("Mahogany")).toBeInTheDocument();
+
+    expect(screen.queryByRole("link", { name: /Contact trainer/i })).not.toBeInTheDocument();
+    expect(container.querySelector(".post-contact-cta")).toBeNull();
   });
 
-  it("logs the ENG-274 website-click on CTA click", async () => {
-    render(
-      <PostCard post={SHARES_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} variant="shares" />,
-    );
-    await userEvent.click(screen.getByRole("link", { name: "Contact trainer" }));
-    expect(fetch).toHaveBeenCalledWith(
-      `/api/trainers/${SHARES_POST.trainerId}/website-click`,
-      expect.objectContaining({ method: "POST", keepalive: true }),
-    );
-  });
-
-  it("does not render the CTA on the default Explore variant even with websiteUrl set", () => {
-    render(
-      <PostCard post={SHARES_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />,
-    );
-    expect(screen.queryByRole("link", { name: "Contact trainer" })).not.toBeInTheDocument();
+  it("GUARDRAIL: the shares variant/CTA code path is fully removed from post-card.tsx", () => {
+    const raw = fs.readFileSync(path.join(process.cwd(), "components/post-card.tsx"), "utf8");
+    // Strip comments first — this file legitimately documents the removal
+    // ("ENG-831's `variant=\"shares\"` ... ENG-956 removed it here") and a
+    // naive substring check would trip on that prose, not on live code.
+    const code = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    const src = code.replace(/\s+/g, " ");
+    expect(src).not.toContain('variant="shares"');
+    expect(src).not.toContain("Contact trainer");
+    expect(src).not.toContain("contactHref");
   });
 });
 
