@@ -2,11 +2,45 @@
 // (chrome from 06-explore.html). Server component: resolves the session (RLS via
 // httpOnly cookies) and redirects unauthenticated visitors to /signin. The browser
 // never receives a token or the backend URL.
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
 import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
 import { ExpiryBanner } from "./expiry-banner";
+import { InstallPrompt } from "./install-prompt";
 import { Sidebar, type SidebarUser } from "./sidebar";
+
+// ENG-985 — iPad installs the app by adding it to the Home Screen, so the
+// member space declares itself installable: the manifest that makes the
+// installed result an app rather than a bookmark, plus the Apple-specific
+// standalone declaration.
+//
+// BOTH are scoped HERE, to the member layout, and deliberately NOT to the root
+// layout, because the root is shared with the (marketing) space and a public
+// marketing brochure has no business claiming to be an installed app.
+//
+// That scoping is why the manifest is a static `public/manifest.webmanifest`
+// referenced by `metadata.manifest` instead of the idiomatic `app/manifest.ts`
+// file convention. The file convention was the first implementation and it was
+// WRONG for this repo: Next injects `<link rel="manifest">` into every
+// document, so every marketing page advertised itself as an installable
+// standalone app whose `start_url: "/"` on the apex is the marketing page, not
+// the app. Verified by curling `/`, `/legal/privacy` and the app routes.
+// Referencing it explicitly here is what keeps the link on app documents only.
+//
+// `statusBarStyle: "default"` is deliberate and is the OPAQUE bar. The
+// tinted-through alternative (`black-translucent`) draws the web view UNDER
+// the status bar, which would need safe-area padding on every member screen to
+// stop the topbar sliding beneath the clock — a shell-wide change this ticket
+// has no mandate for. Opaque is the correct conservative default here.
+export const metadata: Metadata = {
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "StablePass",
+    statusBarStyle: "default",
+  },
+};
 
 // ENG-585: the chip is only allowed to claim a trial is running while it
 // actually is. It used to test `status === "trial"` alone and clamp the day
@@ -63,6 +97,18 @@ export default async function MemberLayout({ children }: { children: React.React
         */}
         <ExpiryBanner subscription={sub} />
         {children}
+        {/*
+          ENG-985 — the iPad "Add to Home Screen" instruction. Mounted in the
+          shell, like the banner above, so it reaches every member screen
+          rather than only the feed. It is a client island for the same reason:
+          the detection reads `navigator`/`matchMedia` and the dismissal reads
+          `localStorage`, none of which exist during the server render.
+
+          It renders null for everyone who is not an iPad Safari visitor, and
+          for anyone already running it installed or who has dismissed it once
+          — so the common case costs an empty node. See ./install-prompt.
+        */}
+        <InstallPrompt />
       </main>
     </div>
   );
