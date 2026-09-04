@@ -1314,3 +1314,82 @@ checkout, and `it.skipIf(!MOCKUP)` SKIPS them when it does not resolve. A baseli
 worktree in `/tmp` therefore reports green and looks like your change caused the red.
 Create the baseline under `.claude/worktrees/` so the depth matches. (Both currently
 fail on `main` — mockup byte-drift, ENG-977 territory.)
+
+## The marketing copy guardrail sweeps the WHOLE build — comments included (ENG-953, 4 Sep 2026)
+
+`test/marketing-marquee.test.ts` greps `.next/{server,static}` for the
+`CONFIRMATION_COPY` fragments. It is **not** scoped to `app/(marketing)/`: a
+phrase from that list anywhere in the app fails the build-artifact sweep. A
+forgot-password confirmation sentence tripped it.
+
+Then the fix tripped it a second time. `.map` files are in the sweep and
+sourcemaps carry **source comments**, so a comment *explaining* that the banned
+wording was removed — quoting it to be helpful — fails identically.
+
+- **Do this:** before writing any "we've sent it" confirmation copy, read
+  `CONFIRMATION_COPY` in that test. Describe the banned phrases; never quote
+  them, in copy or in a comment.
+- The test is `it.skipIf(!existsSync('.next'))`, so it is **silent until you
+  build**. `npm test` alone will not catch it — run the documented gate
+  (`typecheck && lint && build && test`), and rebuild after changing copy or a
+  stale `.next` will keep reporting the old result.
+
+## Supabase password-recovery links: PKCE is the default and it breaks cross-device (ENG-953, 4 Sep 2026)
+
+`supabaseServer()` is a `@supabase/ssr` client, which forces **PKCE**. So
+`resetPasswordForEmail` mints a `pkce_` token, and the return trip carries
+`?code=` — exchangeable **only** by the browser holding the
+`…-code-verifier` cookie. Request the reset on a laptop, open the mail on a
+phone, and the exchange fails. Worse, Supabase's `/auth/v1/verify` consumes the
+emailed token *before* redirecting, so retrying in the original browser fails
+too: the member is stuck in a loop of "expired" screens.
+
+- **Do this:** the durable shape is `?token_hash=…&type=recovery`
+  (`verifyOtp`, no verifier, any device). It requires the Supabase recovery
+  **email template** to use `{{ .TokenHash }}` and point at the app — dashboard
+  config, so a **blocking deploy step**, not a code change.
+- Also dashboard config: the **redirect allow-list** must contain the
+  `redirectTo` or Supabase silently substitutes the project Site URL and the
+  link never reaches `/reset-password` — with every test still green. Verified
+  live: a non-allow-listed value came back rewritten to the bare Site URL.
+- `/reset-password` handles both shapes, and gives the PKCE-mismatch case its
+  own screen — telling that member the link "expired" sends them round a loop
+  that cannot succeed.
+
+## `updateUser({ password })` needs no current password — a session is NOT authorisation (ENG-953, 4 Sep 2026)
+
+Gating a set-new-password screen on `getUser()` returning a user turns it into a
+change-password screen with no re-authentication: any live session (unattended
+browser, or a stolen cookie — the `@supabase/ssr` session cookie is **not**
+httpOnly) becomes a permanent takeover, and single-device login (guardrail #5)
+then locks the real member out silently. Three independent reviews reproduced
+this on the first draft.
+
+- **Do this:** gate on evidence of the *recovery* specifically — an httpOnly,
+  short-lived marker cookie set by the exchange handler
+  (`app/reset-password/recovery-cookie.ts`), or the session's `amr` containing
+  `recovery`. Never on "is someone signed in".
+- Note guardrail #1 says tokens live in httpOnly cookies. **They do not** —
+  `createBrowserClient` requires a JS-readable cookie and ~10 components depend
+  on it. Don't write comments asserting the guardrail holds; it needs its own
+  reconciliation ticket.
+
+## A route that must not enumerate users needs a timing floor, not just a constant body (ENG-953, 4 Sep 2026)
+
+`POST /api/auth/forgot-password` returned an identical 200 for every input and
+was still a one-request oracle: `await`ing the Supabase send made a registered
+address 2.5-5x slower than an unknown one, with **non-overlapping**
+distributions. `curl -w '%{time_total}'` is as scriptable as reading a status.
+
+- **Do this:** pad every response to a fixed floor (see `DEFAULT_RESPONSE_FLOOR_MS`).
+  Do **not** detach the send with `after()`/`waitUntil` — the send is what writes
+  the PKCE verifier cookie onto that response, and detaching silently breaks the
+  `?code=` exchange.
+- Read the env floor override **per call**: a module-scope `process.env` read
+  happens at import, which ESM hoists above a test file's own statements, so the
+  override never applies and every case waits the full floor.
+- Such a route is also CSRF-able (`req.json()` ignores Content-Type, so a
+  cross-site `<form enctype="text/plain">` drives it). That plants an
+  attacker-known PKCE verifier in the victim's browser → login CSRF. Require
+  `application/json` and reject cross-site `Sec-Fetch-Site` **before** touching
+  Supabase, and still answer 200 so the guard adds no signal.
