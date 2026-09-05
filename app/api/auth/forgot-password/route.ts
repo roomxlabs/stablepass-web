@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabase/server";
-import { APP_HOST, normaliseHost, spaceForHost } from "@/lib/hosts";
+import { APP_HOST, normaliseHost } from "@/lib/hosts";
 
 // POST /api/auth/forgot-password — start a password reset (ENG-953).
 //
@@ -82,9 +82,10 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * enough to make it live.
  *
  * So the header is accepted only when it names a host we already know:
- * `APP_HOST` (or the marketing apex, which `spaceForHost` recognises), or a
- * developer machine. Anything else falls back to `APP_HOST` — the member app's
- * own domain, which is where a reset link belongs.
+ * `APP_HOST` itself, or — outside production — a developer machine. Anything
+ * else falls back to `APP_HOST`, the member app's own domain, which is where a
+ * reset link belongs. Note the marketing apex is NOT accepted: a reset link
+ * belongs on the app host, never on `stablepass.co`.
  */
 
 /**
@@ -137,17 +138,21 @@ export function publicOrigin(req: Request): string {
     // Only these two schemes may ever be produced, and only one of them here.
     const proto =
       req.headers.get("x-forwarded-proto")?.trim().toLowerCase() === "https" ? "https" : "http";
-    return `${proto}://${forwarded}${devPort(raw, forwarded)}`;
+    // An IPv6 address must be bracketed to be a legal URL authority:
+    // `new URL("http://::1/reset-password")` throws. `normaliseHost` returns
+    // the bare form for an unbracketed header, so re-bracket it here.
+    const authority = forwarded === "::1" ? "[::1]" : forwarded;
+    return `${proto}://${authority}${devPort(raw, forwarded)}`;
   }
 
-  // A host we recognise is honoured; anything else is discarded in favour of
-  // the app's own canonical host. `https` is not negotiable off a header.
-  const trusted =
-    forwarded && forwarded === APP_HOST && spaceForHost(forwarded) === "app"
-      ? forwarded
-      : APP_HOST;
-
-  return `https://${trusted}`;
+  // Everything else — a recognised `APP_HOST`, the marketing apex, a preview
+  // URL, an attacker's domain — resolves to the same constant. That is not an
+  // oversight: the ONLY origin a reset link may carry in a deployment is the
+  // app's own, so there is deliberately no decision left to make here. (The
+  // previous form tested `forwarded === APP_HOST` and branched to `forwarded`,
+  // which is the identical value — a ternary that read like a choice and was
+  // not one.) `https` is likewise not negotiable off a header.
+  return `https://${APP_HOST}`;
 }
 
 // The single response. One object, one code path.

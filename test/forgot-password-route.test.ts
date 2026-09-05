@@ -256,7 +256,8 @@ describe("POST /api/auth/forgot-password", () => {
     ["a loopback IP", { "x-forwarded-host": "127.0.0.1:8080" }, "http://127.0.0.1:8080"],
     ["a bracketed IPv6 loopback", { "x-forwarded-host": "[::1]:3000" }, "http://[::1]:3000"],
     // `::1` unbracketed: the `:1` is NOT a port, and must not be re-read as one.
-    ["a bare IPv6 loopback", { "x-forwarded-host": "::1" }, "http://::1"],
+    // Re-bracketed: `new URL("http://::1/reset-password")` throws.
+    ["a bare IPv6 loopback", { "x-forwarded-host": "::1" }, "http://[::1]"],
     // A non-numeric or out-of-range port is dropped, not interpolated.
     ["a non-numeric port", { "x-forwarded-host": "localhost:evil" }, APP],
     // An out-of-range port is dropped rather than interpolated: the host is
@@ -280,8 +281,19 @@ describe("POST /api/auth/forgot-password", () => {
       for (const proto of protos) {
         const origin = originFor({ "x-forwarded-host": host, "x-forwarded-proto": proto });
         expect(origin).toMatch(/^https?:\/\//);
-        // Nothing after the scheme may carry a path, credentials, or a second scheme.
-        expect(origin.slice("https://".length)).not.toMatch(/[/@]/);
+        // Strip the scheme by pattern, NOT by a fixed length: `"https://".length`
+        // is 8 while `http://` is 7, so slicing would eat the first character of
+        // every http host and let `http://@evil.com` through this very check.
+        const authority = origin.replace(/^https?:\/\//, "");
+        expect(authority).not.toMatch(/[/@?#\\;,\s]/);
+        // The origin is concatenated with `/reset-password` and handed to
+        // Supabase as `redirectTo`. It must survive URL parsing, and the parsed
+        // origin must still be the one we produced — no smuggled authority.
+        const parsed = new URL(`${origin}/reset-password`);
+        expect(parsed.origin).toBe(origin);
+        expect(parsed.username).toBe("");
+        expect(parsed.password).toBe("");
+        expect(["http:", "https:"]).toContain(parsed.protocol);
       }
     }
   });
