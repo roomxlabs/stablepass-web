@@ -1031,6 +1031,40 @@ a { color: inherit; text-decoration: none; }
 }
 .tag.race-day { background: var(--brand-green); color: var(--cream); }
 .tag.active { background: var(--brand-green-soft); color: var(--brand-green); }
+/* ROUND 8 / ENG-959 — THE HORSE STATUS SCALE (mobile ENG-866 + the 1 Sep re-cut).
+   These four classes are the web half of mobile's `StatusScale`
+   (src/components/ui/tag.tsx); `lib/horse/profile.ts` `statusTagClassOf()` is the
+   only thing that picks between them, so a status colour is decided ONCE. The
+   profile used to compare `training_status === "racing"` inline and leave the
+   other four statuses on the neutral `.tag` above.
+
+   spelling / retired / unknown are deliberately ABSENT: bland is the plain
+   `.tag`, so there is nothing to declare and no way for them to drift.
+
+   The two literal hexes are mobile's, restated rather than tokenised — they are
+   this scale's own shades and exist nowhere else in web's palette. Contrast is
+   AAA at the 10.5px label (computed in mobile's status-tag-shared-mapping test):
+   #E4C98F on --ink 10.82:1, #C3D9BB on --ink 11.57:1, --brand-green-dark on
+   --cream 8.36:1, #5C4033 on --cream 8.79:1.
+
+   `--brand-green-dark` for In training and NOT `--brand-green`: "Shares
+   Available" below is `.tag.race-day`, i.e. --brand-green, and it sits in this
+   same status row. One step darker keeps the two chips apart. The light gold
+   keeps ENG-866's distance guard from the --gold race badge (#C9A56F): #E4C98F
+   sits 95 of summed channel distance away, so the two cannot read as one chip. */
+.tag.status-breaking     { background: #E4C98F; color: var(--ink); }
+.tag.status-pre-training { background: #C3D9BB; color: var(--ink); }
+.tag.status-in-training  { background: var(--brand-green-dark); color: var(--cream); }
+.tag.status-racing       { background: #5C4033; color: var(--cream); }
+/* The shares CTA on the horse profile (ENG-959). Mobile draws this `primary` and
+   FULL-BLEED (`alignSelf: 'stretch'`) because it owns a phone-width column; web
+   deliberately does not follow it there. The button keeps its natural width and
+   sits left, which is how web already draws this very component on the trainer
+   profile — a 920px-wide green bar would read as a banner, not as an action, and
+   the two screens would then disagree about what the same CTA looks like.
+   `grid-column` is what it needs from the header grid: its own full-width row,
+   so it never shares a line with the stats block above it. */
+.profile-shares-cta-web { grid-column: 1 / -1; margin-top: 16px; display: flex; }
 .profile-name-web {
   font-family: var(--font-serif);
   font-size: 56px;
