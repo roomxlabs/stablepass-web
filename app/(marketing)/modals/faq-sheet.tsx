@@ -27,16 +27,17 @@ import Sheet from "./sheet";
  * That difference is the mockup's, not drift: the section teases and the sheet
  * is the full list, which is what "View all" means.
  */
-const FAQS: ReadonlyArray<{ q: string; a: string }> = [
+const FAQS: ReadonlyArray<{ q: string; a: string; launchOnly?: boolean }> = [
   {
     q: "What is stablepass.?",
     a: "stablepass. is a monthly racing experience subscription that gives subscribers access to behind-the-scenes content from participating thoroughbred racing stables.",
   },
   {
+    launchOnly: true,
     q: "Is there an introductory offer?",
     a: "Yes. New subscribers who join on or before 30 November 2026 pay $9 per month for their first 6 months, then $19 per month thereafter. Cancel anytime.",
   },
-  { q: "How much does stablepass. cost?", a: "stablepass. subscription is $19 per month." },
+  { launchOnly: true, q: "How much does stablepass. cost?", a: "stablepass. subscription is $19 per month." },
   {
     q: "What do subscribers receive?",
     a: "Subscribers receive access to stable updates, photos, videos, horse progress reports, race previews, race follow-ups, and other subscription-only racing content from participating stables.",
@@ -149,7 +150,7 @@ export default function FaqSheet() {
       {/* The inline max-width/margin is the mockup's own, on this element. */}
       <div className="faq" style={{ maxWidth: "none", marginTop: 26 }}>
         {FAQS.map((item) => (
-          <details key={item.q}>
+          <details key={item.q} className={item.launchOnly ? "launch-only" : undefined}>
             <summary>{item.q}</summary>
             <p className="a">{item.a}</p>
           </details>

@@ -20,7 +20,9 @@
  * so it runs with scripting off and stops under prefers-reduced-motion, both from
  * W1's stylesheet. Nothing in this file needs JS.
  */
-export default function Hero() {
+import WaitlistForm from "../waitlist-form";
+
+export default function Hero({ joined, reason }: { joined?: string | null; reason?: string | null }) {
   return (
     <>
       <header className="hero" id="top">
@@ -35,8 +37,14 @@ export default function Hero() {
                 <i />
                 RACING EXPERIENCE SUBSCRIPTION
               </span>
-              <span className="chip-sep">·</span>
-              <b>LAUNCH OFFER · $9/MONTH FOR YOUR FIRST 6 MONTHS</b>
+              {/* Hidden pre-launch with the rest of the pricing: the badge
+                  advertises the launch offer, and waitlist mode does not sell a
+                  price. Marked `launch-only` rather than deleted — the copy
+                  freeze requires every hide in this mode to be CSS-only, so the
+                  text stays in the DOM and the launch switch-back needs no
+                  markup back. */}
+              <span className="chip-sep launch-only">·</span>
+              <b className="launch-only">LAUNCH OFFER · $9/MONTH FOR YOUR FIRST 6 MONTHS</b>
             </span>
             {/* Justin, 1 Sep: "Experience needs to be on the second line", then
                 "made simple needs to be a new line" — so all three breaks are
@@ -64,12 +72,22 @@ export default function Hero() {
             {/* Justin, 1 Sep: "Maybe take out the first $19 per month line" — it
                 repeated the "$19/month thereafter" line two rows below, so the
                 launch price now leads and the standing price follows it once. */}
-            <p className="hero-launch">Launch Offer — $9/month for your first 6 months.</p>
-            <p className="hero-price hero-price-sub">
+            <p className="hero-launch cta-trial">Launch Offer — $9/month for your first 6 months.</p>
+            <p className="hero-price hero-price-sub cta-trial">
               $19/month thereafter. Cancel anytime. No lock-in contract.
               <br />
               Follow the journey. Feel part of the action.
             </p>
+            {/* Pre-launch, the offer copy above is hidden with the rest of the
+                pricing and this line leads instead. Deliberately says nothing
+                about a trial: the 30-day trial is not the offer any more
+                (Naufal, 2 Sep). */}
+            <p className="hero-price cta-waitlist">
+              Join the waitlist to be first to receive exclusive updates on our launch and special offers.
+            </p>
+            <div className="cta-waitlist wl-mount">
+              <WaitlistForm initialJoined={joined} initialReason={reason} />
+            </div>
             <div className="hero-actions">
               <a className="btn btn-green cta-trial" href="/start">
                 Get the $9/month offer
@@ -77,7 +95,11 @@ export default function Hero() {
               <a className="btn btn-green cta-join" href="/start">
                 Join stablepass.
               </a>
-              <a className="btn btn-ghost" href="#how">
+              {/* Hidden pre-launch (Naufal, 2 Sep). `launch-only` rather than
+                  deleted, like every other hide in this mode: the copy freeze
+                  requires the text to stay in the DOM, and the switch-back is
+                  then a mode flip with no markup to restore. */}
+              <a className="btn btn-ghost launch-only" href="#how">
                 See how it works
               </a>
             </div>
