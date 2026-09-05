@@ -1393,3 +1393,45 @@ distributions. `curl -w '%{time_total}'` is as scriptable as reading a status.
   attacker-known PKCE verifier in the victim's browser → login CSRF. Require
   `application/json` and reject cross-site `Sec-Fetch-Site` **before** touching
   Supabase, and still answer 200 so the guard adds no signal.
+- **The test override that neutralises the floor also neutralises its tests
+  (found in review, 5 Sep).** `test/forgot-password-route.test.ts` sets
+  `PASSWORD_RESET_FLOOR_MS = "0"` before importing the route — correct, or its
+  40-odd cases each cost 1.5s. But that made the floor unobservable to *every*
+  test in the file: deleting the pad from the route left the whole suite green.
+  A guardrail whose only tests run with it switched off is not pinned at all.
+  **Do this:** when a suite disables a production safety via env, pin that safety
+  in a SEPARATE test file that sets its own NON-ZERO value — see
+  `test/forgot-password-floor.test.ts`. Then mutation-test it: delete the
+  production code and confirm the new test actually goes red.
+- **Do NOT reason about that split as "vitest isolates the env".** It does not.
+  Vitest gives each file its own MODULE registry (so the route is re-imported and
+  re-reads the value), but `process.env` is process-global and workers are reused
+  across files. The invariant that actually holds is "**every** file importing
+  this route sets `PASSWORD_RESET_FLOOR_MS` itself" — add a third importer that
+  sets nothing and it inherits whatever ran before it, which is order-dependent
+  and silent. Use `vi.stubEnv` + `vi.unstubAllEnvs` if you need one.
+- **A floor must be measured on a MONOTONIC clock.** `Date.now()` truncates to
+  integer ms, so two calls straddling a tick report 1ms for microseconds of real
+  work and the pad lands a millisecond short — enough to make the floor's own
+  test fail ~20% of the time on an idle machine (and pass under load, because
+  timer overshoot hides it). It is also wall-clock: an NTP step mid-request can
+  produce a huge `elapsed` that skips the pad entirely. Use `performance.now()`.
+
+## Token-type smuggling has TWO branches to close, not one (ENG-953, 5 Sep 2026)
+
+`/reset-password/confirm` pinned `type === "recovery"` on the `token_hash`
+branch, and the `?code=` branch was left handing any PKCE code to
+`exchangeCodeForSession` unchecked — so a member's own OAuth or magic-link code,
+spent against that URL, bought the httpOnly recovery marker and with it the
+"set a new password without knowing the old one" form.
+
+- **Do this:** on the PKCE branch require `redirectType === "recovery"` from the
+  exchange result. `resetPasswordForEmail` stores the verifier with a
+  `/recovery` suffix (`getCodeChallengeAndMethod(..., isPasswordRecovery)`), and
+  `_exchangeCodeForSession` splits it back off and returns it — the same signal
+  auth-js uses to pick `PASSWORD_RECOVERY` over `SIGNED_IN`.
+- The field is real at runtime but **absent from the published type**, so it
+  needs a narrow cast. That fails closed (a missing field refuses every link),
+  which is the right direction here.
+- When a route grants a capability, audit **every** branch that reaches the
+  grant. Fixing the branch the reviewer happened to look at is not the fix.

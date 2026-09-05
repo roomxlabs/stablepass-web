@@ -133,13 +133,21 @@ const SENT = () => NextResponse.json({ data: { sent: true } });
  */
 
 export async function POST(req: Request) {
-  const startedAt = Date.now();
+  // MONOTONIC, not wall-clock. `Date.now()` was wrong here twice over:
+  //   * It truncates to integer ms, so two calls straddling a tick report 1ms
+  //     for ~20µs of real work and the pad comes up a millisecond SHORT. That
+  //     made the floor's own test fail ~20% of the time on an idle machine.
+  //   * It is wall-clock, so an NTP step mid-request can make `elapsed` negative
+  //     (harmless) or huge — and a huge value skips the pad entirely, silently
+  //     reopening the timing channel for that request.
+  // `performance.now()` is monotonic and fractional, so neither can happen.
+  const startedAt = performance.now();
 
   // Pad, then answer. Every `return` in this function goes through here, so no
   // branch can be timed against another.
   const respond = async () => {
     const floor = responseFloorMs();
-    const elapsed = Date.now() - startedAt;
+    const elapsed = performance.now() - startedAt;
     if (elapsed < floor) await sleep(floor - elapsed);
     return SENT();
   };

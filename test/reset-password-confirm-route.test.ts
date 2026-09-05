@@ -2,11 +2,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const exchangeCodeForSessionMock = vi.fn();
 const verifyOtpMock = vi.fn();
+const signOutMock = vi.fn();
 
 vi.mock("@/lib/supabase/server", () => ({
   supabaseServer: vi.fn(async () => ({
     auth: {
       exchangeCodeForSession: exchangeCodeForSessionMock,
+      signOut: signOutMock,
       verifyOtp: verifyOtpMock,
     },
   })),
@@ -26,8 +28,15 @@ const location = (res: Response) => {
 
 describe("GET /reset-password/confirm", () => {
   beforeEach(() => {
-    exchangeCodeForSessionMock.mockReset().mockResolvedValue({ data: {}, error: null });
+    // `redirectType: "recovery"` is what auth-js returns when the PKCE verifier
+    // this browser stored was written by `resetPasswordForEmail` — i.e. when the
+    // flow that produced this code really was a password reset. The default mock
+    // is the happy path; the smuggling cases below override it.
+    exchangeCodeForSessionMock
+      .mockReset()
+      .mockResolvedValue({ data: { redirectType: "recovery" }, error: null });
     verifyOtpMock.mockReset().mockResolvedValue({ data: {}, error: null });
+    signOutMock.mockReset().mockResolvedValue({ error: null });
   });
 
   describe("PKCE ?code= links", () => {
@@ -39,6 +48,50 @@ describe("GET /reset-password/confirm", () => {
       // on a URL that no longer carries the recovery secret.
       expect(location(res)).toBe("/reset-password");
       expect(exchangeCodeForSessionMock).toHaveBeenCalledWith("good");
+    });
+
+    // ── Token-type smuggling, the `?code=` half ─────────────────────────────
+    //
+    // The mirror of the `type === "recovery"` pin on the token_hash branch. A
+    // code that exchanges perfectly well but did NOT come from a reset flow must
+    // not buy the recovery marker: the marker is what lets the holder set a new
+    // password without proving they know the old one, so granting it to an OAuth
+    // or magic-link code turns any such code into a re-authentication bypass.
+    //
+    // The check is on `redirectType`, which auth-js derives from the `/recovery`
+    // suffix `resetPasswordForEmail` puts on the stored verifier.
+    it.each([
+      ["an OAuth / magic-link code (no recovery suffix on the verifier)", null],
+      ["a code whose flow type is absent entirely", undefined],
+      ["a code from some other named flow", "signup"],
+    ])("grants no recovery marker for %s", async (_label, redirectType) => {
+      exchangeCodeForSessionMock.mockResolvedValue({
+        data: { redirectType },
+        error: null,
+      });
+
+      const res = await call("?code=not-from-a-reset");
+
+      // Refused as an unusable link, and — the load-bearing half — NO marker.
+      expect(location(res)).toBe("/reset-password?state=invalid");
+      expect(res.headers.getSetCookie().join(";")).not.toContain(RECOVERY_COOKIE);
+      // …and the session the exchange already minted is dropped, so a refused
+      // link does not quietly sign the visitor in. See the note in the route.
+      expect(signOutMock).toHaveBeenCalledWith({ scope: "local" });
+    });
+
+    it("grants the marker only on a genuinely recovery-scoped code", async () => {
+      exchangeCodeForSessionMock.mockResolvedValue({
+        data: { redirectType: "recovery" },
+        error: null,
+      });
+
+      const res = await call("?code=from-a-real-reset");
+
+      expect(location(res)).toBe("/reset-password");
+      expect(res.headers.getSetCookie().join(";")).toContain(RECOVERY_COOKIE);
+      // The genuine journey keeps its session — that is the whole point.
+      expect(signOutMock).not.toHaveBeenCalled();
     });
 
     // A failed exchange is overwhelmingly the missing-verifier case: the link

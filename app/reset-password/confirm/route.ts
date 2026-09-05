@@ -85,9 +85,70 @@ export async function GET(request: Request) {
   const sb = await supabaseServer();
 
   if (code) {
-    const { error } = await sb.auth.exchangeCodeForSession(code);
+    const { data, error } = await sb.auth.exchangeCodeForSession(code);
     // Almost always the missing-verifier case — see the note above.
     if (error) return NextResponse.redirect(new URL(WRONG_DEVICE, origin));
+
+    // ── The `?code=` half of the token-type pin ───────────────────────────────
+    //
+    // The `token_hash` branch below refuses a `signup`/`magiclink`/`email_change`
+    // token by pinning `type === "recovery"`. Without this check the PKCE branch
+    // had no equivalent: it handed ANY exchangeable code to Supabase and granted
+    // the recovery marker on success. A member holding one of their own non-
+    // recovery codes (an OAuth callback code, a magic link) could spend it here
+    // and reach the "set a new password without knowing the old one" form —
+    // exactly the re-authentication bypass the marker cookie exists to prevent.
+    //
+    // `redirectType` is how auth-js reports which flow this browser STARTED.
+    // `resetPasswordForEmail` stores the PKCE verifier with a `/recovery` suffix
+    // (`getCodeChallengeAndMethod(storage, key, isPasswordRecovery = true)` in
+    // @supabase/auth-js), and `_exchangeCodeForSession` splits that suffix back
+    // off and returns it — the same signal it uses to decide between emitting a
+    // `PASSWORD_RECOVERY` and a `SIGNED_IN` event. Any other flow stores a bare
+    // verifier, so `redirectType` comes back null and we refuse.
+    //
+    // BE PRECISE ABOUT WHAT THIS IS: a check on the flow THIS BROWSER began, read
+    // from the local verifier cookie — not a server-side assertion by GoTrue that
+    // the code itself is recovery-scoped. That is still the property we need,
+    // because the marker is a statement about this browser's intent, and a code
+    // is only exchangeable in the browser that holds its matching verifier.
+    //
+    // MEASURED against local GoTrue (5 Sep), both directions, not inferred:
+    //   resetPasswordForEmail  → verifier stored "…/recovery" → redirectType "recovery"
+    //   signInWithOtp (magic)  → verifier stored bare         → redirectType null
+    // The magic-link code still EXCHANGES cleanly and still yields a session —
+    // which is exactly why `error === null` was never sufficient to grant the
+    // marker, and why this branch needed its own check rather than trusting the
+    // exchange to fail on a non-recovery code. It does not fail.
+    // The cast is deliberate and narrow. `_exchangeCodeForSession` returns
+    // `redirectType` at runtime (it is spread into the result alongside
+    // `session`/`user`), but @supabase/auth-js's PUBLISHED type for the PKCE
+    // exchange omits the field — it appears only in a docstring example. So the
+    // value has to be read through a widening cast rather than off the type.
+    //
+    // Note which way this fails. If a future auth-js stopped returning the
+    // field, `redirectType` reads back undefined and EVERY `?code=` link is
+    // refused — reset links break loudly and the tests below go red, rather than
+    // the marker being handed out silently. Fail-closed is the correct direction
+    // for a check that guards a password change.
+    const { redirectType } = (data ?? {}) as { redirectType?: string | null };
+
+    if (redirectType !== "recovery") {
+      // By this point `exchangeCodeForSession` has ALREADY minted a session and
+      // written its cookies (auth-js calls `_saveSession` before returning, and
+      // a Route Handler merges those onto whatever response we return). So
+      // withholding the marker is not by itself enough: without this the visitor
+      // would be silently SIGNED IN by a link we just called unusable.
+      //
+      // `scope: "local"` clears the cookies we are about to emit. It is
+      // deliberately not "global": the code was already spent and, under
+      // single-device login (guardrail #5), minting the session already revoked
+      // the member's other sessions server-side. That cannot be undone here, and
+      // a global sign-out would only widen the damage.
+      await sb.auth.signOut({ scope: "local" });
+      return NextResponse.redirect(new URL(INVALID, origin));
+    }
+
     return grant(new URL("/reset-password", origin));
   }
 
