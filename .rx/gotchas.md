@@ -1269,3 +1269,48 @@ Measured, not assumed.
 
 - **Do this:** spell the projection out as a LITERAL string in the test — the
   same way the disclaimer copy is pinned to a typed-out `VERBATIM`.
+
+## `app/manifest.ts` injects the manifest link into EVERY document
+The idiomatic Next file convention (`app/manifest.ts`) makes Next add
+`<link rel="manifest">` to every page in the app, marketing included. In this repo
+that advertises the marketing apex as an installable standalone app whose
+`start_url: "/"` is the brochure, not the member app — i.e. it changes behaviour on
+the marketing surface without editing a single marketing file. Use a static
+`public/manifest.webmanifest` + `metadata.manifest` on `app/(member)/layout.tsx`
+instead, so only app-space documents link it. Verify with
+`curl -s localhost:<port>/legal/privacy | grep manifest` (expect nothing).
+
+## `.trial-label` / `.trial-detail` are SCOPED to `.trial-banner-web`
+The rules are `.trial-banner-web .trial-label`, not bare class selectors. Applying
+`className="trial-label"` outside that parent silently renders unstyled browser
+defaults — no error, no failing test, and it survives review unless someone LOOKS at
+a screenshot. Either nest inside `.trial-banner-web` or restate the values. This is
+the concrete case for "screenshot every UI change before you believe it".
+
+## iPad detection: three false positives a touch+platform check alone lets through
+`platform === "MacIntel" && maxTouchPoints > 1` is necessary but not sufficient.
+1. **iPhone with "Request Desktop Website"** reports the Macintosh UA *and* `MacIntel`
+   *and* touch points — identical to an iPad on every UA signal. Discriminate on
+   `Math.min(screen.width, screen.height)`: iPads are >= 744, the largest iPhone is
+   430, and screen size is immune to the desktop-mode switch (the viewport is not —
+   split view would break it).
+2. **WebKit in-app browsers** (Instagram, Facebook `FBAN/FBAV`, LinkedIn, `GSA/`,
+   DuckDuckGo `Ddg`) contain `Safari` and none of the Chrome tokens, so they pass a
+   naive Safari check — but they have no Share → Add to Home Screen, so the
+   instruction is a dead end. Exclude by product token.
+3. **`SFSafariViewController` opened by a native app forwards a byte-identical Safari
+   UA.** It is therefore UNDETECTABLE by user agent. Do not write "this cannot appear
+   in the native app" — it can. The native shell must declare itself positively
+   (query param / storage key / UA product token) and the web side must honour it.
+
+## Playwright: `getByLabel("Password")` is ambiguous since the reveal-password toggle
+The eye control is `aria-label="Show password"`, which the accessible-name match also
+picks up → strict-mode violation. Use `getByRole("textbox", { name: "Password" })`.
+Several older specs in `e2e/` still use the bare label and are stale.
+
+## Baseline a "pre-existing" test failure at the SAME worktree depth
+`test/marketing-{home,shell}.test.tsx` resolve the mockup via a path relative to the
+checkout, and `it.skipIf(!MOCKUP)` SKIPS them when it does not resolve. A baseline
+worktree in `/tmp` therefore reports green and looks like your change caused the red.
+Create the baseline under `.claude/worktrees/` so the depth matches. (Both currently
+fail on `main` — mockup byte-drift, ENG-977 territory.)
