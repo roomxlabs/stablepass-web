@@ -133,7 +133,7 @@ sequenceDiagram
   M->>W: POST /api/subscription/checkout
   W->>D: select promo_passes_used, status, stripe_customer_id, current_period_end
   D-->>W: {promo_passes_used:0, status:'lapsed'}
-  W->>S: prices.retrieve(PROMO); subscriptions.create(cancel_at_period_end:true, metadata.app_user_id)
+  W->>S: prices.retrieve(PROMO) then subscriptions.create(cancel_at_period_end:true, metadata.app_user_id)
   S-->>W: clientSecret, unit_amount:900, currency:'aud'
   W-->>M: 200 {clientSecret, unitAmount:900, currency:'aud', mode:'purchase', promoRemaining:6}
   M->>S: Elements confirmPayment — card never reaches our server
