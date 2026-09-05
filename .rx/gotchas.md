@@ -1459,3 +1459,47 @@ production, and its output is the origin of a password-reset link.
   `evil.attacker.example`, which takes the *other* branch. A test that never
   enters the vulnerable branch proves nothing about it. Enumerate the branches,
   then write a case that lands in each.
+
+## A server component cannot CALL an export of a `"use client"` module (ENG-959)
+
+Rendering a client component from a server component is fine; **calling a plain
+function it exports is not**. It fails only at request time, with
+
+    Attempted to call hasLinkableWebsite() from the server but
+    hasLinkableWebsite is on the client.
+
+- **Symptom:** the page 500s in the browser while `npm run typecheck` is clean
+  and the jsdom unit tests pass — those tests mock the client module, so the RSC
+  boundary is never exercised. Only Playwright caught it.
+- **Cause:** the helper lived beside the component that used it
+  (`app/(member)/trainers/[id]/website-link.tsx`), which carries `"use client"`
+  for its onClick. A second, *server* caller then imported the helper from there.
+- **Do this:** a pure helper shared by a client component and a server component
+  belongs in a directive-free `lib/` module both sides import — not in either
+  component's file, and never copy-pasted into the second caller. Pin it with a
+  guard test that reads the module and asserts it has neither a `"use client"`
+  directive nor any `import` (anchor the directive regex to a bare line — the
+  module's own comment will quote the phrase while explaining the rule).
+
+## A shared `*_COLUMNS` constant can change an API response from another file (ENG-959)
+
+`HORSE_PROFILE_COLUMNS` (`lib/horse/profile.ts`) has **two** consumers: the
+horse profile page and `app/api/horses/[id]/route.ts`. The route returns the
+embedded `trainer` object **verbatim**, so any field added to
+`trainer:trainer_id(...)` is silently published in that route's JSON — a
+contract change made by editing a different file, with nothing in front of it.
+
+- **Do this:** before widening a shared projection, check every consumer for a
+  verbatim spread/return of the widened object. A column the *page* needs on one
+  screen should be read by that screen, not bolted onto a shared embed. Adding a
+  column the route field-picks (e.g. a `horse` column) is safe; adding one it
+  passes through is not. A test asserting the embed stays un-widened is cheap.
+
+## `horse_training_status_check` now admits only six values (ENG-959)
+
+The 1 Sep 2026 migration merged the legacy training-yard spellings. Locally the
+constraint is `spelling | breaking_in | pre_training | in_training | racing |
+retired`, so **seeding `farm_training`/`city_training` in an e2e fails with
+23514**. Cover the legacy collapse at unit level, where the value can still
+exist, and keep those switch cases in production code for clients rendering a
+cached pre-migration row.
