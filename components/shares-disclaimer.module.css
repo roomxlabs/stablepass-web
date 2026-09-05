@@ -1,0 +1,129 @@
+/*
+ * SharesDisclaimer — the Shares screen's disclaimer link + pop-up card.
+ *
+ * A 1:1 port of mobile's `src/components/shares-disclaimer.tsx` styles (Justin +
+ * Mel, 26 Aug 2026 meeting). Scoped as a CSS module ON PURPOSE: `app/globals.css`
+ * is a shared surface and this ticket owns neither it nor the risk of colliding
+ * with another in-flight PR there.
+ *
+ * Colours come from `app/globals.css`'s `:root` tokens. There are exactly TWO
+ * exceptions — the backdrop scrim and the close button's ground — because both
+ * are alpha overlays and the design system has no alpha token. Both are the
+ * verbatim values from mobile's `shares-disclaimer.tsx`: ported, not eyeballed.
+ */
+
+/* Full-width green strip — mobile `linkWrap` (alignSelf: stretch, brand green,
+   Spacing.lg / Spacing.sm padding). The strip itself is the affordance: Justin
+   took the underline OFF on 1 Sep. */
+.strip {
+  display: block;
+  width: 100%;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  background: var(--brand-green);
+  color: var(--cream);
+  padding: 8px 20px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+
+.strip:hover {
+  background: var(--brand-green-dark);
+}
+
+/* Mobile's `backdrop` — rgba(30, 43, 38, 0.45), centred, Spacing.xl padding. */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(30, 43, 38, 0.45);
+}
+
+/* Mobile's `card` — brand-green ground, Radius.md, Spacing.xl padding, 420 max,
+   `overflow: hidden` so the corner mark is clipped by the rounded corners. */
+.card {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  max-width: 420px;
+  padding: 24px;
+  border-radius: var(--radius-md);
+  background: var(--brand-green);
+  box-shadow: var(--shadow-lg);
+}
+
+/* The brand's serif "S." as a quiet ground mark (Naufal, 31 Aug: "add the usual
+   S. graphic") — decorative only, behind the copy. The `scaleX(1.25)` is
+   mobile's: Cormorant's display cut reads as stretched without it. */
+.brandMark {
+  position: absolute;
+  right: -4px;
+  bottom: -34px;
+  font-family: var(--font-serif);
+  font-size: 120px;
+  line-height: 120px;
+  color: var(--cream);
+  opacity: 0.09;
+  transform: scaleX(1.25);
+  pointer-events: none;
+  user-select: none;
+}
+
+.cardHead {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+/* Deliberately the serif at 22px — mobile's `cardTitle`, which is likewise NOT
+   the name face. */
+.cardTitle {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--cream);
+}
+
+.closeBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  color: var(--cream);
+  background: rgba(250, 247, 242, 0.14);
+}
+
+.closeBtn:hover {
+  background: rgba(250, 247, 242, 0.24);
+}
+
+.closeBtn svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+}
+
+/* Mobile's `cardBody` — 14/22 cream. */
+.cardBody {
+  position: relative;
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--cream);
+}
