@@ -1315,3 +1315,50 @@ checkout, and `it.skipIf(!MOCKUP)` SKIPS them when it does not resolve. A baseli
 worktree in `/tmp` therefore reports green and looks like your change caused the red.
 Create the baseline under `.claude/worktrees/` so the depth matches. (Both currently
 fail on `main` — mockup byte-drift, ENG-977 territory.)
+
+## `.gitignore`'s `.env*` silently swallows `.env.example`
+The ignore rule is `.env*` (unanchored), so a newly created `.env.example` is
+ignored and `git add` does nothing — the file just never appears in the diff.
+`git check-ignore -v .env.example` is confusing here (it prints the *negation*
+rule once one exists); the reliable signal is `git status --short`, since ignored
+files never show up there at all. Fix is one line **after** the `.env*` rule:
+`!/.env.example` (root-anchored, so it cannot re-include a nested `.env.example`).
+Verify with `git check-ignore -q` on `.env`, `.env.local` and
+`.env.production.local` — all three must stay ignored. Expect any ticket whose
+surface is `.env.example` to need this `.gitignore` line too; it is an
+unavoidable widening, not scope creep.
+
+## `vercel env add <NAME> preview` cannot be completed non-interactively
+Adding a **Preview** var bails with
+`{"status":"action_required","reason":"git_branch_required"}` — and it does this
+*even when you run the exact command its own `next[]` hint tells you to*
+(`vercel env add NAME preview --value <v> --yes`). CLI 50.37.3. `production` and
+`development` take a piped stdin value fine; only `preview` is broken, because it
+wants to know whether the var is branch-scoped or all-branches.
+Workaround — go straight at the REST API with the CLI's own token:
+```
+TOKEN=$(python3 -c "import json;print(json.load(open('$HOME/.local/share/com.vercel.cli/auth.json'))['token'])")
+curl -X POST "https://api.vercel.com/v10/projects/$PROJECT_ID/env?teamId=$TEAM_ID&upsert=true" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"key":"NAME","value":"v","type":"encrypted","target":["preview"]}'
+```
+`projectId` / `orgId` are in `.vercel/project.json`. Also note this CLI takes only
+ONE environment per `env add` — `... production preview development` is an
+"Invalid number of arguments" error, not a multi-target add.
+
+## Stripe: there is no `stripe` CLI on this machine — use the REST API
+Tickets are written against `stripe prices retrieve …` / `stripe prices list`, but
+the CLI is not installed. Use `curl -u "$SK:" https://api.stripe.com/v1/...` with
+the key read out of `.env.local`. Always assert `livemode: false` in the response
+before believing you were in the sandbox — the key prefix (`sk_test_`) and
+`livemode` are the two checks worth making explicit in any ticket comment.
+`tax_behavior` on a price is **immutable once set** to `inclusive`/`exclusive`,
+so set it correctly at creation (AU prices are GST-inclusive) rather than
+planning to fix it later; it does not enable Stripe Tax by itself.
+
+## Preview deploys have NO Stripe env at all
+`STRIPE_SECRET_KEY` and `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` exist for
+Production and Development only. Any preview deployment therefore 502s
+`stripe_unavailable` on `/api/subscription/checkout` no matter which price ids
+are configured. Don't debug a preview checkout as a code bug, and don't assume a
+"set it for Preview + Production" ops ticket made preview functional.
