@@ -16,12 +16,23 @@
 import { notFound } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
 import { signPhoto, HORSE_PHOTO_BUCKET } from "@/lib/storage/photos";
-import { HORSE_PROFILE_COLUMNS, ageDescriptionLine, type HorseProfileRow } from "@/lib/horse/profile";
+import {
+  HORSE_PROFILE_COLUMNS,
+  ageDescriptionLine,
+  statusTagClassOf,
+  trainingStatusLabel,
+  type HorseProfileRow,
+} from "@/lib/horse/profile";
 import { readSubscriptionState } from "@/lib/api/subscription-state";
 import { AccessWall } from "@/components/access-wall";
 import { TrainerCard } from "@/components/trainer-card";
 import { FollowNotify } from "./follow-notify";
 import { HorsePosts } from "./horse-posts";
+import { WebsiteLink } from "@/app/(member)/trainers/[id]/website-link";
+// The validator comes from `lib/`, never from the client component above — see
+// the note in lib/trainer/website.ts (calling a client export from a server
+// component is a runtime RSC error that tsc does not catch).
+import { hasLinkableWebsite } from "@/lib/trainer/website";
 import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 
 type NextRaceRow = {
@@ -43,9 +54,11 @@ function pedigree(sire: string | null, dam: string | null): string | null {
   return sire ? `by ${sire}` : `out of ${dam}`;
 }
 
-function trainingStatusLabel(status: string): string {
-  return status.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
-}
+// `trainingStatusLabel` used to live here as a naive underscore-strip +
+// capitalise. It is now imported from lib/horse/profile.ts (ENG-959): that
+// version is mobile's `TRAINING_STATUS_LABEL`, which collapses the legacy
+// farm/city spellings to one "In training" instead of inventing two statuses the
+// product does not have.
 
 // prize_money_cents -> "$1.2M" (>=$1m), "$45k" (>=$1k), else "$N" — mirrors
 // GET /api/horses/:id's formatPrize (route.ts), duplicated here since this
@@ -143,13 +156,33 @@ export default async function HorseProfilePage({ params }: { params: Promise<{ i
     }
   }
 
-  const [{ data: followRow }, { data: notifyRow }, { count: trainerHorseCount }] = await Promise.all([
-    sb.from("follow").select("id").eq("user_id", userId).eq("horse_id", id).maybeSingle(),
-    sb.from("notify_optin").select("id").eq("user_id", userId).eq("horse_id", id).maybeSingle(),
-    trainer
-      ? sb.from("horse").select("id", { count: "exact", head: true }).eq("trainer_id", trainer.id)
-      : Promise.resolve({ count: 0 } as { count: number | null }),
-  ]);
+  // The trainer's public `website_url` is read HERE rather than added to the
+  // shared `HORSE_PROFILE_COLUMNS` trainer embed (ENG-959). That embed is also
+  // consumed by app/api/horses/[id]/route.ts, which returns `trainer` VERBATIM —
+  // so widening it would have silently published a new field in that route's
+  // response envelope, a contract change made by editing a different file.
+  // Reading it on the one screen that needs it keeps the API contract still.
+  //
+  // Only fetched when this horse is actually for sale: the CTA cannot render
+  // otherwise, so the common profile pays nothing for it. Public `website_url`
+  // only — never an owner, a contact row or a price (guardrail 2).
+  const [{ data: followRow }, { data: notifyRow }, { count: trainerHorseCount }, { data: trainerSite }] =
+    await Promise.all([
+      sb.from("follow").select("id").eq("user_id", userId).eq("horse_id", id).maybeSingle(),
+      sb.from("notify_optin").select("id").eq("user_id", userId).eq("horse_id", id).maybeSingle(),
+      trainer
+        ? sb.from("horse").select("id", { count: "exact", head: true }).eq("trainer_id", trainer.id)
+        : Promise.resolve({ count: 0 } as { count: number | null }),
+      trainer && row.shares_for_sale
+        ? sb.from("trainer").select("website_url").eq("id", trainer.id).maybeSingle()
+        : Promise.resolve({ data: null } as { data: { website_url: string | null } | null }),
+    ]);
+
+  // Gated on the VALIDATED href, not on a non-empty string: `WebsiteLink`
+  // renders null for anything that is not an absolute http(s) URL, and a bare
+  // "wallerracing.com.au" is a realistic admin entry. Gating on truthiness alone
+  // would leave the wrapper below drawing an empty, margined row around nothing.
+  const showSharesCta = Boolean(row.shares_for_sale) && hasLinkableWebsite(trainerSite?.website_url);
 
   // "About {name}" prefers the horse's own story; falls back to the trainer's
   // stable/location line when there's no story yet.
@@ -170,10 +203,22 @@ export default async function HorseProfilePage({ params }: { params: Promise<{ i
         <div className="profile-header-web">
           <div className="profile-head-left">
             <div className="status-row">
-              <span className={`tag${row.training_status === "racing" ? " race-day" : ""}`}>
-                {row.training_status === "racing" ? "● Racing" : trainingStatusLabel(row.training_status)}
+              {/* ENG-959 — the shared brown scale, one call, every status. This
+                  was `training_status === "racing" ? " race-day" : ""` with a
+                  "● Racing" literal: racing was the only status with a colour
+                  (and it was the SHARES green), the other four were neutral, and
+                  the bullet was drawn here and nowhere else in the product.
+                  Mobile's Tag renders the label alone on its own ground, so the
+                  bullet goes with the special case that produced it. */}
+              <span className={`tag ${statusTagClassOf(row.training_status)}`.trim()}>
+                {trainingStatusLabel(row.training_status)}
               </span>
               {ageDescription && <span className="tag">{ageDescription}</span>}
+              {/* Justin, 26 Aug: a green "Shares Available" pill sits to the
+                  RIGHT of the age/sex tag whenever this horse has shares for
+                  sale. It keeps `.race-day` green — it is not a training status,
+                  so the brown scale above deliberately does not touch it. */}
+              {row.shares_for_sale ? <span className="tag race-day">Shares Available</span> : null}
             </div>
             <h1 className="profile-name-web">{displayName}</h1>
             {pedigreeLine && <p className="profile-pedigree-web">{pedigreeLine}</p>}
@@ -192,7 +237,27 @@ export default async function HorseProfilePage({ params }: { params: Promise<{ i
             <div className="stat-w"><div className="stat-num">{row.places}</div><div className="stat-label">Places</div></div>
             <div className="stat-w"><div className="stat-num">{formatPrize(row.prize_money_cents)}</div><div className="stat-label">Prizemoney</div></div>
           </div>
-          <div className="stats-note-web" style={{ gridColumn: "1 / -1" }}>Career stats - updated manually by the stable.</div>
+          {/* The `.stats-note-web` caption ("Career stats - updated manually by
+              the stable.") is GONE (Justin, 1 Sep 2026, IMG_3520: "Can you
+              remove the line"), matching mobile ENG-929. The mockup still draws
+              it; this is a client reversal, not drift — do not restore it in a
+              fidelity pass. The `.stats-note-web` RULE is left in globals.css
+              deliberately even though this was its only user: deleting it is a
+              stylesheet cleanup, not this ticket, and globals.css has a sibling
+              PR in flight. It is an orphan until something claims it. */}
+
+          {/* Shares CTA — only when THIS horse has shares for sale AND its
+              trainer published a linkable public website (ENG-959, gating
+              copied from mobile's `contactHref`). Public `website_url` only —
+              no owner PII, no prices, no contact row. Reuses the trainer
+              profile's <WebsiteLink> rather than a second anchor, so the
+              first-party click log, the http(s)-only href validation and the
+              middle-click handling are all the one implementation. */}
+          {showSharesCta && trainer ? (
+            <div className="profile-shares-cta-web">
+              <WebsiteLink trainerId={trainer.id} websiteUrl={trainerSite?.website_url ?? null} variant="primary" />
+            </div>
+          ) : null}
         </div>
 
         <div className="profile-body-grid">
