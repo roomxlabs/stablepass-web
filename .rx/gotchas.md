@@ -1435,3 +1435,27 @@ spent against that URL, bought the httpOnly recovery marker and with it the
   which is the right direction here.
 - When a route grants a capability, audit **every** branch that reaches the
   grant. Fixing the branch the reviewer happened to look at is not the fix.
+
+## A suffix match must never decide an origin (ENG-953, 5 Sep 2026)
+
+`publicOrigin()` in the forgot-password route reached its allow-list only on the
+*second* branch. The first branch — "is this a developer machine?" — returned
+early with the **raw** header interpolated, so it reached neither the allow-list
+nor any scheme check. It was not gated on `NODE_ENV`, so it was live in
+production, and its output is the origin of a password-reset link.
+
+- `isLocalHost` from `lib/hosts` matches the **suffixes** `.local` and
+  `.localhost`. That is correct for "which URL space does this host serve", and
+  catastrophic for "may this host build a URL": `attacker.com/.local` ends with
+  `.local`, so it took the local branch and produced
+  `http://attacker.com/.local`. `x-forwarded-proto` was copied through unread,
+  so `javascript` produced a `javascript:` origin.
+- **Do this:** for anything that becomes an origin, match the host **exactly**
+  against a set, rebuild the value from the *normalised* host plus a separately
+  validated numeric port, and choose the scheme yourself — never interpolate a
+  header. Gate any developer affordance on `NODE_ENV !== "production"` **as
+  well as** validating it; the gate and the validation are not substitutes.
+- **The review lesson:** the first pass "confirmed" this route safe by testing
+  `evil.attacker.example`, which takes the *other* branch. A test that never
+  enters the vulnerable branch proves nothing about it. Enumerate the branches,
+  then write a case that lands in each.

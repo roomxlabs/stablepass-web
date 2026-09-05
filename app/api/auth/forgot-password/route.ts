@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabase/server";
-import { APP_HOST, isLocalHost, normaliseHost, spaceForHost } from "@/lib/hosts";
+import { APP_HOST, normaliseHost, spaceForHost } from "@/lib/hosts";
 
 // POST /api/auth/forgot-password — start a password reset (ENG-953).
 //
@@ -70,9 +70,9 @@ function responseFloorMs(): number {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * The public origin to build the reset link from.
+ * Why the reset link's origin is not simply the request's host.
  *
- * NEVER trusts `x-forwarded-host` on its own. That header is attacker-supplied
+ * This module NEVER trusts `x-forwarded-host` on its own. That header is attacker-supplied
  * on any request that does not pass through a trusted proxy, and this value
  * becomes the origin of a password-reset link — the classic host-header
  * injection into account takeover. The only thing standing between the raw
@@ -86,24 +86,66 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * developer machine. Anything else falls back to `APP_HOST` — the member app's
  * own domain, which is where a reset link belongs.
  */
-export function publicOrigin(req: Request): string {
-  const forwarded = normaliseHost(
-    req.headers.get("x-forwarded-host") ?? req.headers.get("host"),
-  );
 
-  if (isLocalHost(forwarded)) {
-    // Keep the port: the harness and `npm run dev` serve on a derived port, and
-    // a link to bare `localhost` would be unreachable.
-    const raw = (req.headers.get("x-forwarded-host") ?? req.headers.get("host"))!;
-    const proto = req.headers.get("x-forwarded-proto") ?? "http";
-    return `${proto}://${raw}`;
+/**
+ * Developer hosts, matched EXACTLY. Deliberately not `isLocalHost` from
+ * `lib/hosts`, which matches the *suffixes* `.local` and `.localhost` — that is
+ * right for "which URL space does this serve" routing, and catastrophic here:
+ * `attacker.com/.local` ends with `.local`, so a suffix test hands an attacker
+ * the origin of a password-reset link. An origin is a security decision; only
+ * an exact name may produce one.
+ */
+const DEV_LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "::1"]);
+
+/**
+ * The port from an untrusted host header — digits only, and only when the rest
+ * of the header is exactly the host we already allow-listed. The round-trip
+ * comparison against `host` is what stops `::1` having its `:1` read as a port,
+ * and stops anything at all being smuggled in beside the port.
+ */
+function devPort(raw: string, host: string): string {
+  const match = /^(.+?)\.?:(\d{1,5})$/.exec(raw.trim().toLowerCase());
+  if (!match || match[1] !== host) return "";
+  const port = Number(match[2]);
+  return port >= 1 && port <= 65535 ? `:${port}` : "";
+}
+
+/**
+ * The public origin to build the reset link from.
+ *
+ * EVERY path through this function passes the host through an allow-list and
+ * emits a scheme this function chose. Nothing derived from a header is ever
+ * interpolated raw. That is the invariant; if you add a branch, it holds for
+ * that branch too.
+ *
+ * The localhost affordance is kept (the harness and `npm run dev` serve on a
+ * derived port, and a link to bare `localhost` would be unreachable) but it is
+ * now (a) gated on `NODE_ENV !== "production"`, so it cannot fire on a
+ * deployment at all, (b) an exact-match allow-list rather than a suffix test,
+ * and (c) recomposed from the *normalised* host plus a separately validated
+ * numeric port — never the raw header. Before this, the branch returned early
+ * with `${proto}://${raw}` and reached neither the allow-list nor any scheme
+ * check: `x-forwarded-host: attacker.com/.local` produced
+ * `http://attacker.com/.local`, and `x-forwarded-proto: javascript` produced a
+ * `javascript:` origin. Both were live in production.
+ */
+export function publicOrigin(req: Request): string {
+  const raw = req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? "";
+  const forwarded = normaliseHost(raw);
+
+  if (process.env.NODE_ENV !== "production" && DEV_LOCAL_HOSTS.has(forwarded)) {
+    // Only these two schemes may ever be produced, and only one of them here.
+    const proto =
+      req.headers.get("x-forwarded-proto")?.trim().toLowerCase() === "https" ? "https" : "http";
+    return `${proto}://${forwarded}${devPort(raw, forwarded)}`;
   }
 
   // A host we recognise is honoured; anything else is discarded in favour of
-  // the app's own canonical host.
-  const trusted = forwarded && spaceForHost(forwarded) === "app" && forwarded === APP_HOST
-    ? forwarded
-    : APP_HOST;
+  // the app's own canonical host. `https` is not negotiable off a header.
+  const trusted =
+    forwarded && forwarded === APP_HOST && spaceForHost(forwarded) === "app"
+      ? forwarded
+      : APP_HOST;
 
   return `https://${trusted}`;
 }

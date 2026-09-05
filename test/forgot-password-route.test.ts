@@ -193,4 +193,118 @@ describe("POST /api/auth/forgot-password", () => {
     );
     expect(origin).toBe("http://localhost:32566");
   });
+
+  // ── The LOCAL branch, adversarially ──────────────────────────────────────
+  //
+  // The first review pass only ever tested `evil.attacker.example`, which takes
+  // the NON-local branch — so it confirmed a hole it had not exercised. The
+  // hole was in the *local* branch: it returned early with the RAW header
+  // interpolated into the origin, reaching neither the allow-list nor any
+  // scheme check. `isLocalHost` matches the SUFFIXES `.local` and `.localhost`,
+  // so `attacker.com/.local` took that branch, and `x-forwarded-proto` was
+  // copied through unread. Every case below asserts the produced origin.
+  function originFor(headers: Record<string, string>) {
+    return publicOrigin(new Request("http://internal/api", { headers }));
+  }
+
+  const APP = "https://app.stablepass.co";
+
+  it.each([
+    // The measured takeover: a suffix match on `.local` with a path smuggled in.
+    ["a path smuggled past the .local suffix", { "x-forwarded-host": "attacker.com/.local" }, APP],
+    ["the same via .localhost", { "x-forwarded-host": "attacker.com/.localhost" }, APP],
+    // The scheme must be ours, never the header's.
+    [
+      "a javascript: scheme on a local-looking host",
+      { "x-forwarded-host": "attacker.com/.local", "x-forwarded-proto": "javascript" },
+      APP,
+    ],
+    [
+      "a javascript: scheme on a genuinely local host",
+      { "x-forwarded-host": "localhost:3000", "x-forwarded-proto": "javascript" },
+      "http://localhost:3000",
+    ],
+    [
+      "a data: scheme on a genuinely local host",
+      { "x-forwarded-host": "localhost", "x-forwarded-proto": "data" },
+      "http://localhost",
+    ],
+    // Embedded credentials: the userinfo segment must not survive.
+    ["embedded credentials", { "x-forwarded-host": "user:pass@evil.local" }, APP],
+    [
+      "embedded credentials in front of a real local host",
+      { "x-forwarded-host": "user:pass@localhost:3000" },
+      APP,
+    ],
+    ["an @ pointing the origin elsewhere", { "x-forwarded-host": "localhost@attacker.com" }, APP],
+    // A port on a host that is NOT allow-listed buys nothing.
+    ["a port on a hostile local-suffixed host", { "x-forwarded-host": "attacker.com.local:8080" }, APP],
+    // IDN / punycode lookalikes of `localhost`.
+    ["a punycode localhost lookalike", { "x-forwarded-host": "xn--lclhost-3va.local" }, APP],
+    // A header is a ByteString, so a raw Cyrillic `\u043E` cannot even be put
+    // in one — what a proxy actually forwards is its UTF-8 bytes read as
+    // latin1. That is the form tested here.
+    ["a unicode localhost lookalike", { "x-forwarded-host": "\u00D0\u00BEocalhost" }, APP],
+    ["a punycode host under .localhost", { "x-forwarded-host": "xn--80ak6aa92e.localhost" }, APP],
+    // Trailing-dot (fully-qualified root) forms.
+    ["a trailing-dot hostile host", { "x-forwarded-host": "attacker.com/.local." }, APP],
+    ["a trailing-dot app host", { "x-forwarded-host": "app.stablepass.co." }, APP],
+    // Genuine local hosts still work, and still only ever yield http/https.
+    ["a trailing-dot localhost", { "x-forwarded-host": "localhost." }, "http://localhost"],
+    ["a trailing-dot localhost with a port", { "x-forwarded-host": "localhost.:4173" }, "http://localhost:4173"],
+    ["an https proxy in front of localhost", { "x-forwarded-host": "localhost:3000", "x-forwarded-proto": "https" }, "https://localhost:3000"],
+    ["a loopback IP", { "x-forwarded-host": "127.0.0.1:8080" }, "http://127.0.0.1:8080"],
+    ["a bracketed IPv6 loopback", { "x-forwarded-host": "[::1]:3000" }, "http://[::1]:3000"],
+    // `::1` unbracketed: the `:1` is NOT a port, and must not be re-read as one.
+    ["a bare IPv6 loopback", { "x-forwarded-host": "::1" }, "http://::1"],
+    // A non-numeric or out-of-range port is dropped, not interpolated.
+    ["a non-numeric port", { "x-forwarded-host": "localhost:evil" }, APP],
+    // An out-of-range port is dropped rather than interpolated: the host is
+    // allow-listed, so the origin is safe, just portless.
+    ["an out-of-range port", { "x-forwarded-host": "localhost:99999" }, "http://localhost"],
+  ])("produces a safe origin for %s", (_label, headers, expected) => {
+    expect(originFor(headers)).toBe(expected);
+  });
+
+  it("only ever produces an http or https origin", () => {
+    const hostile = [
+      "attacker.com/.local",
+      "user:pass@evil.local",
+      "localhost@attacker.com",
+      "javascript:alert(1).local",
+      "\u00D0\u00BEocalhost",
+      "localhost:3000",
+    ];
+    const protos = ["javascript", "data", "file", "JAVASCRIPT", " javascript ", "vbscript"];
+    for (const host of hostile) {
+      for (const proto of protos) {
+        const origin = originFor({ "x-forwarded-host": host, "x-forwarded-proto": proto });
+        expect(origin).toMatch(/^https?:\/\//);
+        // Nothing after the scheme may carry a path, credentials, or a second scheme.
+        expect(origin.slice("https://".length)).not.toMatch(/[/@]/);
+      }
+    }
+  });
+
+  it("never takes the local branch in production, whatever the header says", () => {
+    const previous = process.env.NODE_ENV;
+    // NODE_ENV is a readonly getter under some type defs; assign through the record.
+    (process.env as Record<string, string | undefined>).NODE_ENV = "production";
+    try {
+      expect(originFor({ "x-forwarded-host": "localhost:3000" })).toBe(APP);
+      expect(originFor({ "x-forwarded-host": "attacker.com/.local" })).toBe(APP);
+      expect(originFor({ "x-forwarded-host": "127.0.0.1" })).toBe(APP);
+    } finally {
+      (process.env as Record<string, string | undefined>).NODE_ENV = previous;
+    }
+  });
+
+  it("sends the hostile local-branch origin to nobody — end to end through POST", async () => {
+    resetPasswordForEmailMock.mockClear();
+    await POST(
+      req({ email: "known@example.com" }, { "x-forwarded-host": "attacker.com/.local" }),
+    );
+    const [, options] = resetPasswordForEmailMock.mock.calls[0];
+    expect(String(options.redirectTo)).toBe("https://app.stablepass.co/reset-password");
+  });
 });

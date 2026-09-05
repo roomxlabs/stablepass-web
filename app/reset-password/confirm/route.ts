@@ -54,8 +54,20 @@ const WRONG_DEVICE = "/reset-password?state=devicemismatch";
  * (guardrail #5) would lock the real member out. All three reviewers
  * reproduced that. So the page requires THIS cookie, not merely a user.
  *
- * httpOnly so page JS cannot forge it; short-lived because it is a permission
- * to do one thing, now; `lax` so it survives the redirect chain from the email.
+ * WHAT THIS COOKIE IS NOT: an authorization boundary. It gates the *screen*,
+ * not the capability. `supabase.auth.updateUser({ password })` is a call the
+ * browser can make directly against Supabase with nothing but a live session —
+ * it never sees this cookie, so its absence cannot stop a password change. The
+ * only thing that does is Supabase's own
+ * `GOTRUE_SECURITY_UPDATE_PASSWORD_REQUIRE_REAUTHENTICATION`, which is step 3
+ * of the blocking config in the PR body. Read the flags below as UX hardening
+ * on top of that, not instead of it.
+ *
+ * `httpOnly` keeps `document.cookie` from reading or setting it, so the page's
+ * own JS cannot mint itself the marker and skip the email round-trip — it does
+ * NOT make the reset flow unforgeable, per the paragraph above. Short-lived
+ * because it is a permission to do one thing, now; `lax` so it survives the
+ * redirect chain from the email.
  */
 function grant(url: URL): NextResponse {
   const response = NextResponse.redirect(url);
