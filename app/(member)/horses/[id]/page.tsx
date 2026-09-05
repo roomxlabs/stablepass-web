@@ -15,7 +15,7 @@
 // see lib/horse/profile.ts. This file does no date arithmetic.
 import { notFound } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
-import { signPhoto, HORSE_PHOTO_BUCKET } from "@/lib/storage/photos";
+import { signPhoto, HORSE_PHOTO_BUCKET, TRAINER_PHOTO_BUCKET } from "@/lib/storage/photos";
 import { HORSE_PROFILE_COLUMNS, ageDescriptionLine, type HorseProfileRow } from "@/lib/horse/profile";
 import { readSubscriptionState } from "@/lib/api/subscription-state";
 import { AccessWall } from "@/components/access-wall";
@@ -117,6 +117,10 @@ export default async function HorseProfilePage({ params }: { params: Promise<{ i
   // `photo_url` holds a bare object path in the PRIVATE `horse-photos` bucket;
   // it must be signed before it can be rendered (see lib/storage/photos.ts).
   const coverUrl = await signPhoto(sb, HORSE_PHOTO_BUCKET, row.photo_url);
+  // `trainer.photo_url` — same bare-path/private-bucket rule as the cover above.
+  // Signed here, not twice: `coverUrl` above already IS the horse's own signed
+  // photo, reused as-is for the posts feed below (ENG-958).
+  const trainerPhotoUrl = await signPhoto(sb, TRAINER_PHOTO_BUCKET, trainer?.photo_url ?? null);
   const about = row.story ?? null;
 
   const { data: nextRaceRows } = await sb
@@ -198,7 +202,7 @@ export default async function HorseProfilePage({ params }: { params: Promise<{ i
         <div className="profile-body-grid">
           <div>
             <h2 className="section-title-web">Recent updates</h2>
-            <HorsePosts horseId={id} horseName={displayName} trainerName={trainer?.name ?? "Stablepass"} stableName={trainer?.stable_name ?? null} stableLocation={trainer?.location ?? null} viewerId={userId} />
+            <HorsePosts horseId={id} horseName={displayName} trainerName={trainer?.name ?? "Stablepass"} stableName={trainer?.stable_name ?? null} stableLocation={trainer?.location ?? null} horsePhotoUrl={coverUrl} trainerPhotoUrl={trainerPhotoUrl} viewerId={userId} />
           </div>
 
           <aside className="feed-aside">

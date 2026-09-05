@@ -318,7 +318,7 @@ describe("GET /api/trainers/:id/feed", () => {
     const postCallIndex = fromMock.mock.calls.findIndex((c) => c[0] === "post");
     const postChain = fromMock.mock.results[postCallIndex].value as { select: ReturnType<typeof vi.fn> };
     expect(postChain.select.mock.calls[0][0]).toBe(
-      "id, type, title, body, label, media_url, poster_url, mux_playback_id, aspect_ratio, watermarked, like_count, published_at, horse_id, horse:horse_id(display_name, racing_name)",
+      "id, type, title, body, label, media_url, poster_url, mux_playback_id, aspect_ratio, watermarked, like_count, published_at, horse_id, horse:horse_id(display_name, racing_name, photo_url)",
     );
   });
 });

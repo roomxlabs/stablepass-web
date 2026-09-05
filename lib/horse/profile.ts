@@ -25,12 +25,16 @@
 // as an `undefined` that renders as a missing age. One constant, two call
 // sites, one place to get it right.
 
-/** One horse's trainer, as embedded by the profile read. */
+/** One horse's trainer, as embedded by the profile read. `photo_url` is a bare
+ *  object path in the PRIVATE `trainer-photos` bucket (ENG-958) — the page signs
+ *  it itself (lib/storage/photos.ts), same as it already does for the horse's
+ *  own `photo_url` below. */
 export type TrainerRow = {
   id: string;
   name: string;
   stable_name: string | null;
   location: string | null;
+  photo_url: string | null;
 };
 
 export type HorseProfileRow = {
@@ -65,8 +69,13 @@ export type HorseProfileRow = {
 // while `horse_age`/`horse_description` are read-only output. Keeping them here
 // means a surface that starts showing or editing them widens nothing. Both
 // column tests pin them, so this is a deliberate contract, not an oversight.
+// `trainer.photo_url` (ENG-958) is added to the SAME embed, not a second
+// trainer read: `photo_url` is already a deployed column (other screens select
+// it off `trainer` directly — e.g. app/(member)/trainers/[id]/page.tsx), so
+// this cannot trip the 42703-blackout gotcha the wider embed would risk on an
+// undeployed column.
 export const HORSE_PROFILE_COLUMNS =
-  "id, sire, dam, display_name, racing_name, sex, is_gelded, colour, foaling_year, horse_age, horse_description, training_status, starts, wins, places, prize_money_cents, story, photo_url, trainer:trainer_id(id, name, stable_name, location)";
+  "id, sire, dam, display_name, racing_name, sex, is_gelded, colour, foaling_year, horse_age, horse_description, training_status, starts, wins, places, prize_money_cents, story, photo_url, trainer:trainer_id(id, name, stable_name, location, photo_url)";
 
 /**
  * The profile pill — `"5yo · gelding"`. Both halves come from the database; this

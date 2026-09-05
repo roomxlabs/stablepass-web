@@ -29,7 +29,20 @@ let feedPosts: unknown[];
 
 const { fromMock, pushMock } = vi.hoisted(() => ({ fromMock: vi.fn(), pushMock: vi.fn() }));
 
-vi.mock("@/lib/supabase/client", () => ({ supabaseBrowser: () => ({ from: fromMock }) }));
+// Only hit when a fixture supplies a real `photo_url` path — `signPhotoMap`
+// returns early on an empty path list, so every existing (`photo_url: null`)
+// fixture in this file never reaches `.storage` at all.
+vi.mock("@/lib/supabase/client", () => ({
+  supabaseBrowser: () => ({
+    from: fromMock,
+    storage: {
+      from: () => ({
+        createSignedUrls: (paths: string[]) =>
+          Promise.resolve({ data: paths.map((path) => ({ path, signedUrl: `https://sb.local/signed/${path}` })) }),
+      }),
+    },
+  }),
+}));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: pushMock }) }));
 
 // Generic chainable builder (subscription gate + feed enrichment).
@@ -237,10 +250,43 @@ describe("FollowingScreen — ENG-613 view model + Follow pill", () => {
     // is dropped — while `trainerId` goes null on every post and the Follow pill
     // silently vanishes feed-wide with a green suite. `sb` is untyped, so this
     // string IS the only guard.
-    expect(projection).toContain("trainer:trainer_id(id, name, stable_name, location)");
+    expect(projection).toContain("trainer:trainer_id(id, name, stable_name, location, photo_url)");
     // And nothing extra: a widened projection is how owner-adjacent columns
     // would arrive on the card (guardrail 2).
-    expect(projection).toBe("id, display_name, trainer:trainer_id(id, name, stable_name, location)");
+    expect(projection).toBe(
+      "id, display_name, photo_url, trainer:trainer_id(id, name, stable_name, location, photo_url)",
+    );
+  });
+
+  // ENG-958 — the projection alone is not enough (a route can return the column
+  // correctly and the SCREEN can still throw it away one layer later). Render
+  // through the REAL mapper and assert the card ends up with the SIGNED url,
+  // never the raw stored path.
+  it("signs the horse+trainer photo paths and renders the SIGNED url on the card, not the raw path", async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "subscription") return chainable({ data: subRow, error: null });
+      if (table === "follow") return followBuilder();
+      if (table === "horse") {
+        return chainable({
+          data: [
+            {
+              id: "fh1",
+              display_name: "Mahogany",
+              photo_url: "horses/mahogany.jpg",
+              trainer: { id: "t9", name: "G. Waterhouse", stable_name: "Waterhouse Racing", location: "Randwick", photo_url: "trainers/waterhouse.jpg" },
+            },
+          ],
+          error: null,
+        });
+      }
+      return chainable({ data: [], error: null });
+    });
+
+    render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+
+    const avatar = await screen.findByTestId("post-avatar-photo");
+    expect(avatar).toHaveAttribute("src", "https://sb.local/signed/horses/mahogany.jpg");
+    expect(avatar).not.toHaveAttribute("src", "horses/mahogany.jpg");
   });
 
   it("puts post.title on the view model and draws the STABLE UPDATE card", async () => {
