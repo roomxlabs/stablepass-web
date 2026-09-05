@@ -30,8 +30,19 @@ const { fromMock, upsertMock, orderMock } = vi.hoisted(() => ({
   orderMock: vi.fn(),
 }));
 
+// `.storage` is only exercised when a fixture supplies a real `photo_url`
+// path — `signPhotoMap` returns early on an empty path list, so every
+// existing fixture in this file (no `photo_url` at all) never reaches it.
 vi.mock("@/lib/supabase/client", () => ({
-  supabaseBrowser: () => ({ from: fromMock }),
+  supabaseBrowser: () => ({
+    from: fromMock,
+    storage: {
+      from: () => ({
+        createSignedUrls: (paths: string[]) =>
+          Promise.resolve({ data: paths.map((path) => ({ path, signedUrl: `https://sb.local/signed/${path}` })) }),
+      }),
+    },
+  }),
 }));
 
 // Generic chainable builder (subscription gate + horse/reaction enrichment).
@@ -348,10 +359,35 @@ describe("SavedFeed — ENG-613 view model", () => {
     // is dropped — while `trainerId` goes null on every post and the Follow pill
     // silently vanishes feed-wide with a green suite. `sb` is untyped, so this
     // string IS the only guard.
-    expect(projection).toContain("trainer:trainer_id(name, stable_name, location)");
+    expect(projection).toContain("trainer:trainer_id(name, stable_name, location, photo_url)");
     // And nothing extra: a widened projection is how owner-adjacent columns
     // would arrive on the card (guardrail 2).
-    expect(projection).toBe("id, display_name, trainer:trainer_id(name, stable_name, location)");
+    expect(projection).toBe(
+      "id, display_name, photo_url, trainer:trainer_id(name, stable_name, location, photo_url)",
+    );
+  });
+
+  // ENG-958 — through the REAL mapper: a route/screen that returns the raw
+  // path correctly but forgets to sign it is the documented failure mode, so
+  // this asserts the rendered `<img>` carries the SIGNED url, never the path.
+  it("signs the horse photo path and renders the SIGNED url on the card, not the raw path", async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "subscription") return chainable({ data: subRow, error: null });
+      if (table === "bookmark") return bookmarkBuilder();
+      if (table === "horse") {
+        return chainable({
+          data: [{ id: "h1", display_name: "Nature Strip", photo_url: "horses/nature-strip.jpg", trainer: { name: "Chris Waller", stable_name: "Waller Racing", location: "Rosehill", photo_url: null } }],
+          error: null,
+        });
+      }
+      return chainable({ data: [], error: null });
+    });
+
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+
+    const avatar = await screen.findByTestId("post-avatar-photo");
+    expect(avatar).toHaveAttribute("src", "https://sb.local/signed/horses/nature-strip.jpg");
+    expect(avatar).not.toHaveAttribute("src", "horses/nature-strip.jpg");
   });
 
   it("puts post.title on the view model and draws the STABLE UPDATE card", async () => {

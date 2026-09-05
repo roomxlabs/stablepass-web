@@ -1459,3 +1459,59 @@ production, and its output is the origin of a password-reset link.
   `evil.attacker.example`, which takes the *other* branch. A test that never
   enters the vulnerable branch proves nothing about it. Enumerate the branches,
   then write a case that lands in each.
+
+## `text-overflow: ellipsis` does NOTHING on an `inline-flex` pill (ENG-958, 5 Sep 2026)
+
+**Symptom:** `.post-badge` was given `max-width` + `overflow:hidden` +
+`white-space:nowrap` + `text-overflow:ellipsis`, and a long label still clipped
+**mid-word with no ellipsis** — which reads as deliberate, so it survived review,
+six passing e2e tests and a committed screenshot.
+
+**Cause:** `.post-badge` is `display: inline-flex` (it needs the flex row for its
+`::before` dot). `text-overflow` only applies to a **block container that
+directly holds the overflowing inline content**; inside a flex container the copy
+becomes an *anonymous flex item* and the ellipsis is never drawn.
+
+**Do this:** put the copy in its own child (`.post-badge-text`) and move
+`overflow/white-space/text-overflow/min-width:0` onto **that**, leaving only
+`max-width:100%; min-width:0; overflow:hidden` on the pill. This is what mobile
+already does — its pill is a `View` whose copy is a `<Text numberOfLines={1}>`
+child. `.reel-head .reel-horse` was already the correct idiom in this file.
+
+**And pin it with a fixture that actually overflows.** Every labelled fixture in
+`app/preview/components/page.tsx` was short enough to fit the column, so nothing
+could catch this. A truncation guard that never truncates passes vacuously — the
+e2e now asserts `scrollWidth > clientWidth` FIRST, then the ellipsis.
+
+## A widened SHARED projection constant can leak an unsigned path from a route you never opened (ENG-958)
+
+`lib/horse/profile.ts`'s `HORSE_PROFILE_COLUMNS` has **two** consumers: the horse
+profile page *and* `app/api/horses/[id]/route.ts`, which returns the embedded
+`trainer` row **verbatim**. Adding `trainer.photo_url` for the page therefore also
+put a bare private-bucket **object path** into that BFF envelope — the exact thing
+`lib/storage/photos.ts` exists to prevent — with a green suite, because
+`test/horses-route.test.ts` only asserts TOP-LEVEL envelope keys and nothing pins
+the trainer object's fields.
+
+**Do this:** when you widen a shared projection constant, `grep` every consumer of
+it and check what each one *returns*, not just what it reads. Strip (or sign) the
+new column in any envelope that spreads the row. Consider pinning
+`Object.keys(body.data.trainer)` so the next widening cannot ride along unnoticed.
+
+## `getComputedStyle().borderRadius` returns a PERCENTAGE verbatim (ENG-958)
+
+Asserting a circle by resolving `50%` against the box (`parseFloat(radius) ≈
+width/2`) FAILS: Chrome reports the literal `"50%"`, so `parseFloat` yields 50 and
+a 28px box compares against 14. Compare the **token** (`toBe("50%")` for the
+circle, `toBe("14px")` for the box) — the two are distinguishable precisely
+because one is a percentage and the other is not.
+
+## The preview gallery's fixtures are SHARED — a new one can break a sibling's test (ENG-958)
+
+`e2e/eng-613-*` locates the stable-update card by the phrase `"Quiet week here"`.
+A new ENG-958 update fixture that reused that opening made the locator match two
+cards and fail as a Playwright strict-mode violation — a red spec in a file the
+diff never touched. Same class: an unscoped `filter({ hasText: "Winx" })` matches
+this round's card *and* the round-5 card it was spread from.
+**Do this:** give a new fixture distinctive copy, and scope every locator in a new
+spec to that round's own `data-testid` section.

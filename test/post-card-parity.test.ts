@@ -9,6 +9,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { PANEL_PARAGRAPH_GAP } from "@/components/post-card";
 
 /**
  * Comments are stripped before anything is asserted. Several rules here carry a
@@ -202,6 +203,49 @@ describe("ENG-761 item 5 — the profile stat label never wraps", () => {
 // diffed rule-for-rule by test/marketing-shell.test.tsx, and `.btn`/`.btn-ghost`
 // exist in BOTH sheets — so a globals.css addition leaking across is a real and
 // easy mistake, not a hypothetical one.
+// ===========================================================================
+// ENG-958 — head avatar shape (boxy, not a disc) and the panel's line-clamp.
+// ===========================================================================
+describe("ENG-958 — the head avatar is a rounded BOX, not a circle", () => {
+  it("gives .post-avatar-web a 14px radius, not 50%", () => {
+    const avatar = rule(".post-avatar-web");
+    expect(avatar).toContain("border-radius: 14px");
+    expect(avatar).not.toContain("border-radius: 50%");
+  });
+
+  // The stable's mark, unlike a profile photo, stays a circle — a future
+  // "round the avatars" sweep must not take this rule with it.
+  it("keeps .post-panel-foot .av a CIRCLE — the stable's mark, not a profile photo", () => {
+    expect(rule(".post-web .post-panel-foot .av")).toContain("border-radius: 50%");
+  });
+});
+
+describe("ENG-958 — the panel clamp cannot be a per-box -webkit-line-clamp", () => {
+  it("has no CSS rule putting -webkit-line-clamp on .post-panel-clamp", () => {
+    // The 8-line budget spans PARAGRAPHS (panelClampHeight walks them and
+    // charges the gaps between); a `-webkit-line-clamp` caps one box, so it
+    // cannot express that budget. The height instead comes from an inline
+    // `maxHeight` computed in JS — there is deliberately no CSS rule here at
+    // all, which this test also confirms.
+    const match = GLOBALS.match(/\.post-panel-clamp[^{]*\{[^}]*\}/);
+    if (match) {
+      expect(match[0]).not.toContain("-webkit-line-clamp");
+    } else {
+      expect(GLOBALS).not.toContain(".post-panel-clamp");
+    }
+  });
+
+  // The STYLE and the arithmetic must be the SAME number, or the clamp is
+  // silently wrong: panelClampHeight() charges PANEL_PARAGRAPH_GAP for every
+  // gap it crosses, and that only matches what the member actually sees if
+  // the stylesheet's own paragraph spacing agrees.
+  it("sets .post-panel p's margin-bottom to PANEL_PARAGRAPH_GAP (12px)", () => {
+    expect(PANEL_PARAGRAPH_GAP).toBe(12);
+    const para = rule(".post-web .post-panel p");
+    expect(para).toMatch(new RegExp(`margin:\\s*0 0 ${PANEL_PARAGRAPH_GAP}px`));
+  });
+});
+
 describe("ENG-613 guardrail — nothing leaks into the frozen marketing sheet", () => {
   it("keeps every new member class and token out of marketing.css", () => {
     for (const token of [
