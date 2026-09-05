@@ -1,10 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+
+import { MOCKUP, mockupOrThrow } from "./support/mockup";
 
 import MarketingLayout from "@/app/(marketing)/layout";
 import MarketingFooter from "@/app/(marketing)/footer";
@@ -55,24 +57,6 @@ function cssRules(css: string): CssRule[] {
   }
   return out;
 }
-
-/**
- * The mockup sits in a sibling design tree, outside this repo, and its depth
- * above the repo root differs between a normal checkout and the loop's worktree.
- * Absent (CI, a fresh clone) → the mockup-derived tests skip rather than fail.
- */
-const MOCKUP_SUFFIX = "10-marketing-site/deploy/src/mockup.html";
-function findMockup(): string | null {
-  let dir = REPO;
-  for (;;) {
-    const candidate = path.join(dir, MOCKUP_SUFFIX);
-    if (existsSync(candidate)) return candidate;
-    const parent = path.dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
-}
-const MOCKUP = findMockup();
 
 describe("marketing nav", () => {
   it("renders every anchor target the mockup's nav has", () => {
@@ -201,8 +185,8 @@ describe("marketing footer", () => {
   // the stamp — it named the internal concept and the agency on a customer-facing
   // page — and keeps the copyright line pinned to the mockup so a copy change
   // there still fails here.
-  it.skipIf(!MOCKUP)("reproduces the mockup's copyright line, without the review stamp", () => {
-    const mockup = readFileSync(MOCKUP!, "utf8").replace(/data:image\/[^"')]+/g, "X");
+  it("reproduces the mockup's copyright line, without the review stamp", () => {
+    const mockup = readFileSync(mockupOrThrow(), "utf8").replace(/data:image\/[^"')]+/g, "X");
     const row = /<div class="row">([\s\S]*?)<\/div>/.exec(mockup)![1];
     const wanted = [...row.matchAll(/<span>([\s\S]*?)<\/span>/g)]
       .map((m) => m[1].replace(/&amp;/g, "&").trim())
@@ -434,10 +418,10 @@ describe("extracted marketing assets", () => {
   // The md5-8 naming makes the set internally consistent, but internal
   // consistency is all it proves — re-extracting from a NEWER mockup would
   // rename every file and still pass. Only the mockup itself can settle it.
-  it.skipIf(!MOCKUP)("still matches the mockup byte for byte", () => {
+  it("still matches the mockup byte for byte", () => {
     const result = execFileSync(
       "python3",
-      [path.join(REPO, "scripts", "extract-marketing-assets.py"), "--check", "--source", MOCKUP!],
+      [path.join(REPO, "scripts", "extract-marketing-assets.py"), "--check", "--source", mockupOrThrow()],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
     // --check exits non-zero on any drift, so reaching here is the assertion;
@@ -452,8 +436,83 @@ describe("extracted marketing assets", () => {
  * a nudged breakpoint or a dropped rule would have gone unnoticed. This re-derives
  * the port from the mockup and diffs it.
  */
-if (MOCKUP) {
-  describe("marketing.css is a faithful port of the mockup", () => {
+/**
+ * ENG-991: every test the CSS fidelity guard must register, in registration order.
+ * The meta-assertion below pins this list, so a future change that makes the guard
+ * silently vanish — the exact bug ENG-991 fixes — fails the suite instead of quietly
+ * shrinking the test count and still reporting green.
+ */
+const GUARD_TESTS = [
+  "carries every rule of the mockup, in order, with identical declarations",
+  "drops exactly one mockup rule, and only the one ENG-600 documents",
+  "keeps every other mockup nav rule byte for byte",
+  "adds rules only for the two new components, plus the wordmark guard",
+  "still pushes the actions group right once the links are hidden",
+  "keeps the mockup's tokens verbatim, just moved off :root",
+  "splits the body rule without losing or inventing a declaration",
+] as const;
+
+/** Names registered this run, filled in by `guardIt` at COLLECTION time. */
+const registeredGuardTests: string[] = [];
+/** Names that actually RAN, filled in by `guardIt` at EXECUTION time. */
+const executedGuardTests: string[] = [];
+
+/**
+ * `it`, but it records both that the test was registered and that it really ran.
+ * The two are pinned separately below because they fail differently: dropping the
+ * block empties `registered`, while a `describe.skipIf` still registers (vitest runs
+ * a skipped describe's callback at collection) and only empties `executed`.
+ *
+ * Note `executedGuardTests` is pushed BEFORE `fn()`, so a test that runs and fails
+ * still counts as executed — this pins that the guard ran, not that it passed.
+ */
+function guardIt(name: string, fn: () => void) {
+  registeredGuardTests.push(name);
+  it(name, () => {
+    executedGuardTests.push(name);
+    fn();
+  });
+}
+
+/**
+ * Pin 1 of 2 — REGISTRATION. Deliberately in its OWN top-level suite rather than
+ * inside the guard it pins: the ENG-991 regression shape is "the entire guard block
+ * fails to register", and a meta test living inside that block would vanish along with
+ * it, reporting green exactly when it matters most. Out here, re-wrapping the guard in
+ * `if (MOCKUP)` leaves `registeredGuardTests` empty and turns this red. Vitest collects
+ * the whole file before running anything, so this sees every registration even though
+ * it is declared first.
+ *
+ * This pins registration ONLY. A reintroduced `describe.skipIf(!MOCKUP)` still registers
+ * all seven (vitest executes a skipped describe's callback at collection), so it would
+ * sail past this one — that shape is caught by pin 2 at the bottom of the file.
+ *
+ * `GUARD_TESTS` is hand-maintained: adding a `guardIt` without its entry fails loudly,
+ * but deleting a test AND its entry together shrinks the guard legitimately. That is a
+ * deliberate review checkpoint, not an oversight.
+ */
+describe("ENG-991 — the CSS fidelity guard never silently deregisters", () => {
+  it("registers every CSS fidelity guard test", () => {
+    expect([...registeredGuardTests].sort()).toEqual([...GUARD_TESTS].sort());
+    expect(registeredGuardTests).toHaveLength(GUARD_TESTS.length);
+  });
+});
+
+describe("marketing.css is a faithful port of the mockup", () => {
+  if (!MOCKUP) {
+    // The mockup is unreachable. Register the SAME tests anyway and let every one of
+    // them fail loudly with the resolver's diagnostics, so the count never changes.
+    for (const guardName of GUARD_TESTS) {
+      guardIt(guardName, () => {
+        mockupOrThrow();
+      });
+    }
+    return;
+  }
+
+  // A bare block, purely to scope the collection-time constants below. It exists so
+  // the guard body kept its original indentation when the `if (MOCKUP)` wrapper went.
+  {
     const mockupStyle = /<style>([\s\S]*?)<\/style>/.exec(readFileSync(MOCKUP, "utf8"))![1];
     // The port swapped two inlined backgrounds for public/ paths; do the same here
     // so the comparison is like for like.
@@ -558,7 +617,7 @@ if (MOCKUP) {
       .map((r) => ({ selector: unscope(r.selector), decls: r.decls }))
       .filter((r) => !isException(r.selector) && !isNavRule(r.selector) && !isEmptyMediaMarker(r));
 
-    it("carries every rule of the mockup, in order, with identical declarations", () => {
+    guardIt("carries every rule of the mockup, in order, with identical declarations", () => {
       const drifted: string[] = [];
       for (let i = 0; i < Math.max(wantRules.length, gotRules.length); i += 1) {
         const want = wantRules[i];
@@ -587,20 +646,20 @@ if (MOCKUP) {
       const want = navSigs(expected);
       const got = navSigs(cssRules(MARKETING_CSS).map((r) => ({ selector: unscope(r.selector), decls: r.decls })));
 
-      it("drops exactly one mockup rule, and only the one ENG-600 documents", () => {
+      guardIt("drops exactly one mockup rule, and only the one ENG-600 documents", () => {
         // At <=880px the mockup pushed `.nav-cta` right. The CTA now sits inside
         // `.nav-actions`, so the group is pushed instead and this rule goes.
         expect(want.filter((s) => !got.includes(s))).toEqual([".nav-cta{margin-left:auto}"]);
       });
 
-      it("keeps every other mockup nav rule byte for byte", () => {
+      guardIt("keeps every other mockup nav rule byte for byte", () => {
         // Implied by the assertion above, stated separately so a failure reads as
         // "the port drifted" rather than "the delta list is stale".
         const survived = want.filter((s) => s !== ".nav-cta{margin-left:auto}");
         expect(survived.every((s) => got.includes(s))).toBe(true);
       });
 
-      it("adds rules only for the two new components, plus the wordmark guard", () => {
+      guardIt("adds rules only for the two new components, plus the wordmark guard", () => {
         // The invariant that matters: ENG-600 may introduce `.nav-actions` and
         // `.nav-signin`, and may not quietly restyle any mockup nav selector.
         //
@@ -623,7 +682,7 @@ if (MOCKUP) {
         expect(addedSelectors.every((s) => ALLOWED.some((a) => s.startsWith(a)))).toBe(true);
       });
 
-      it("still pushes the actions group right once the links are hidden", () => {
+      guardIt("still pushes the actions group right once the links are hidden", () => {
         // Losing this silently left-aligns the nav on every phone, which no
         // snapshot of the desktop layout would catch.
         expect(got).toContain(".nav-actions{margin-left:auto}");
@@ -631,7 +690,7 @@ if (MOCKUP) {
       });
     });
 
-    it("keeps the mockup's tokens verbatim, just moved off :root", () => {
+    guardIt("keeps the mockup's tokens verbatim, just moved off :root", () => {
       const tokens = expected.find((r) => r.selector === ":root")!.decls;
       // `--paper:` with the colon — `includes("--paper")` also matches every
       // var(--paper) reference and would select the wrong rule.
@@ -642,7 +701,7 @@ if (MOCKUP) {
     // The mockup's body rule is split across body:has(.marketing) and .marketing.
     // Together they must still say exactly what the mockup said, plus the UA margin
     // globals.css resets away.
-    it("splits the body rule without losing or inventing a declaration", () => {
+    guardIt("splits the body rule without losing or inventing a declaration", () => {
       const all = cssRules(MARKETING_CSS);
       const wanted = new Set(expected.find((r) => r.selector === "body")!.decls.split(";"));
       wanted.add("margin:8px");
@@ -662,5 +721,17 @@ if (MOCKUP) {
       expect([...wanted].filter((d) => !got.has(d))).toEqual([]);
       expect([...got].filter((d) => !wanted.has(d))).toEqual([]);
     });
+  }
+});
+
+/**
+ * Pin 2 of 2 — EXECUTION. Declared last so every guard test above has already run by
+ * the time this does. Registration is not enough: a `describe.skipIf(!MOCKUP)` still
+ * registers all seven while running none, which is ENG-991's silent-green all over
+ * again. This is the assertion that the fidelity guard actually EXECUTED.
+ */
+describe("ENG-991 — the CSS fidelity guard never silently skips", () => {
+  it("executes every CSS fidelity guard test", () => {
+    expect([...executedGuardTests].sort()).toEqual([...GUARD_TESTS].sort());
   });
-}
+});
