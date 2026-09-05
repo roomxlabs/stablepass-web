@@ -1459,3 +1459,30 @@ production, and its output is the origin of a password-reset link.
   `evil.attacker.example`, which takes the *other* branch. A test that never
   enters the vulnerable branch proves nothing about it. Enumerate the branches,
   then write a case that lands in each.
+
+## A dev-server `.next` makes a build guard test the WRONG bundle (ENG-957, 5 Sep 2026)
+
+`test/marketing-marquee.test.ts`'s "ships no confirmation copy in the built
+output either" is gated `it.skipIf(!existsSync(REPO/.next))`. That is meant to
+mean "run this where the documented `build && test` gate runs". It actually
+means "run this whenever a `.next` directory exists" — and **Playwright leaves a
+`next dev` build behind**. A dev bundle is unminified and carries source text
+the production bundle does not, so the guard failed on a branch that had changed
+nothing in marketing, purely because the e2e run happened first.
+
+- **Symptom:** capturing screenshots (any `npx playwright test`) adds one
+  marketing failure that a bare `npm test` on the same commit does not have.
+  Order-dependent, and it looks like the FE change caused it.
+- **Do this:** run the gate in the documented order — `rm -rf .next &&
+  npm run build && npm test`. Never diff a suite result against a baseline
+  unless both sides have the *same kind* of `.next` (both production, or
+  neither). The like-for-like baseline is a worktree at the **same path depth**
+  (see below) with the same build state.
+- **Same family as ENG-991:** these marketing guards silently change behaviour
+  with the environment rather than with the code. `marketing-shell` /
+  `marketing-home` additionally resolve their mockup by walking up from the
+  checkout, so they SKIP in a worktree outside the repo (e.g. `/tmp`) and RUN in
+  one under `.claude/worktrees/`. A `/tmp` baseline therefore "passes" and
+  frames the real, pre-existing red as yours. Both of those fail on an
+  untouched `feature/launch-v1` when the guard actually runs — that is ENG-991's
+  territory, not a regression in whatever ticket happens to notice it.
