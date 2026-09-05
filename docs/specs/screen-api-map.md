@@ -126,6 +126,24 @@ Derived from `docs/dev-handover/mockups/` (mobile · web · admin) against the A
 | Login via BFF (httpOnly cookies) | **Auth** SDK | session · 400 | ✅ |
 | First social login → provision | `POST /api/auth/bootstrap` | 200 · 201 · 401 | ✅ |
 
+### 02a · Forgot password (ENG-953)
+| Action | API | Status | Cov |
+|---|---|---|---|
+| Request reset link | `POST /api/auth/forgot-password` | 200 (always — no user enumeration) | ✅ |
+
+### 02b · Reset password (ENG-953)
+| Action | API | Status | Cov |
+|---|---|---|---|
+| Exchange Supabase recovery link → session | `GET /reset-password/confirm` | 307 → `/reset-password` (success, sets the `sp-pw-recovery` marker) · `?state=invalid` (dead link) · `?state=devicemismatch` (PKCE link opened on another device) | ✅ |
+| Set new password | **Auth** `updateUser` | — | ✅ |
+
+The form at `/reset-password` renders **only** for a session that came through
+that exchange (the httpOnly `sp-pw-recovery` marker), never for a merely
+signed-in visitor — `updateUser` requires no current password, so a session
+alone must not authorise a change. Accepts both link shapes: `?code=` (PKCE,
+same-browser only) and `?token_hash=…&type=recovery` (works on any device, and
+the required production email-template shape).
+
 ### 03 · Start trial
 | Action | API | Status | Cov |
 |---|---|---|---|
