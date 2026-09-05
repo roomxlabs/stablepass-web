@@ -128,8 +128,9 @@ a silent rename inside a feature slice.
 
 ## Two host env vars, inlined at BUILD time, with working defaults
 `NEXT_PUBLIC_MARKETING_HOST` (default `stablepass.co`) and `NEXT_PUBLIC_APP_HOST`
-(default `app.stablepass.co`), both in `lib/hosts.ts`. There is no `.env.example`
-in this repo, so this is the only place they are written down. Two traps: they
+(default `app.stablepass.co`), both in `lib/hosts.ts` (and reached from
+`app/robots.ts` via `spaceForHost`). ENG-998 added a committed `.env.example`,
+which now documents them too. Two traps: they
 are `NEXT_PUBLIC_*`, so a change needs a REBUILD, not just a redeploy of env; and
 because the defaults are already correct for production, a deployment that never
 sets them works — nobody discovers the knobs exist until a domain changes.
