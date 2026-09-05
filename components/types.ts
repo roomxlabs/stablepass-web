@@ -32,6 +32,29 @@ export interface FeedPost {
    * Never owner/vendor PII; never a price. Optional on every other surface.
    */
   websiteUrl?: string | null;
+  /**
+   * `horse.photo_url`, ALREADY SIGNED — the head avatar's photo (ENG-958).
+   *
+   * A SIGNED url, never the stored value: `photo_url` holds a bare object path
+   * in a PRIVATE bucket, and rendering a bare path into `<img
+   * src>` resolves it against the current page and silently returns HTML. The
+   * (NB: `lib/storage/photos.ts` cites "guardrail #8" for this rule, but #8 in
+   * `.rx/guardrails.md` is "No betting / bookmaker anything" — the private-bucket
+   * rule is real and enforced in code, it is simply not one of the numbered
+   * entries. Don't go looking for it there.)
+   * screens mint it in their existing batched `signPhotoMap` read and hand the
+   * result here; the card never signs and never fetches.
+   *
+   * Optional, and null-safe by design: a screen that has not resolved photos
+   * gets the monogram the card has always drawn, not a broken image.
+   */
+  horsePhotoUrl?: string | null;
+  /**
+   * `trainer.photo_url`, ALREADY SIGNED — the head avatar on a STABLE UPDATE
+   * card (which is the stable's voice) and the panel footer's disc. Same
+   * signing rule and same fallback as `horsePhotoUrl` above.
+   */
+  trainerPhotoUrl?: string | null;
   /** `trainer.stable_name` — the STABLE UPDATE panel footer. Not owner identity. */
   stableName?: string | null;
   /** `trainer.location` — the other half of the panel footer. */

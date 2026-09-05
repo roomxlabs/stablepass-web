@@ -173,6 +173,109 @@ const CAROUSEL_SLIDES = [
   slide("#285D50", "#FAF7F2", 3),
 ];
 
+/* ROUND 8 / ENG-958 fixtures — the head restack, the boxy avatar with a real
+   photo, and the panel's 8-line clamp.
+
+   A WIDE avatar source on purpose (5:4, not a square): the whole reason mobile
+   moved these off circles is that a horse photographed side-on is a LONG
+   subject, and a circle crops whichever end the framing did not centre. A square
+   fixture would make the box and the disc look identical and the screenshot
+   would prove nothing. A `data:` URI also always decodes, which is what keeps
+   this evidence honest — a signed-Storage fixture can silently serve a broken
+   image while the test still passes (.rx/gotchas.md, ENG-762). */
+const AVATAR_PHOTO = (bg: string, label: string, w: number, h: number) =>
+  `data:image/svg+xml,${encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">` +
+      `<rect width="${w}" height="${h}" fill="${bg}"/>` +
+      `<rect x="0" y="${Math.round(h * 0.62)}" width="${w}" height="${h}" fill="rgba(0,0,0,0.18)"/>` +
+      `<text x="${w / 2}" y="${Math.round(h * 0.42)}" font-family="Inter, sans-serif" font-size="${Math.round(h * 0.3)}" ` +
+      `font-weight="600" fill="#FAF7F2" text-anchor="middle">${label}</text></svg>`,
+  )}`;
+
+/** WIDE (5:4) — the side-on horse the rounded box exists to crop well. */
+const HORSE_PHOTO = AVATAR_PHOTO("#285D50", "H", 500, 400);
+/**
+ * SQUARE — a stable's mark, which is the shape a trainer logo actually is, and
+ * the shape the footer disc's `contain` rule is judged on. A wide fixture here
+ * letterboxes inside the 28px circle and reads as a broken disc in the evidence
+ * while the geometry is perfectly correct — misleading a reviewer about a rule
+ * that is working exactly as ENG-754 intends.
+ */
+const TRAINER_PHOTO = AVATAR_PHOTO("#1A1A1A", "T", 400, 400);
+
+/** Race badge AND label together — the one card that proves the stack ORDER. */
+const RESTACKED_POST: FeedPost = {
+  ...PHOTO_POST,
+  id: "post-restack-1",
+  horseName: "Winx",
+  trainerName: "Chris Waller",
+  label: "Race Day · Today",
+  raceBadge: { text: "Race day · today 4:35pm", kind: "race-day" },
+  horsePhotoUrl: HORSE_PHOTO,
+  media: { type: "photo", posterUrl: CAROUSEL_SLIDES[2] },
+};
+
+/**
+ * A LONG label — the case the restack exists for, and the one nothing covered.
+ *
+ * Every other labelled fixture in this gallery is short enough to fit the column
+ * at 520px, so no fixture could overflow the pill. That is exactly how a broken
+ * ellipsis shipped green past six passing e2e tests and a screenshot: the pill
+ * clipped mid-word and nothing rendered a title long enough to show it. Mobile's
+ * own worked example for this truncation is "Race Replay - Sunsh…", so the
+ * fixture uses that title.
+ */
+const LONG_LABEL_POST: FeedPost = {
+  ...PHOTO_POST,
+  id: "post-restack-3",
+  horseName: "Sunshine In Paris",
+  label: "Race Replay - Sunshine In Paris at Flemington, Group One Final Day Wrap",
+  raceBadge: null,
+  horsePhotoUrl: HORSE_PHOTO,
+  media: { type: "photo", posterUrl: CAROUSEL_SLIDES[0] },
+};
+
+/** The monogram fallback survives — a post whose horse has no photo. */
+const NO_PHOTO_POST: FeedPost = {
+  ...PHOTO_POST,
+  id: "post-restack-2",
+  horseName: "Mahogany",
+  label: "Trackwork",
+  raceBadge: null,
+  horsePhotoUrl: null,
+  media: { type: "photo", posterUrl: CAROUSEL_SLIDES[1] },
+};
+
+/**
+ * A stable update long enough to TRIP the 8-line clamp — several paragraphs, so
+ * it also exercises the part the arithmetic exists for: the budget is eight
+ * lines of WORDS with the 12px paragraph gaps paid on top, not eight lines minus
+ * whatever the gaps eat.
+ */
+const LONG_UPDATE_POST: FeedPost = {
+  ...UPDATE_POST,
+  id: "post-update-long",
+  label: "Stable Update",
+  trainerPhotoUrl: TRAINER_PHOTO,
+  // NOT the words "Quiet week here": the ENG-613 spec locates the original
+  // update card by that phrase, and a second card containing it would make that
+  // locator strict-mode ambiguous. A fixture must not break a sibling's test.
+  body:
+    "Plenty to report from the stable this week and it is all pointing the right way for Saturday. Cando has come through his gallop well and will have one more piece of work Thursday morning before we make a final call on the Randwick assignment.\n\n" +
+    "Banjo's Girl trials Tuesday at Rosehill. She has done everything right at home so we are keen to see how she handles the day, and if she pulls up well she will go straight to the mile at Warwick Farm a fortnight later.\n\n" +
+    "The two-year-olds have started swimming again after a light fortnight. Nothing is being rushed with that group — they will tell us when they are ready and not the other way around.\n\n" +
+    "Lastly, thanks to everyone who came out to trackwork on Sunday morning. Sunshine In Paris is back cantering after her spell.",
+};
+
+/** The SHORT update — no clamp, and therefore NO affordance at all. */
+const SHORT_UPDATE_POST: FeedPost = {
+  ...UPDATE_POST,
+  id: "post-update-short",
+  label: null,
+  trainerPhotoUrl: TRAINER_PHOTO,
+  body: "Short and sweet this week — everything on track for Saturday.",
+};
+
 /**
  * ENG-815 — A STUBBED MINT, FOR THIS DEV PAGE ONLY.
  *
@@ -328,6 +431,23 @@ export default function ComponentPreviewPage() {
         <PostCard post={SINGLE_PHOTO_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
         <PostCard post={DEGRADED_CAROUSEL_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
         <PostCard post={TEN_PHOTO_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
+      </div>
+
+      <h2 id="round8">Round 8 — head restack, boxy avatars, 8-line panel clamp (ENG-958)</h2>
+      <p style={{ color: "var(--muted)", marginBottom: 16 }}>
+        Parity with mobile build 19. The head now stacks race badge, horse name, byline, then the
+        label pill <em>below</em> the byline — the pill used to sit above the name and fight it for
+        width. Avatars are rounded boxes carrying the real signed photo (monogram when there is
+        none); the stable-update panel&rsquo;s footer disc deliberately stays a circle, because it is a
+        stable&rsquo;s mark rather than a profile photo. A long update clamps at eight measured lines
+        with an in-place &ldquo;Read more&rdquo; / &ldquo;Read less&rdquo; and <em>no</em> trailing dots.
+      </p>
+      <div style={{ maxWidth: 520, marginBottom: 40 }} data-testid="round8-gallery">
+        <PostCard post={RESTACKED_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
+        <PostCard post={NO_PHOTO_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
+        <PostCard post={LONG_LABEL_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
+        <PostCard post={LONG_UPDATE_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />
+        <PostCard post={SHORT_UPDATE_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />
       </div>
 
       <h2>Stable update card (post.type = text | news)</h2>

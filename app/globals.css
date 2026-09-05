@@ -616,11 +616,30 @@ a { color: inherit; text-decoration: none; }
 .post-contact-cta { order: 2; margin: 0 22px 14px; }
 .post-body-web    { order: 3; }
 .post-head-web { display: flex; align-items: center; gap: 12px; padding: 16px 22px 14px; }
+/* ROUND 8 / ENG-958 — A ROUNDED BOX, NOT A DISC (mobile ENG-833 + ENG-869).
+   The browse thumbs went boxy first, with the client's reason: "with circles
+   it's going to be too difficult to position the horses" — a horse photographed
+   side-on is a long subject and a circle crops whichever end the framing did not
+   centre. ENG-869 brought the same corner to the post head, because it is the
+   same horse photo in the same product. 14px is mobile's `AVATAR_BOX_RADIUS`
+   (`Radius.md`), which is also this card's own media radius.
+   The stable-update panel footer's `.av` deliberately STAYS a circle — see the
+   note on `.post-panel-foot .av` below. */
 .post-avatar-web {
-  width: 44px; height: 44px; border-radius: 50%;
+  width: 44px; height: 44px; border-radius: 14px;
   background: linear-gradient(135deg, var(--brand-green-light), var(--brand-green));
   display: flex; align-items: center; justify-content: center;
   color: var(--cream); font-family: var(--font-serif); font-size: 18px; font-weight: 600; flex-shrink: 0;
+}
+/* The photo variant of the same box (ENG-958). `cover` because this is
+   PHOTOGRAPHY — the subject is central and the corners are background. (The
+   panel footer's disc is a stable's MARK and uses `contain` instead; the two
+   rules are different on purpose, per mobile's ENG-754 split.)
+   The gradient is cleared so a transparent PNG does not sit on brand green. */
+.post-avatar-web.post-avatar-photo {
+  object-fit: cover;
+  background: var(--media-ground);
+  display: block;
 }
 .post-meta-web { flex: 1; min-width: 0; }
 /* ROUND 5 / ENG-613 row 3 — option D. Was `var(--font-serif)` 18px/600 on
@@ -796,6 +815,39 @@ a { color: inherit; text-decoration: none; }
   content: ''; width: 5px; height: 5px; border-radius: 50%;
   background: var(--cream);
 }
+/* ROUND 8 / ENG-958 — THE CHIP CLOSES THE HEAD STACK (mobile ENG-869).
+   It sat ABOVE the horse name, where it displaced the headline and had to share
+   width with it. Below the byline it gets the whole column, which is the
+   truncation fix: `max-width: 100%` + the ellipsis on a real title rather than
+   two runs of text fighting over one line.
+   The margin is on the PILL, not on the byline above it, so a card with no
+   label draws no pill AND no gap — an unlabelled head is exactly as tall as it
+   was before this ticket. */
+.post-web .post-badge.stacked {
+  margin-top: 6px;
+  margin-bottom: 0;
+  max-width: 100%;
+  min-width: 0;
+  vertical-align: top;
+  overflow: hidden;
+}
+/* THE ELLIPSIS LIVES ON THE INNER SPAN, NOT ON THE PILL.
+   `.post-badge` is `inline-flex`, and `text-overflow` only applies to a BLOCK
+   container that directly holds the overflowing inline content. Put it on the
+   flex container and the copy becomes an anonymous flex item, the ellipsis is
+   never drawn, and a long title is hard-clipped MID-WORD instead — which is
+   silently worse than no truncation, because it looks deliberate.
+   Mobile solves it the same way: the pill is a `View` and the copy is its own
+   `<Text numberOfLines={1}>` child (post-card.tsx `renderLabelPill`).
+   `min-width: 0` is what lets the span shrink below its content width so the
+   ellipsis can actually engage; the dot is a sibling and keeps its fixed size. */
+.post-web .post-badge.stacked .post-badge-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.post-web .post-badge.stacked::before { flex: 0 0 auto; }
 /* Inter, NOT the website sample's serif: two client calls have already moved
    names off Cormorant, and 22px is one point up from mobile's 20 for the
    wider column. */
@@ -816,17 +868,68 @@ a { color: inherit; text-decoration: none; }
 }
 .post-web .post-panel p { font-size: 15px; line-height: 1.55; color: var(--ink); margin: 0 0 12px; }
 .post-web .post-panel p:last-of-type { margin-bottom: 0; }
+/* ROUND 8 / ENG-958 — THE 8-LINE CLAMP (mobile ENG-863).
+   The height is set INLINE by the component, from measured paragraph heights
+   over a measured line height; there is no line-height constant here to drift
+   from the arithmetic. The 12px above IS the gap the clamp charges for
+   (`PANEL_PARAGRAPH_GAP` in post-card.tsx) — change one and you must change the
+   other, or the panel shows the wrong number of lines silently.
+   NO `-webkit-line-clamp`: the budget is eight lines ACROSS paragraphs, which a
+   per-box clamp cannot express. The consequence is that there is no "…" on the
+   last line, which is deliberate and matches mobile — "Read more" is the whole
+   truncation cue, and the trailing dots were removed on 26 Aug 2026 because
+   "Read more…" reads as more COPY where the bare label reads as a control. */
+.post-web .post-panel-prose { flex-shrink: 0; }
+/* The line probe: laid out (so it HAS a height to report) but invisible and
+   out of flow. `display: none` would report zero and switch the clamp off. */
+.post-web .post-panel-line-probe {
+  height: 0; overflow: hidden; visibility: hidden; pointer-events: none;
+}
+.post-web .post-panel-line-probe > div { font-size: 15px; line-height: 1.55; }
+/* The affordance — an own-line, light-green medium control below the copy it
+   belongs to, sitting between the panel and the reaction bar (mobile's
+   placement). `order` is explicit because `.post-web` is a reordered flex
+   column: the panel is -2 and the actions are 1, so this must fall between. */
+.post-panel-read-more {
+  order: -1;
+  align-self: flex-start;
+  margin: 8px 22px 4px;
+  padding: 0;
+  background: none;
+  border: 0;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--brand-green-light);
+  cursor: pointer;
+}
+.post-panel-read-more:hover { color: var(--brand-green); }
 .post-web .post-panel-foot {
   display: flex; align-items: center; gap: 10px;
   border-top: 1px solid var(--line);
   margin-top: 16px; padding-top: 12px;
   font-size: 12.5px; color: var(--muted);
 }
+/* THIS DISC STAYS A CIRCLE (ENG-958, deliberately NOT swept up by the boxy
+   avatars above). It is a STABLE'S MARK, not a profile photo — mobile keeps it
+   circular for the same reason and pins it as a control in its own test. A
+   future "round the avatars" pass must not take this rule with it; a test pins
+   the split here too. */
 .post-web .post-panel-foot .av {
   width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
   background: linear-gradient(135deg, var(--brand-green-light), var(--brand-green-dark));
   color: var(--cream); font-size: 12px; font-weight: 600;
   display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}
+/* `contain` on a light ground, NOT `cover` — the ENG-754 trainer-logo rule:
+   `photo_url` holds a portrait for one trainer and a wide wordmark for the next,
+   and cover-cropping a wordmark into a 28px disc keeps the middle two letters
+   and throws the name away. The head avatar covers; this one contains. */
+.post-web .post-panel-foot .av.post-avatar-photo {
+  object-fit: contain;
+  background: var(--cream);
+  display: block;
 }
 
 .post-body-web { padding: 16px 22px; font-size: 15px; line-height: 1.55; color: var(--ink); }

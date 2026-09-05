@@ -1547,19 +1547,30 @@ function it exports is not**. It fails only at request time, with
   directive nor any `import` (anchor the directive regex to a bare line — the
   module's own comment will quote the phrase while explaining the rule).
 
-## A shared `*_COLUMNS` constant can change an API response from another file (ENG-959)
+## A shared `*_COLUMNS` constant can change an API response from another file (ENG-959, ENG-958)
 
-`HORSE_PROFILE_COLUMNS` (`lib/horse/profile.ts`) has **two** consumers: the
-horse profile page and `app/api/horses/[id]/route.ts`. The route returns the
-embedded `trainer` object **verbatim**, so any field added to
-`trainer:trainer_id(...)` is silently published in that route's JSON — a
-contract change made by editing a different file, with nothing in front of it.
+`HORSE_PROFILE_COLUMNS` (`lib/horse/profile.ts`) has **two** consumers: the horse
+profile page and `app/api/horses/[id]/route.ts`. The route returns the embedded
+`trainer` object **verbatim**, so any field added to `trainer:trainer_id(...)` is
+silently published in that route's JSON — a contract change made by editing a
+different file, with nothing in front of it.
 
-- **Do this:** before widening a shared projection, check every consumer for a
-  verbatim spread/return of the widened object. A column the *page* needs on one
-  screen should be read by that screen, not bolted onto a shared embed. Adding a
-  column the route field-picks (e.g. a `horse` column) is safe; adding one it
-  passes through is not. A test asserting the embed stays un-widened is cheap.
+Two tickets hit this in the same week, from different angles:
+
+- **ENG-959** wanted `trainer.website_url` for a shares CTA on ONE screen, and
+  did NOT widen the embed — that screen reads the column itself.
+- **ENG-958** needed `trainer.photo_url` on the profile page and DID widen it,
+  which put a bare private-bucket **object path** into the BFF envelope — the
+  exact thing `lib/storage/photos.ts` exists to prevent. The suite stayed green,
+  because `test/horses-route.test.ts` asserted only TOP-LEVEL envelope keys.
+
+**Do this:** before widening a shared projection, `grep` every consumer and check
+what each one *returns*, not just what it reads. A column ONE screen needs should
+be read by that screen. Adding a column the route field-picks (a `horse` column)
+is safe; adding one it passes through is not — and if you must, strip or sign it
+in the envelope and pin the object's key set with a **literal** assertion. A test
+that compares against the re-imported constant guards nothing: widening the
+constant widens the assertion with it, and the guard passes on any value.
 
 ## `horse_training_status_check` now admits only six values (ENG-959)
 
@@ -1568,4 +1579,43 @@ constraint is `spelling | breaking_in | pre_training | in_training | racing |
 retired`, so **seeding `farm_training`/`city_training` in an e2e fails with
 23514**. Cover the legacy collapse at unit level, where the value can still
 exist, and keep those switch cases in production code for clients rendering a
-cached pre-migration row.
+cached pre-migration row.## `text-overflow: ellipsis` does NOTHING on an `inline-flex` pill (ENG-958, 5 Sep 2026)
+
+**Symptom:** `.post-badge` was given `max-width` + `overflow:hidden` +
+`white-space:nowrap` + `text-overflow:ellipsis`, and a long label still clipped
+**mid-word with no ellipsis** — which reads as deliberate, so it survived review,
+six passing e2e tests and a committed screenshot.
+
+**Cause:** `.post-badge` is `display: inline-flex` (it needs the flex row for its
+`::before` dot). `text-overflow` only applies to a **block container that
+directly holds the overflowing inline content**; inside a flex container the copy
+becomes an *anonymous flex item* and the ellipsis is never drawn.
+
+**Do this:** put the copy in its own child (`.post-badge-text`) and move
+`overflow/white-space/text-overflow/min-width:0` onto **that**, leaving only
+`max-width:100%; min-width:0; overflow:hidden` on the pill. This is what mobile
+already does — its pill is a `View` whose copy is a `<Text numberOfLines={1}>`
+child. `.reel-head .reel-horse` was already the correct idiom in this file.
+
+**And pin it with a fixture that actually overflows.** Every labelled fixture in
+`app/preview/components/page.tsx` was short enough to fit the column, so nothing
+could catch this. A truncation guard that never truncates passes vacuously — the
+e2e now asserts `scrollWidth > clientWidth` FIRST, then the ellipsis.
+
+## `getComputedStyle().borderRadius` returns a PERCENTAGE verbatim (ENG-958)
+
+Asserting a circle by resolving `50%` against the box (`parseFloat(radius) ≈
+width/2`) FAILS: Chrome reports the literal `"50%"`, so `parseFloat` yields 50 and
+a 28px box compares against 14. Compare the **token** (`toBe("50%")` for the
+circle, `toBe("14px")` for the box) — the two are distinguishable precisely
+because one is a percentage and the other is not.
+
+## The preview gallery's fixtures are SHARED — a new one can break a sibling's test (ENG-958)
+
+`e2e/eng-613-*` locates the stable-update card by the phrase `"Quiet week here"`.
+A new ENG-958 update fixture that reused that opening made the locator match two
+cards and fail as a Playwright strict-mode violation — a red spec in a file the
+diff never touched. Same class: an unscoped `filter({ hasText: "Winx" })` matches
+this round's card *and* the round-5 card it was spread from.
+**Do this:** give a new fixture distinctive copy, and scope every locator in a new
+spec to that round's own `data-testid` section.

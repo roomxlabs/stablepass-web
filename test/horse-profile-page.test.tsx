@@ -50,8 +50,9 @@ const { fromMock, horseSelectMock, tableData } = vi.hoisted(() => {
   };
 });
 
-const { readSubscriptionStateMock } = vi.hoisted(() => ({
+const { readSubscriptionStateMock, horsePostsPropsMock } = vi.hoisted(() => ({
   readSubscriptionStateMock: vi.fn(async () => ({ sub: null, entitled: true, everSubscribed: true })),
+  horsePostsPropsMock: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -67,7 +68,16 @@ vi.mock("@/lib/supabase/server", () => ({
   supabaseServer: vi.fn(async () => ({
     auth: { getUser: vi.fn(async () => ({ data: { user: { id: "user-1" } } })) },
     from: fromMock,
-    storage: { from: vi.fn(() => ({ createSignedUrl: vi.fn(async () => ({ data: null })) })) },
+    // `signPhoto` (singular) is what both the horse cover and the trainer
+    // photo below call — echo the path back as a "signed" url so a test can
+    // tell a signed value from the raw stored one (ENG-958).
+    storage: {
+      from: vi.fn(() => ({
+        createSignedUrl: vi.fn(async (path: string) =>
+          path ? { data: { signedUrl: `https://sb.local/signed/${path}` } } : { data: null },
+        ),
+      })),
+    },
   })),
 }));
 
@@ -80,7 +90,13 @@ vi.mock("@/app/(member)/horses/[id]/follow-notify", () => ({
   FollowNotify: () => null,
 }));
 vi.mock("@/app/(member)/horses/[id]/horse-posts", () => ({
-  HorsePosts: () => null,
+  // Captures the props the PAGE hands down (ENG-958: horsePhotoUrl/trainerPhotoUrl)
+  // without rendering anything — the component's own behaviour is covered
+  // elsewhere; this file only pins what the SERVER page passes it.
+  HorsePosts: (props: unknown) => {
+    horsePostsPropsMock(props);
+    return null;
+  },
 }));
 
 import HorseProfilePage from "@/app/(member)/horses/[id]/page";
@@ -123,6 +139,7 @@ describe("horse profile page — age + description come from the database (ENG-6
     fromMock.mockClear();
     horseSelectMock.mockClear();
     readSubscriptionStateMock.mockClear();
+    horsePostsPropsMock.mockClear();
     for (const key of Object.keys(tableData)) delete tableData[key];
     tableData.race_horse = { data: [] };
   });
@@ -218,6 +235,26 @@ describe("horse profile page — age + description come from the database (ENG-6
     const statusRow = container.querySelector(".status-row")!;
     expect(statusRow.querySelectorAll(".tag")).toHaveLength(2);
     expect(statusRow.textContent).not.toContain("·");
+  });
+
+  // ENG-958 — the horse cover is signed ONCE (`coverUrl`) and reused as
+  // `horsePhotoUrl`, never signed a second time; the trainer's own photo is
+  // signed separately and passed as `trainerPhotoUrl`.
+  it("passes the already-signed horse cover and trainer photo down to HorsePosts", async () => {
+    tableData.horse = horseRow({
+      photo_url: "horses/mahogany.jpg",
+      trainer: { id: "t1", name: "Chris Waller", stable_name: "Waller Racing", location: "Rosehill", photo_url: "trainers/waller.jpg" },
+    });
+
+    await renderProfile();
+
+    expect(horsePostsPropsMock).toHaveBeenCalledTimes(1);
+    const props = horsePostsPropsMock.mock.calls[0][0] as { horsePhotoUrl: string | null; trainerPhotoUrl: string | null };
+    expect(props.horsePhotoUrl).toBe("https://sb.local/signed/horses/mahogany.jpg");
+    expect(props.trainerPhotoUrl).toBe("https://sb.local/signed/trainers/waller.jpg");
+    // Never the raw stored path.
+    expect(props.horsePhotoUrl).not.toBe("horses/mahogany.jpg");
+    expect(props.trainerPhotoUrl).not.toBe("trainers/waller.jpg");
   });
 
   it("GUARDRAIL: a hidden horse notFound()s — never a partial render", async () => {

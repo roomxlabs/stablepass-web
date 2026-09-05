@@ -7,7 +7,7 @@
 // via supabaseBrowser — the same fetch/enrich/mutate shape as W6 explore-feed,
 // scoped to one horse and without tabs/paging.
 import { useEffect, useState } from "react";
-import { PostCard, mediaBoxProps } from "@/components/post-card";
+import { PostCard, PostAvatar, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@/lib/api/post-media";
@@ -27,10 +27,15 @@ export interface HorsePostsProps {
   stableName?: string | null;
   /** `trainer.location` — the other half of that footer. */
   stableLocation?: string | null;
+  /** This horse's ALREADY-SIGNED photo — the page signs it once as `coverUrl`
+   *  and this prop reuses that value rather than signing a second time (ENG-958). */
+  horsePhotoUrl?: string | null;
+  /** The trainer's ALREADY-SIGNED photo — the STABLE UPDATE card's head/footer avatar. */
+  trainerPhotoUrl?: string | null;
   viewerId: string;
 }
 
-export function HorsePosts({ horseId, horseName, trainerName, stableName = null, stableLocation = null, viewerId }: HorsePostsProps) {
+export function HorsePosts({ horseId, horseName, trainerName, stableName = null, stableLocation = null, horsePhotoUrl = null, trainerPhotoUrl = null, viewerId }: HorsePostsProps) {
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -87,6 +92,8 @@ export function HorsePosts({ horseId, horseName, trainerName, stableName = null,
           trainerName,
           stableName,
           stableLocation,
+          horsePhotoUrl,
+          trainerPhotoUrl,
           bookmarked: mySet.has(r.id),
         }));
         if (!cancelled) setPosts(mapped);
@@ -97,7 +104,7 @@ export function HorsePosts({ horseId, horseName, trainerName, stableName = null,
     return () => {
       cancelled = true;
     };
-  }, [horseId, horseName, trainerName, stableName, stableLocation]);
+  }, [horseId, horseName, trainerName, stableName, stableLocation, horsePhotoUrl, trainerPhotoUrl]);
 
   async function react(postId: string, emoji: ReactionEmoji) {
     const target = posts.find((p) => p.id === postId);
@@ -173,7 +180,7 @@ export function HorsePosts({ horseId, horseName, trainerName, stableName = null,
           return (
             <article className="post-web" key={p.id}>
               <div className="post-head-web">
-                <div className="post-avatar-web" aria-hidden="true">{p.horseName[0]?.toUpperCase() ?? "?"}</div>
+                <PostAvatar url={p.horsePhotoUrl} initial={p.horseName[0]?.toUpperCase() ?? "?"} />
                 <div className="post-meta-web">
                   <h3 className="post-horse">{p.horseName}</h3>
                   {/* title on a media card is withheld (client, 18 Aug 2026) — see post-card.tsx */}

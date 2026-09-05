@@ -69,7 +69,29 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   if (!horseRow) return fail("not_found", "Horse not found.", 404);
 
   const row = horseRow as HorseProfileRow;
-  const trainer = one(row.trainer);
+  // `photo_url` is STRIPPED before this leaves the server (ENG-958).
+  //
+  // ENG-958 added `trainer.photo_url` to the shared `HORSE_PROFILE_COLUMNS` so
+  // the horse PROFILE PAGE could sign it for the post-card avatars. That
+  // constant has two consumers, and this route is the other one — it returns the
+  // embedded trainer verbatim, so the widening would have shipped a bare
+  // `trainer-photos` OBJECT PATH to browser JS. That is the exact escape hatch
+  // `lib/storage/photos.ts` exists to close: a path is not the bytes (minting
+  // still runs under the viewer's RLS), but an unsigned path in an envelope is
+  // one consumer away from being rendered into an `<img src>`, where it would
+  // resolve against the page and silently return HTML.
+  //
+  // Nothing consumes this field today, which is precisely why it needed a
+  // deliberate decision now rather than a discovery later. The route already
+  // signs the horse's own cover below for the same reason.
+  // The `?? null` is load-bearing: a horse with no trainer must still serialise
+  // as `trainer: null`, not as an empty object. Destructuring straight off a
+  // `?? {}` would quietly change this envelope's shape for every trainerless
+  // horse — a contract change smuggled in behind a security fix.
+  const trainerRow = one(row.trainer);
+  const trainer = trainerRow
+    ? (({ photo_url: _photoPath, ...rest }) => rest)(trainerRow)
+    : null;
 
   // Next race — earliest upcoming scheduled_at, or null.
   const { data: nextRaceRows } = await sb

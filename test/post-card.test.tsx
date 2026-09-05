@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   PostCard,
@@ -12,6 +12,12 @@ import {
   ASPECT_MIN,
   ASPECT_MAX,
   ASPECT_DEFAULT,
+  panelLineCount,
+  panelClampHeight,
+  PANEL_CLAMP_LINES,
+  PANEL_PARAGRAPH_GAP,
+  READ_MORE_LABEL,
+  READ_LESS_LABEL,
 } from "@/components/post-card";
 import type { FeedPost } from "@/components/types";
 
@@ -831,5 +837,247 @@ describe("PostCaption (ENG-761 item 2)", () => {
 
       Reflect.deleteProperty(document, "fonts");
     });
+  });
+});
+
+// ===========================================================================
+// ENG-958 — the head avatar (a photo or a monogram fallback), the head STACK
+// order, and the panel's line-clamp arithmetic + Read more/Read less toggle.
+// ===========================================================================
+
+describe("panelLineCount — pure arithmetic, no DOM", () => {
+  it("returns 0 for a zero lineHeight — never divides by zero", () => {
+    expect(panelLineCount([], 0)).toBe(0);
+    expect(panelLineCount([58.5], 0)).toBe(0);
+  });
+
+  // A browser has been seen to report a three-line paragraph as 58.500001, and
+  // `Math.round` (not `Math.ceil`) is what keeps that at 3 lines, not 4.
+  it("rounds 58.500001 / 19.5 to 3 lines, not 4", () => {
+    expect(panelLineCount([58.500001], 19.5)).toBe(3);
+  });
+
+  it("floors a sub-pixel paragraph height at 1 line, never 0", () => {
+    expect(panelLineCount([0.4], 19.5)).toBe(1);
+  });
+
+  it("ignores an unmeasured (0 or negative) paragraph height, rather than counting it", () => {
+    expect(panelLineCount([0, 19.5], 19.5)).toBe(1);
+  });
+});
+
+describe("panelClampHeight — charges the between-paragraph gaps", () => {
+  // THE point of the helper: three 4-line paragraphs at lineHeight 20, gap 12,
+  // maxLines 8 → 4*20 + 12 + 4*20 = 172, NOT 8*20 = 160. Capping at
+  // `maxLines * lineHeight` would swallow the gaps the member actually sees.
+  it("charges a gap for each paragraph boundary it crosses", () => {
+    const heights = [80, 80, 80]; // 4 lines each at lineHeight 20
+    expect(panelClampHeight(heights, 20, 12, 8)).toBe(172);
+  });
+
+  it("never pays for a gap a budget that runs out mid-paragraph does not reach", () => {
+    // One 4-line paragraph, then a second that would need more than the
+    // remaining budget (maxLines 6): the first paragraph's gap IS paid (it
+    // was reached); nothing beyond the second paragraph's partial 2 lines is.
+    const heights = [80, 200]; // 4 lines, then 10 lines
+    // 4 lines (80) + gap (12) + 2 lines (40) = 132 — the third paragraph
+    // (absent here) would have paid ANOTHER gap only if reached.
+    expect(panelClampHeight(heights, 20, 12, 6)).toBe(132);
+  });
+
+  it("returns 0 when nothing has been measured — 'do not clamp yet', not 'clamp to nothing'", () => {
+    expect(panelClampHeight([], 20)).toBe(0);
+    expect(panelClampHeight([80], 0)).toBe(0);
+  });
+
+  it("uses the module's own PANEL_CLAMP_LINES/PANEL_PARAGRAPH_GAP as its defaults", () => {
+    expect(PANEL_CLAMP_LINES).toBe(8);
+    expect(PANEL_PARAGRAPH_GAP).toBe(12);
+    const heights = [160]; // 8 lines exactly at lineHeight 20
+    expect(panelClampHeight(heights, 20)).toBe(160);
+  });
+});
+
+describe("PostCard — the head STACK order (ENG-958 parity item)", () => {
+  const STACKED: FeedPost = {
+    ...BASE,
+    raceBadge: { kind: "result", text: "Won R4" },
+    label: "Trackwork",
+  };
+
+  it("orders the classic head: .race-badge, .post-horse, .post-byline, then .post-badge", () => {
+    render(<PostCard post={STACKED} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />);
+
+    const meta = document.querySelector(".post-meta-web");
+    expect(meta).not.toBeNull();
+    const children = Array.from(meta!.children);
+    const classesInOrder = children.map((el) => el.className);
+
+    const badgeIdx = classesInOrder.findIndex((c) => c.includes("race-badge"));
+    const horseIdx = classesInOrder.findIndex((c) => c.includes("post-horse"));
+    const bylineIdx = classesInOrder.findIndex((c) => c.includes("post-byline"));
+    const pillIdx = classesInOrder.findIndex((c) => c.includes("post-badge"));
+
+    expect(badgeIdx).toBeGreaterThanOrEqual(0);
+    expect(horseIdx).toBeGreaterThan(badgeIdx);
+    expect(bylineIdx).toBeGreaterThan(horseIdx);
+    expect(pillIdx).toBeGreaterThan(bylineIdx);
+
+    // Positional, not merely present: `compareDocumentPosition` confirms the
+    // pill genuinely FOLLOWS the byline in the tree, not just in the array.
+    const byline = meta!.querySelector(".post-byline")!;
+    const pill = meta!.querySelector(".post-badge")!;
+    expect(byline.compareDocumentPosition(pill) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    expect(pill).toHaveClass("stacked");
+  });
+
+  it("orders the reel head the same way: .reel-horse, .reel-byline, then .post-badge", () => {
+    const REEL: FeedPost = {
+      ...STACKED,
+      media: { type: "video", posterUrl: null, duration: "0:30", aspectRatio: 9 / 16 },
+    };
+    const { container } = render(
+      <PostCard post={REEL} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={vi.fn()} />,
+    );
+
+    const meta = container.querySelector(".reel-head-meta");
+    expect(meta).not.toBeNull();
+    const children = Array.from(meta!.children).map((el) => el.className);
+
+    const horseIdx = children.findIndex((c) => c.includes("reel-horse"));
+    const bylineIdx = children.findIndex((c) => c.includes("reel-byline"));
+    const pillIdx = children.findIndex((c) => c.includes("post-badge"));
+
+    expect(horseIdx).toBe(0);
+    expect(bylineIdx).toBeGreaterThan(horseIdx);
+    expect(pillIdx).toBeGreaterThan(bylineIdx);
+
+    const byline = meta!.querySelector(".reel-byline")!;
+    const pill = meta!.querySelector(".post-badge")!;
+    expect(byline.compareDocumentPosition(pill) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pill).toHaveClass("stacked");
+  });
+});
+
+describe("PostAvatar (via PostCard) — photo with a monogram fallback", () => {
+  it("renders the horse's signed photo, not a monogram, when horsePhotoUrl is set", () => {
+    render(
+      <PostCard
+        post={{ ...BASE, horsePhotoUrl: "https://sb.local/signed/horse.jpg" }}
+        viewerId={VIEWER_ID}
+        onReact={noop}
+        onBookmark={noop}
+      />,
+    );
+
+    const img = screen.getByTestId("post-avatar-photo");
+    expect(img).toHaveAttribute("src", "https://sb.local/signed/horse.jpg");
+    // The monogram box is a plain aria-hidden div with no `img` role — its
+    // absence here is what proves the photo branch, not the fallback, rendered.
+    expect(document.querySelector(".post-head-web > div.post-avatar-web:not(img)")).toBeNull();
+  });
+
+  it("falls back to the monogram when there is no horsePhotoUrl", () => {
+    render(
+      <PostCard post={{ ...BASE, horsePhotoUrl: null }} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />,
+    );
+
+    expect(screen.queryByTestId("post-avatar-photo")).not.toBeInTheDocument();
+    const monogram = document.querySelector(".post-head-web .post-avatar-web");
+    expect(monogram).not.toBeNull();
+    expect(monogram!.textContent).toBe("M"); // Mahogany
+  });
+
+  it("falls back to the monogram when the photo element fires an error (revoked/rotated object)", () => {
+    render(
+      <PostCard
+        post={{ ...BASE, horsePhotoUrl: "https://sb.local/signed/dead.jpg" }}
+        viewerId={VIEWER_ID}
+        onReact={noop}
+        onBookmark={noop}
+      />,
+    );
+
+    const img = screen.getByTestId("post-avatar-photo");
+    fireEvent.error(img);
+
+    expect(screen.queryByTestId("post-avatar-photo")).not.toBeInTheDocument();
+    const monogram = document.querySelector(".post-head-web .post-avatar-web");
+    expect(monogram).not.toBeNull();
+    expect(monogram!.textContent).toBe("M");
+  });
+
+  it("uses trainerPhotoUrl, not horsePhotoUrl, for the head avatar on an update card", () => {
+    const { container } = render(
+      <PostCard
+        post={{ ...TEXT_POST, horsePhotoUrl: "https://sb.local/signed/horse.jpg", trainerPhotoUrl: "https://sb.local/signed/trainer.jpg" }}
+        viewerId={VIEWER_ID}
+        onReact={noop}
+        onBookmark={noop}
+      />,
+    );
+
+    // Two `post-avatar-photo` elements render on an update card: the HEAD
+    // avatar and the panel-footer disc. Both take the trainer's photo here
+    // (correctly — this asserts the HEAD one specifically), so this must be
+    // scoped to `.post-head-web` rather than `getByTestId`.
+    const img = container.querySelector<HTMLImageElement>(".post-head-web [data-testid='post-avatar-photo']");
+    expect(img).not.toBeNull();
+    expect(img).toHaveAttribute("src", "https://sb.local/signed/trainer.jpg");
+  });
+});
+
+describe("PostPanel — Read more / Read less toggle", () => {
+  // jsdom lays out nothing, so every `getBoundingClientRect()` is 0 and the
+  // clamp never naturally engages. Stub the measurement instead of chasing a
+  // real layout: the probe reports one 20px line, and every paragraph reports
+  // 200px (10 lines, over the 8-line budget), so the affordance is forced on.
+  const LONG_UPDATE: FeedPost = {
+    ...TEXT_POST,
+    body: "Paragraph one runs on for a good while.\n\nParagraph two also runs on for a good while.",
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function stubMeasurement() {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const height = this.hasAttribute("data-testid") && this.getAttribute("data-testid") === "post-panel-line-probe"
+        ? 20
+        : this.tagName === "P"
+          ? 200
+          : 0;
+      return { width: 100, height, top: 0, left: 0, bottom: height, right: 100, x: 0, y: 0, toJSON() {} } as DOMRect;
+    });
+  }
+
+  it('offers "Read more" (no trailing dots), toggles to "Read less" and back, and flips aria-expanded', async () => {
+    stubMeasurement();
+    const user = userEvent.setup();
+    render(<PostCard post={LONG_UPDATE} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />);
+
+    const more = await screen.findByTestId("post-panel-read-more");
+    // Exact match, not a substring: the trailing "…" was deliberately removed
+    // (26 Aug 2026) — "Read more…" reads as copy trailing off, not a control.
+    expect(more.textContent).toBe(READ_MORE_LABEL);
+    expect(more).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(more);
+    expect(screen.getByTestId("post-panel-read-more").textContent).toBe(READ_LESS_LABEL);
+    expect(screen.getByTestId("post-panel-read-more")).toHaveAttribute("aria-expanded", "true");
+
+    await user.click(screen.getByTestId("post-panel-read-more"));
+    expect(screen.getByTestId("post-panel-read-more").textContent).toBe(READ_MORE_LABEL);
+    expect(screen.getByTestId("post-panel-read-more")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("keeps the Read more control OUTSIDE the clamped box — a clamped box must never contain its own unclamp control", async () => {
+    stubMeasurement();
+    render(<PostCard post={LONG_UPDATE} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />);
+
+    const more = await screen.findByTestId("post-panel-read-more");
+    expect(more.closest(".post-panel-clamp")).toBeNull();
   });
 });
