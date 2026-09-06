@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 
-import { formatLastUpdated, legalCanonicalUrl, readLegalDocument } from "@/lib/legal";
+import { legalCanonicalUrl, readLegalDocument } from "@/lib/legal";
 import { isAlwaysIndexablePath } from "@/lib/seo";
 
 import { CONTACT_EMAIL, contactMailtoHref } from "../../modals/contact-mailto";
-import Block from "../legal-blocks";
+import LegalDocumentShell from "../legal-document";
 import styles from "../legal.module.css";
 
 /**
@@ -68,7 +68,24 @@ export function generateMetadata(): Metadata {
     // and reading the allowlist is what makes that claim structurally true
     // rather than merely test-enforced. Drop the path from ALWAYS_INDEXABLE_PATHS
     // and this page goes back to noindex with it, in one edit.
-    robots: { index: isAlwaysIndexablePath(PATHNAME), follow: isAlwaysIndexablePath(PATHNAME) },
+    //
+    // `follow: false` is deliberate and is NOT symmetric with `index`.
+    // `Disallow: /` stops a crawler FETCHING the rest of the site; it does not
+    // stop it INDEXING a URL it discovered as a link. This page is the one page
+    // on the site crawlers are invited into, and it sits inside the shared
+    // marketing shell, so its nav and footer link `/start`, `/signin` and the
+    // other legal routes. Following those is how a fully-disallowed site starts
+    // acquiring URL-only index entries. Nothing about Play's requirement needs
+    // link discovery: the page itself must be findable, and that is `index`.
+    //
+    // NOTE, because the comment above this function is easy to over-read: this
+    // surface is host-INDEPENDENT. The page is `force-static`, so one HTML file
+    // is served on both hosts and this tag says `index` on app.stablepass.co
+    // too. The member space is still noindex there — enforced by the two
+    // host-aware surfaces, the `X-Robots-Tag` header and that host's
+    // `Disallow: /` — and `test/middleware.test.ts` pins the header. Do not
+    // "fix" the apparent disagreement by removing either of those.
+    robots: { index: isAlwaysIndexablePath(PATHNAME), follow: false },
   };
 }
 
@@ -76,36 +93,25 @@ export default function DeleteAccountPage() {
   const document = readLegalDocument(SLUG);
 
   return (
-    <main className={styles.page}>
-      <div className="wrap">
-        <article className={styles.doc}>
-          <span className={`eyebrow ${styles.kicker}`}>Legal</span>
-          <h1 className={styles.title}>{document.title}</h1>
-          <p className={styles.updated}>Last updated {formatLastUpdated(document.lastUpdated)}</p>
-          {document.blocks.map((block, index) => (
-            <Block key={`${block.kind}-${index}`} block={block} />
-          ))}
-
-          {/*
-            A plain anchor, and nothing else. No form and no fetch: a form here
-            would need somewhere to post, which is out of this ticket's scope,
-            and it would create an inbox nobody has agreed to watch — the mockup
-            already shipped one fictional "message sent" confirmation and
-            ENG-589 removed it. A `mailto:` is owned by the visitor's own mail
-            client from the moment it opens, so it cannot claim a delivery that
-            did not happen. It also cannot become an enumeration oracle, which a
-            form that validated an address inevitably would.
-          */}
-          <div className={styles.action}>
-            <span className={`eyebrow ${styles.actionLabel}`}>Request deletion by email</span>
-            <a href={contactMailtoHref(REQUEST_SUBJECT)}>{CONTACT_EMAIL}</a>
-            <p className={styles.actionNote}>
-              Opens your email app with the subject line filled in. Send it from the address your
-              account uses.
-            </p>
-          </div>
-        </article>
+    <LegalDocumentShell document={document}>
+      {/*
+        A plain anchor, and nothing else. No form and no fetch: a form here
+        would need somewhere to post, which is out of this ticket's scope, and
+        it would create an inbox nobody has agreed to watch — the mockup already
+        shipped one fictional "message sent" confirmation and ENG-589 removed
+        it. A `mailto:` is owned by the visitor's own mail client from the moment
+        it opens, so it cannot claim a delivery that did not happen. It also
+        cannot become an enumeration oracle, which a form that validated an
+        address inevitably would.
+      */}
+      <div className={styles.action}>
+        <span className={`eyebrow ${styles.actionLabel}`}>Request deletion by email</span>
+        <a href={contactMailtoHref(REQUEST_SUBJECT)}>{CONTACT_EMAIL}</a>
+        <p className={styles.actionNote}>
+          Opens your email app with the subject line filled in. Send it from the address your
+          account uses.
+        </p>
       </div>
-    </main>
+    </LegalDocumentShell>
   );
 }
