@@ -180,12 +180,22 @@ describe("app/globals.css — the status scale + shares pill grounds", () => {
   // — which is exactly the failure mode this file exists to avoid.
   it("pins --brand-green to its literal hex", () => {
     // If this line moves, the Shares pill silently changes colour everywhere.
-    expect(css).toMatch(/--brand-green:\s*#285D50\s*;/);
+    // Anchored to a real DECLARATION (line start, `/m`) and not to the hex
+    // anywhere in the file — same rule as the "use client" guard above. This
+    // stylesheet DISCUSSES --brand-green and `.tag.race-day` in prose right
+    // above the status scale, so an unanchored match would stay green against
+    // a commented-out token sitting beside a live, mutated one.
+    expect(css).toMatch(/^\s*--brand-green:\s*#285D50\s*;/m);
   });
 
   it("keeps .tag.race-day — the Shares Available pill — on plain --brand-green", () => {
-    expect(css).toMatch(/\.tag\.race-day\s*\{\s*background:\s*var\(--brand-green\)\s*;\s*color:\s*var\(--cream\)\s*;\s*\}/);
-    // Not the dark token: that one belongs to In training, one row over.
+    // Reuses the `rule()` helper above so this rule inherits the SAME
+    // whitespace-tolerance policy as the four status grounds — an inline copy
+    // would silently not inherit any future loosening of it.
+    expect(css).toMatch(rule("race-day", "var(--brand-green)", "cream"));
+    // Not redundant with the positive above, despite appearing so: the match is
+    // unanchored, so a SECOND `.tag.race-day` rule appended later would leave
+    // the positive matching while the cascade actually resolved to dark.
     expect(css).not.toMatch(/\.tag\.race-day\s*\{\s*background:\s*var\(--brand-green-dark\)/);
   });
 });
