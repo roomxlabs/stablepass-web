@@ -62,8 +62,12 @@ Against the **old** webhook (be `main`) it breaks two ways, both silent:
 `feature/stripe-trial-v1` integration branch this is the gate ticket's job to sequence.
 
 ## Never hardcode the price — derive it from the Stripe price
+**(Updated ENG-1001, 6 Sep 2026: there are now TWO prices and `STRIPE_PRICE_ID` is
+read NOWHERE. The route picks `STRIPE_PRICE_ID_PROMO` or `STRIPE_PRICE_ID_STANDARD`
+server-side from `subscription.promo_passes_used`. Everything below still holds — it
+just applies to whichever price id was chosen.)**
 The sandbox price is **A$1.00** and production is **A$19.00**. `/api/subscription/checkout`
-retrieves `STRIPE_PRICE_ID` and returns `unitAmount`/`currency`; the FE formats every
+retrieves the chosen price id and returns `unitAmount`/`currency`; the FE formats every
 amount from those. A hardcoded `1900`/`"AU$19.00"`/`1.73` makes the screen claim one
 number while Stripe charges another. GST is display-only: `unitAmount / 11` (AU prices
 are GST-inclusive). `Intl.NumberFormat("en-US", { currency: "AUD" })` renders the
@@ -1362,6 +1366,31 @@ Production and Development only. Any preview deployment therefore 502s
 `stripe_unavailable` on `/api/subscription/checkout` no matter which price ids
 are configured. Don't debug a preview checkout as a code bug, and don't assume a
 "set it for Preview + Production" ops ticket made preview functional.
+
+## `e2e/checkout.spec.ts` is RED on `feature/pricing-v1` — all 3 tests, pre-existing (ENG-1001, 6 Sep 2026)
+The reveal-password toggle (commit `7cc153e`, on the base) made `getByLabel("Password")`
+ambiguous, and this spec still uses the bare label. All three ENG-567 tests therefore
+die inside `signIn()` at line 56, **before** ever reaching `/checkout` — so they tell
+you nothing about the checkout screen and must not be read as a regression from a
+checkout change. Use `getByRole("textbox", { name: "Password" })`, as
+`e2e/eng-1001-checkout-pricing.spec.ts` does.
+- **Do this:** before blaming a checkout diff for a red `e2e/checkout.spec.ts`, check
+  whether the failure is at `signIn`. Fixing the spec is a one-line change, but it
+  belongs to whoever owns that file's surface.
+
+## grill-me already committed a `.rx/specs/<date>-<ticket>-design.md` — READ IT BEFORE WRITING (ENG-1001, 6 Sep 2026)
+The per-ticket design spec named in a ticket's surface is frequently ALREADY on the
+base branch (the epic's docs commit lands a short pre-build version). A `Write` to
+that path silently replaces it, and the pre-build reasoning is gone from the diff with
+nothing flagging the loss.
+- **Do this:** `git show origin/<base>:.rx/specs/<file>` first. The as-built spec should
+  supersede and absorb it, not quietly overwrite it — and say so in the PR.
+
+## `promo_passes_used` counts EVERY paid pass, not just discounted ones
+So the promo test is a plain `promoUsed < 6` and the counter keeps climbing past the
+threshold — `promoRemaining` must be clamped with `Math.max(0, …)` or a member on
+their tenth pass reads a negative number. Confirmed in the be migration comment and in
+`.rx/specs/2026-09-05-paid-only-subscription-epic-design.md`.
 
 ## `getByLabel("Password")` is AMBIGUOUS in Playwright — every e2e spec uses it
 **(2026-09-06, ENG-1002)** `/signin` gained a show/hide control that is a

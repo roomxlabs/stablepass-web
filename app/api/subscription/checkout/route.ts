@@ -14,10 +14,18 @@ import { ok, UNAUTH, fail } from "@/lib/api/envelope";
 //  - Branch B (status === "active"): early renewal. A one-off PaymentIntent.
 //    Previously this returned 409 already_active; that rule is gone.
 //
-// The amount is NEVER hardcoded — `STRIPE_PRICE_ID` is the single source of
-// truth for both amount and currency, retrieved on every request and echoed to
-// the FE as `unitAmount`/`currency` so the screen and the charge can never
-// disagree (sandbox is A$1.00, production A$19.00 — same code, no cutover edit).
+// PRICE SELECTION (ENG-1001) — there are now TWO prices: a promotional one for
+// a member's first `PROMO_PASS_ALLOWANCE` passes and a standard one after that.
+// Which one applies is decided HERE, on the server, from the member's own
+// `subscription.promo_passes_used` counter. The request body plays no part: this
+// handler takes no `Request` argument at all, so there is no parameter, header
+// or query string that can influence the price. A member can never ask for the
+// cheaper one.
+//
+// The amount is still NEVER hardcoded — the chosen price id is the single source
+// of truth for both amount and currency, retrieved on every request and echoed
+// to the FE as `unitAmount`/`currency` so the screen and the charge can never
+// disagree. No amount literal appears in this file.
 //
 // The card never touches our server (.rx/guardrails.md #4): we only create
 // Stripe objects here and hand back a clientSecret for the FE to confirm inline.
@@ -32,13 +40,25 @@ import { ok, UNAUTH, fail } from "@/lib/api/envelope";
 //  - `stripe_error`       — the key works but Stripe failed (outage, bad price
 //    id, rejected request). Reporting these as `stripe_unavailable` is what sent
 //    a human hunting a misconfiguration that did not exist.
+//  - `subscription_unavailable` (ENG-1001) — the member's `subscription` row could
+//    not be READ, so we refuse to price a pass. Stripe was never called. It is a
+//    third code for the same reason the two above are two: a DB failure reported
+//    as a Stripe failure sends the next person debugging in the wrong direction.
+//    The screen needs no change — anything that is not `stripe_unavailable`
+//    already renders the generic "nothing has been charged" error state.
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+// How many passes are sold at the promotional price before a member moves to
+// the standard one. `promo_passes_used` counts EVERY paid pass (the be
+// migration's wording), so the comparison is a simple `<`.
+const PROMO_PASS_ALLOWANCE = 6;
 
 type SubscriptionRow = {
   status: string | null;
   stripe_customer_id: string | null;
   current_period_end: string | null;
+  promo_passes_used: number | null;
 };
 
 // first_name / last_name / postcode are the identity split ENG-566 adds to
@@ -152,6 +172,11 @@ async function findExistingCustomer(
 //     dead Pay button from a new direction.
 // Ten minutes is comfortably longer than a double-click or a StrictMode double
 // effect (the only races that need collapsing) and far shorter than either hazard.
+//
+// Do NOT "simplify" the body digest away (ENG-1001). `subCreateParams` now carries
+// the CHOSEN `priceId`, so a member who crosses the promo threshold between two
+// visits inside the same 10-minute bucket automatically gets a fresh key — without
+// the digest, Stripe would replay the promo-priced Subscription and undercharge them.
 const IDEMPOTENCY_BUCKET_MS = 10 * 60 * 1000;
 
 function idempotencyKey(scope: string, appUserId: string, body: unknown): string {
@@ -171,12 +196,67 @@ export async function POST() {
   // placeholder reachable. Never throw at module scope.
   if (!stripe) return fail("stripe_unavailable", "Payment provider not configured.", 502);
 
-  const { data: subData } = await sb
+  // The `error` is captured, NOT discarded. This projection names
+  // `promo_passes_used`, a column the be ENG-999 migration adds — and an explicit
+  // PostgREST projection REJECTS THE WHOLE QUERY with `42703` if any named column
+  // is not deployed (`.rx/gotchas.md`, ENG-617). Dropping the error puts that
+  // failure in the same branch as "this member has no row yet", and the
+  // consequences are far worse than a mispriced pass:
+  //   * `sub` is null, so `sub?.status === "active"` is false and BRANCH B NEVER
+  //     FIRES. An active member early-renewing would be sent down Branch A, get a
+  //     new recurring Subscription with no `metadata.kind="renewal"` and no
+  //     `metadata.new_period_end`, and the be webhook would then stamp
+  //     `current_period_end = now + 30d` — DESTROYING the unexpired days they had
+  //     already paid for.
+  //   * and none of it would be logged.
+  // So this fails CLOSED. Nothing has been charged at this point, so a 502 is
+  // strictly safer than proceeding on a row we know we failed to read.
+  const { data: subData, error: subError } = await sb
     .from("subscription")
-    .select("status,stripe_customer_id,current_period_end")
+    .select("status,stripe_customer_id,current_period_end,promo_passes_used")
     .eq("user_id", user.id)
     .single();
+  // PGRST116 is `.single()`'s "no rows" — a legitimate state for a member who has
+  // never had a subscription row, and the case every field below already reads
+  // defensively. Only a DIFFERENT code means the read itself failed.
+  if (subError && subError.code !== "PGRST116") {
+    console.error(
+      "[checkout] subscription read failed (%s) — refusing to price a pass from a row we could not read: %s",
+      subError.code ?? "no code",
+      subError.message ?? String(subError),
+    );
+    // Deliberately NOT `stripe_error`: the key is fine and Stripe was never
+    // called. Conflating a failure with an unrelated one is exactly what ENG-581
+    // exists to stop, so this carries its own code. The screen needs no change —
+    // it already renders its generic "we couldn't start a secure payment,
+    // nothing has been charged" state for any code that is not
+    // `stripe_unavailable`, which is the correct copy here.
+    return fail("subscription_unavailable", "Could not start checkout. Please try again shortly.", 502);
+  }
   const sub = subData as SubscriptionRow | null;
+
+  // The price is chosen from the member's OWN row, server-side (.rx/guardrails.md
+  // — "the price is chosen server-side from the database and is never
+  // client-influenced"). The default deliberately fails TOWARD the discount: if
+  // there is no row yet the member is charged less, never more. The counter is
+  // authoritative and the be `stripe-webhook` corrects the state after the
+  // payment lands. Inverting this default would silently overcharge someone.
+  //
+  // The guard is `Number.isFinite`, not `?? 0`: `?? 0` only catches null, and a
+  // non-numeric value would make `promoUsed < PROMO_PASS_ALLOWANCE` false and
+  // charge the STANDARD price — the exact opposite of the stated invariant. The
+  // column is `int not null` with a 0..1000 CHECK so this is not reachable today;
+  // it is written this way so the guarantee holds by construction rather than by
+  // the schema happening to agree.
+  const rawPromoUsed = sub?.promo_passes_used;
+  const promoUsed = typeof rawPromoUsed === "number" && Number.isFinite(rawPromoUsed) ? rawPromoUsed : 0;
+  const usePromo = promoUsed < PROMO_PASS_ALLOWANCE;
+  const priceId = usePromo
+    ? process.env.STRIPE_PRICE_ID_PROMO!
+    : process.env.STRIPE_PRICE_ID_STANDARD!;
+  // Clamped at 0 because the counter keeps counting past the allowance — a
+  // member on their tenth pass must read "0 left", not a negative number.
+  const promoRemaining = Math.max(0, PROMO_PASS_ALLOWANCE - promoUsed);
 
   const { data: identityData } = await sb
     .from("app_user")
@@ -188,11 +268,11 @@ export async function POST() {
   try {
     // Resolve the price FIRST, in both branches. A failed retrieve or a null
     // unit_amount is a hard 502 — we never guess or fall back to a literal.
-    const price = await stripe.prices.retrieve(process.env.STRIPE_PRICE_ID!);
+    const price = await stripe.prices.retrieve(priceId);
     if (price?.unit_amount == null) {
       // NOT `stripe_unavailable` — the key is present and Stripe answered; the
       // price is simply unusable. See the error-code note above `POST`.
-      console.error("[checkout] price %s has a null unit_amount", process.env.STRIPE_PRICE_ID);
+      console.error("[checkout] price %s has a null unit_amount", priceId);
       return fail("stripe_error", "Payment provider unavailable.", 502);
     }
     const unitAmount = price.unit_amount;
@@ -263,6 +343,18 @@ export async function POST() {
       const base = Math.max(Number.isNaN(currentEndMs) ? Date.now() : currentEndMs, Date.now());
       const newPeriodEnd = Math.floor((base + THIRTY_DAYS_MS) / 1000);
 
+      // KNOWN GAP, deliberately NOT closed by ENG-1001 (whose surface is the price
+      // choice, not the renewal race). Branch A has two defences against creating
+      // a duplicate — the `subscriptions.list` reuse lookup for the SEQUENTIAL
+      // race and an `idempotencyKey` for the CONCURRENT one. Branch B has
+      // neither: two tabs, or a StrictMode double-effect, produce two full-price
+      // PaymentIntents carrying the SAME absolute `new_period_end`, so confirming
+      // both is two charges for one 30-day extension. The Pay button disables on
+      // first click (checkout-form.tsx) but that only covers a single tab.
+      //
+      // Pre-existing, but ENG-1001 raises the stakes: the amount went from a
+      // sandbox A$1 to a real A$9/A$19. Naming it here rather than fixing it
+      // out-of-scope — see the ENG-1001 PR and its follow-up ticket.
       const intent = await stripe.paymentIntents.create({
         amount: unitAmount,
         currency,
@@ -293,6 +385,9 @@ export async function POST() {
         mode: "renewal",
         unitAmount,
         currency,
+        // Display only. The screen may SHOW this; it may never SEND it — the
+        // route re-derives it from the DB on every request and ignores any body.
+        promoRemaining,
         // Echoed so the screen renders the AUTHORITATIVE dates rather than
         // recomputing (and potentially disagreeing with) them client-side.
         currentPeriodEnd: sub.current_period_end ?? null,
@@ -338,11 +433,27 @@ export async function POST() {
     //    (silent, and the worst outcome in this file);
     //  - `cancel_at_period_end: false` → we would silently hand them an
     //    AUTO-RENEWING pass, breaking the one rule the product is built on.
+    //
+    // The price match is against `priceId` — the price chosen for THIS request —
+    // not against a single ambient env var (ENG-1001). With two prices in play a
+    // fixed comparison is wrong in both directions: a member who has exhausted
+    // the promo allowance would have their old promo-priced pending Subscription
+    // adopted and be UNDERCHARGED, and a pending Subscription at the other price
+    // would fail the filter and quietly stack a second one (ENG-582 again).
+    // `quantity` is checked alongside the price because the price alone does not
+    // determine the CHARGE: a dashboard- or support-created pending Subscription
+    // at the right price with `quantity: 3` would be adopted, and we would report
+    // `unitAmount` while Stripe charged three times it. The create path below
+    // never sets a quantity (Stripe defaults it to 1), so `== null || === 1` is
+    // exactly "what our own create path guarantees" — the same standard the
+    // metadata and cancel_at_period_end checks are held to.
     const reusable =
       newestFirst(
         pending.data.filter(
           (s) =>
-            s.items?.data?.some((item) => item.price?.id === process.env.STRIPE_PRICE_ID) &&
+            s.items?.data?.some(
+              (item) => item.price?.id === priceId && (item.quantity == null || item.quantity === 1),
+            ) &&
             s.metadata?.app_user_id === user.id &&
             s.cancel_at_period_end === true,
         ),
@@ -350,7 +461,7 @@ export async function POST() {
 
     const subCreateParams: Stripe.SubscriptionCreateParams = {
       customer: customerId,
-      items: [{ price: process.env.STRIPE_PRICE_ID! }],
+      items: [{ price: priceId }],
       payment_behavior: "default_incomplete",
       // The whole point — armed at creation so the pass never renews itself.
       cancel_at_period_end: true,
@@ -441,6 +552,8 @@ export async function POST() {
       mode: "purchase",
       unitAmount,
       currency,
+      // Display only — see the note on the renewal payload above.
+      promoRemaining,
       subscriptionId: subscription.id,
     });
   } catch (err) {
