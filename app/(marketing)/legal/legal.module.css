@@ -16,9 +16,10 @@
                               margin-bottom:9px
        @media (max-width:640px) .sheet-card  padding:32px 24px 30px
 
-   Only the page-level frame is new, and it is three deliberate
+   Only the page-level frame is new, and it is four deliberate
    deviations, recorded here so a reviewer diffing against the mockup
-   knows they were chosen rather than missed:
+   knows they were chosen rather than missed (the fourth, the deletion
+   page's request action, is documented at the foot of this file):
 
      1. the vertical section rhythm — the mockup's own 84px/96px band
         spacing, eased to 72px/96px because a prose page has no hero art
@@ -137,21 +138,25 @@
    and marketing.css both define and which reads as a call to action.
    Nothing on this page may look like it is selling something.
 
-   Tokens only, inherited from `.marketing` exactly as the rules above.
+   Tokens only, inherited from `.marketing` exactly as the rules above:
+   `--line` is the sheet's own border colour (marketing.css:50), and the
+   radius is the low rung of its 12/16/20/22/26/32 ladder. An earlier
+   draft invented `color-mix(in srgb, var(--ink) 14%, transparent)` and a
+   10px radius for this one rule — both were eyeballed values for things
+   the mockup already had names for, and both are gone.
    ==================================================================== */
 .doc .action {
   margin: 22px 0 4px;
   padding: 20px 22px;
-  border: 1.5px solid color-mix(in srgb, var(--ink) 14%, transparent);
-  border-radius: 10px;
+  border: 1.5px solid var(--line);
+  border-radius: 12px;
 }
 
+/* Layout only. The mono/uppercase treatment comes from the ported
+   `.eyebrow` (marketing.css:79), which this page already uses for its
+   kicker — a second, near-but-not-equal mono-caps style on one page is
+   exactly the drift the fidelity guard exists to prevent. */
 .doc .action .actionLabel {
-  font-family: var(--mono);
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--mut);
   display: block;
   margin-bottom: 8px;
 }

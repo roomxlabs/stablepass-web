@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { formatLastUpdated, legalCanonicalUrl, readLegalDocument } from "@/lib/legal";
+import { isAlwaysIndexablePath } from "@/lib/seo";
 
 import { CONTACT_EMAIL, contactMailtoHref } from "../../modals/contact-mailto";
 import Block from "../legal-blocks";
@@ -45,6 +46,7 @@ import styles from "../legal.module.css";
 export const dynamic = "force-static";
 
 const SLUG = "delete-account" as const;
+const PATHNAME = "/legal/delete-account";
 
 /** The subject the request arrives under, so one shared inbox can sort them. */
 const REQUEST_SUBJECT = "Account deletion request";
@@ -62,7 +64,11 @@ export function generateMetadata(): Metadata {
     // layout -> page per top-level key, so naming `robots` here replaces the
     // inherited value rather than being merged into it. `lib/seo.ts` holds the
     // allowlist this agrees with; middleware.ts and robots.txt read the same one.
-    robots: { index: true, follow: true },
+    // DERIVED, not hardcoded: this is the third of the three indexing surfaces,
+    // and reading the allowlist is what makes that claim structurally true
+    // rather than merely test-enforced. Drop the path from ALWAYS_INDEXABLE_PATHS
+    // and this page goes back to noindex with it, in one edit.
+    robots: { index: isAlwaysIndexablePath(PATHNAME), follow: isAlwaysIndexablePath(PATHNAME) },
   };
 }
 
@@ -91,7 +97,7 @@ export default function DeleteAccountPage() {
             form that validated an address inevitably would.
           */}
           <div className={styles.action}>
-            <span className={styles.actionLabel}>Request deletion by email</span>
+            <span className={`eyebrow ${styles.actionLabel}`}>Request deletion by email</span>
             <a href={contactMailtoHref(REQUEST_SUBJECT)}>{CONTACT_EMAIL}</a>
             <p className={styles.actionNote}>
               Opens your email app with the subject line filled in. Send it from the address your
