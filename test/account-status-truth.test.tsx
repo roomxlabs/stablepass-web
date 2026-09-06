@@ -24,7 +24,10 @@ import { render, screen } from "@testing-library/react";
 
 const DAY = 24 * 60 * 60 * 1000;
 const future = new Date(Date.now() + 10 * DAY).toISOString();
-const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+// ENG-1029: `active` has a 3-day renewal grace, so a 1-hour-old period is
+// still entitled. "Past" here means grace-exhausted (≥4 days) — the same
+// denial fixture ENG-1025 uses on the SQL / edge copies.
+const past = new Date(Date.now() - 4 * DAY).toISOString();
 
 type Sub = { status: string; trial_ends_at: string | null; current_period_end: string | null } | null;
 
