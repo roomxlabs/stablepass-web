@@ -2,19 +2,21 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 // Kept light per the ticket: this exercises the mount → POST /api/subscription/checkout
-// → purchase/renewal/graceful-placeholder paths, not a live Stripe Elements mount.
+// → subscribe / graceful-placeholder paths, not a live Stripe Elements mount.
 // @stripe/stripe-js and @stripe/react-stripe-js are stubbed so importing
 // checkout-form.tsx doesn't try to load the real Stripe.js script in jsdom.
-// `stripeRef.current` is mutable so a test can swap in a real-ish Stripe stub and
-// actually render <PayForm> — with `useStripe: () => null` hard-coded, onPay
-// early-returns and the double-submit guard can never be exercised.
-const { pushMock, stripeRef } = vi.hoisted(() => ({
+const { pushMock, replaceMock, stripeRef } = vi.hoisted(() => ({
   pushMock: vi.fn(),
+  replaceMock: vi.fn(),
   stripeRef: { current: null as null | { confirmPayment: (...args: unknown[]) => Promise<unknown> } },
 }));
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: pushMock }),
+  useRouter: () => ({ push: pushMock, replace: replaceMock }),
+  redirect: (...args: unknown[]) => {
+    // CheckoutPage is tested in its own describe with a dedicated redirect mock.
+    throw new Error(`redirect:${JSON.stringify(args)}`);
+  },
 }));
 
 vi.mock("@stripe/stripe-js", () => ({
@@ -29,14 +31,7 @@ vi.mock("@stripe/react-stripe-js", () => ({
 }));
 
 import { CheckoutForm } from "@/app/(member)/checkout/checkout-form";
-import CheckoutPage from "@/app/(member)/checkout/page";
 
-// The component reads `body.data` even on a NON-ok response (so the order
-// summary can still show the real price) — every fetch mock below therefore
-// provides a `json()`, ok or not.
-// The params are declared (rather than `vi.fn(() => ...)`) so `mock.calls[0]`
-// types as a 2-tuple — without them `const [, init] = fetchMock.mock.calls[0]`
-// below fails `tsc --noEmit` even though vitest still runs it.
 function mockFetch(body: unknown, ok = true, status = 200) {
   const fetchMock = vi.fn((_input?: string | URL, _init?: RequestInit) =>
     Promise.resolve({
@@ -49,16 +44,24 @@ function mockFetch(body: unknown, ok = true, status = 200) {
   return fetchMock;
 }
 
+const INTRO = {
+  clientSecret: null,
+  publishableKey: null,
+  mode: "subscribe",
+  unitAmount: 1900,
+  discountAmount: 1000,
+  amountDueNow: 900,
+  currency: "aud",
+  introMonthsRemaining: 6,
+  priceChangesOn: "March 2027",
+};
+
 describe("CheckoutForm", () => {
-  // The component now logs on EVERY not-ready path (that loud logging is the
-  // point of ENG-581). Several tests below deliberately drive those paths while
-  // asserting something else entirely, so silence console.error suite-wide
-  // rather than letting real failures drown in expected noise. Tests that assert
-  // on logging install their own spy on top, which still records calls.
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     pushMock.mockClear();
+    replaceMock.mockClear();
     stripeRef.current = null;
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
@@ -82,59 +85,56 @@ describe("CheckoutForm", () => {
     expect(init?.body).toBeUndefined();
   });
 
-  it("purchase mode: renders A$1.00 total and A$0.09 GST for unitAmount 100", async () => {
-    mockFetch({
-      data: { clientSecret: null, publishableKey: null, mode: "purchase", unitAmount: 100, currency: "aud" },
-    });
+  it("subscribe intro: list price A$19.00, due today A$9.00, GST from amountDueNow", async () => {
+    mockFetch({ data: INTRO });
 
     render(<CheckoutForm />);
 
-    expect((await screen.findAllByText("A$1.00")).length).toBeGreaterThan(0);
-    expect(screen.getByText("A$0.09")).toBeInTheDocument();
+    expect((await screen.findAllByText("A$19.00")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("A$9.00").length).toBeGreaterThan(0);
+    // 900 / 11 → A$0.82
+    expect(screen.getByText("A$0.82")).toBeInTheDocument();
+    expect(screen.getByText("−A$10.00")).toBeInTheDocument();
   });
 
-  it("purchase mode: renders A$19.00 total and A$1.73 GST for unitAmount 1900 (anti-hardcode)", async () => {
+  it("subscribe standard: unitAmount 1900 with no discount shows A$19.00 today and A$1.73 GST", async () => {
     mockFetch({
-      data: { clientSecret: null, publishableKey: null, mode: "purchase", unitAmount: 1900, currency: "aud" },
+      data: {
+        ...INTRO,
+        discountAmount: 0,
+        amountDueNow: 1900,
+        introMonthsRemaining: 0,
+        priceChangesOn: null,
+      },
     });
 
     render(<CheckoutForm />);
 
     expect((await screen.findAllByText("A$19.00")).length).toBeGreaterThan(0);
     expect(screen.getByText("A$1.73")).toBeInTheDocument();
+    expect(screen.queryByText("−A$10.00")).not.toBeInTheDocument();
   });
 
-  it("order summary copy: '30 days of full access' + 'Includes GST', never monthly-subscription language", async () => {
-    mockFetch({
-      data: { clientSecret: null, publishableKey: null, mode: "purchase", unitAmount: 1900, currency: "aud" },
-    });
+  it("order summary states a monthly subscription and when the price changes", async () => {
+    mockFetch({ data: INTRO });
 
     render(<CheckoutForm />);
 
-    expect(await screen.findByText("30 days of full access")).toBeInTheDocument();
+    expect(await screen.findByText("Subscription · monthly")).toBeInTheDocument();
     expect(screen.getByText("Includes GST")).toBeInTheDocument();
-    expect(document.body.textContent).not.toMatch(/renews monthly/i);
-    expect(document.body.textContent).not.toMatch(/Subscription · monthly/i);
+    expect(document.body.textContent).toMatch(/renews monthly/i);
+    expect(document.body.textContent).toMatch(/A\$9\.00 today, then A\$19\.00 from March 2027/);
+    expect(screen.queryByText("30 days of full access")).not.toBeInTheDocument();
   });
 
-  it("renewal mode: renders the extend copy with both authoritative dates", async () => {
-    mockFetch({
-      data: {
-        mode: "renewal",
-        unitAmount: 100,
-        currency: "aud",
-        currentPeriodEnd: "2026-09-01T00:00:00.000Z",
-        newPeriodEnd: "2026-10-01T00:00:00.000Z",
-        clientSecret: null,
-        publishableKey: null,
-      },
-    });
+  it("409 already_active redirects to /account — no renewal path remains", async () => {
+    mockFetch({ error: { code: "already_active", message: "You already have an active subscription." } }, false, 409);
 
     render(<CheckoutForm />);
 
-    expect(await screen.findByText(/Your access currently ends/)).toBeInTheDocument();
-    expect(screen.getByText(/1 September 2026/)).toBeInTheDocument();
-    expect(screen.getByText(/1 October 2026/)).toBeInTheDocument();
+    await waitFor(() => expect(replaceMock).toHaveBeenCalledWith("/account"));
+    expect(document.body.textContent).not.toMatch(/Your access currently ends/);
+    expect(document.body.textContent).not.toMatch(/Paying now extends it/);
   });
 
   it("stripe-unavailable (502, no data): renders the disabled placeholder, not a crash", async () => {
@@ -143,14 +143,13 @@ describe("CheckoutForm", () => {
     render(<CheckoutForm />);
 
     expect(await screen.findByText(/Payments are not configured yet/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Pay/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Subscribe/ })).toBeDisabled();
     expect(screen.getByText("Order summary")).toBeInTheDocument();
   });
 
   it("200 with a null clientSecret renders an ERROR state, never the configuration hint, and logs", async () => {
-    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     mockFetch({
-      data: { clientSecret: null, publishableKey: "pk_test_dummy", mode: "purchase", unitAmount: 100, currency: "aud" },
+      data: { ...INTRO, clientSecret: null, publishableKey: "pk_test_dummy" },
     });
 
     render(<CheckoutForm />);
@@ -159,8 +158,6 @@ describe("CheckoutForm", () => {
     expect(document.body.textContent).not.toMatch(/not configured/i);
     expect(document.body.textContent).not.toMatch(/Stripe key/i);
     expect(consoleErrorSpy).toHaveBeenCalled();
-
-    consoleErrorSpy.mockRestore();
   });
 
   it("502 stripe_unavailable renders the configuration message and NOT the error alert", async () => {
@@ -173,7 +170,6 @@ describe("CheckoutForm", () => {
   });
 
   it("a non-502 failure renders the error state, not a configuration hint", async () => {
-    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     mockFetch({ error: { code: "server_error", message: "boom" } }, false, 500);
 
     render(<CheckoutForm />);
@@ -181,13 +177,9 @@ describe("CheckoutForm", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/couldn.t start a secure payment/i);
     expect(document.body.textContent).not.toMatch(/not configured/i);
     expect(consoleErrorSpy).toHaveBeenCalled();
-
-    consoleErrorSpy.mockRestore();
   });
 
   it("the misleading 'connect a Stripe key' copy is gone for every not-ready state", async () => {
-    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
     mockFetch({ error: { code: "stripe_unavailable", message: "Payment provider not configured." } }, false, 502);
     const { unmount } = render(<CheckoutForm />);
     await screen.findByText(/Payments are not configured yet/i);
@@ -195,18 +187,13 @@ describe("CheckoutForm", () => {
     unmount();
 
     mockFetch({
-      data: { clientSecret: null, publishableKey: "pk_test_dummy", mode: "purchase", unitAmount: 100, currency: "aud" },
+      data: { ...INTRO, clientSecret: null, publishableKey: "pk_test_dummy" },
     });
     render(<CheckoutForm />);
     await screen.findByRole("alert");
     expect(document.body.textContent).not.toMatch(/connect a Stripe key/i);
-
-    consoleErrorSpy.mockRestore();
   });
 
-  // A 502 is NOT automatically a configuration problem. Only the route's
-  // `stripe_unavailable` (no STRIPE_SECRET_KEY) is; a Stripe outage / bad price
-  // id now returns `stripe_error` and must read as a real error.
   it("502 with a NON-configuration code (stripe_error) renders the error state, not the config hint", async () => {
     mockFetch({ error: { code: "stripe_error", message: "Payment provider unavailable." } }, false, 502);
 
@@ -218,8 +205,6 @@ describe("CheckoutForm", () => {
   });
 
   it("a network failure renders the error state and logs — never the configuration hint", async () => {
-    // The server was never reached, so we know NOTHING about whether a key
-    // exists; claiming a configuration problem here would be a guess.
     global.fetch = vi.fn(() => Promise.reject(new Error("network down"))) as unknown as typeof fetch;
 
     render(<CheckoutForm />);
@@ -231,8 +216,6 @@ describe("CheckoutForm", () => {
   });
 
   it("while the POST is still in flight it shows the neutral loading copy — no error, no config hint", async () => {
-    // A never-resolving fetch pins the initial paint. Flashing either an error
-    // or "not configured" before the answer arrives is a lie in both directions.
     global.fetch = vi.fn(() => new Promise(() => {})) as unknown as typeof fetch;
 
     render(<CheckoutForm />);
@@ -253,21 +236,16 @@ describe("CheckoutForm", () => {
     expect(screen.queryByPlaceholderText("123")).not.toBeInTheDocument();
   });
 
-  it("pay button label reads 'Pay A$1.00 · 30 days', not 'Subscribe'", async () => {
-    mockFetch({
-      data: { clientSecret: null, publishableKey: null, mode: "purchase", unitAmount: 100, currency: "aud" },
-    });
+  it("pay button label reads 'Subscribe · A$9.00', not a 30-day Pay label", async () => {
+    mockFetch({ data: INTRO });
 
     render(<CheckoutForm />);
 
-    expect(await screen.findByRole("button", { name: "Pay A$1.00 · 30 days" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Subscribe · A$9.00" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /30 days/ })).not.toBeInTheDocument();
   });
 
-  // The double-CHARGE guard, exercised on the real <PayForm> (not the disabled
-  // placeholder). Two concurrent renewal PaymentIntents would each stamp the same
-  // absolute new_period_end, so the member would pay twice for one extension —
-  // the advance-only rule makes the extension idempotent but NOT the charge.
-  it("renewal: the Pay button disables on the first submit so a double-click cannot double-charge", async () => {
+  it("the Subscribe button disables on the first submit so a double-click cannot double-charge", async () => {
     let release: (v: unknown) => void = () => {};
     const confirmPayment = vi.fn(
       () => new Promise((resolve) => { release = resolve; }),
@@ -275,28 +253,18 @@ describe("CheckoutForm", () => {
     stripeRef.current = { confirmPayment };
 
     mockFetch({
-      data: {
-        clientSecret: "pi_renew_secret",
-        publishableKey: "pk_test_dummy",
-        mode: "renewal",
-        unitAmount: 100,
-        currency: "aud",
-        currentPeriodEnd: "2026-09-01T00:00:00.000Z",
-        newPeriodEnd: "2026-10-01T00:00:00.000Z",
-      },
+      data: { ...INTRO, clientSecret: "pi_sub_secret", publishableKey: "pk_test_dummy" },
     });
 
     render(<CheckoutForm />);
 
-    // The live Payment Element mounts — proving this is PayForm, not the placeholder.
     expect(await screen.findByTestId("payment-element-stub")).toBeInTheDocument();
 
-    const payButton = await screen.findByRole("button", { name: "Pay A$1.00 · 30 days" });
+    const payButton = await screen.findByRole("button", { name: "Subscribe · A$9.00" });
     expect(payButton).toBeEnabled();
 
     fireEvent.click(payButton);
 
-    // In flight: disabled, and a second click must not reach Stripe again.
     await waitFor(() => expect(screen.getByRole("button", { name: "Processing…" })).toBeDisabled());
     fireEvent.click(screen.getByRole("button", { name: "Processing…" }));
     expect(confirmPayment).toHaveBeenCalledTimes(1);
@@ -306,37 +274,30 @@ describe("CheckoutForm", () => {
     expect(confirmPayment).toHaveBeenCalledTimes(1);
   });
 
-  it("renewal: a failed confirmPayment shows an inline error, stays on the page and re-enables the button", async () => {
+  it("a failed confirmPayment shows an inline error, stays on the page and re-enables the button", async () => {
     const confirmPayment = vi.fn(async () => ({ error: { message: "Your card was declined." } }));
     stripeRef.current = { confirmPayment };
 
     mockFetch({
-      data: {
-        clientSecret: "pi_renew_secret",
-        publishableKey: "pk_test_dummy",
-        mode: "renewal",
-        unitAmount: 100,
-        currency: "aud",
-        currentPeriodEnd: "2026-09-01T00:00:00.000Z",
-        newPeriodEnd: "2026-10-01T00:00:00.000Z",
-      },
+      data: { ...INTRO, clientSecret: "pi_sub_secret", publishableKey: "pk_test_dummy" },
     });
 
     render(<CheckoutForm />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Pay A$1.00 · 30 days" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Subscribe · A$9.00" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Your card was declined.");
     expect(pushMock).not.toHaveBeenCalled();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Pay A$1.00 · 30 days" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Subscribe · A$9.00" })).toBeEnabled());
   });
 });
 
-describe("ENG-1001 — the introductory-pricing band", () => {
+describe("ENG-1027 — the introductory / recurring band", () => {
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     pushMock.mockClear();
+    replaceMock.mockClear();
     stripeRef.current = null;
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
@@ -345,51 +306,35 @@ describe("ENG-1001 — the introductory-pricing band", () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it("promoRemaining: 6 renders the introductory band with the amount and the count", async () => {
-    mockFetch({
-      data: {
-        clientSecret: null,
-        publishableKey: null,
-        mode: "purchase",
-        unitAmount: 900,
-        currency: "aud",
-        promoRemaining: 6,
-      },
-    });
+  it("introMonthsRemaining: 6 renders the introductory band with both prices and the change-over month", async () => {
+    mockFetch({ data: INTRO });
 
     render(<CheckoutForm />);
 
     expect(await screen.findByText("Introductory pricing")).toBeInTheDocument();
-    expect(screen.getAllByText(/A\$9\.00/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/6 of your introductory passes are left/)).toBeInTheDocument();
+    expect(screen.getByText(/A\$9\.00 today, then A\$19\.00 from March 2027/)).toBeInTheDocument();
+    expect(screen.getByText(/6 introductory months remain/)).toBeInTheDocument();
+    expect(screen.getByText(/Charged monthly until you cancel/)).toBeInTheDocument();
   });
 
-  it("promoRemaining: 1 reads 'the last one at this price'", async () => {
+  it("introMonthsRemaining: 1 reads 'the last month at the introductory rate'", async () => {
     mockFetch({
-      data: {
-        clientSecret: null,
-        publishableKey: null,
-        mode: "purchase",
-        unitAmount: 900,
-        currency: "aud",
-        promoRemaining: 1,
-      },
+      data: { ...INTRO, introMonthsRemaining: 1, priceChangesOn: "October 2026" },
     });
 
     render(<CheckoutForm />);
 
-    expect(await screen.findByText(/last one at this price/)).toBeInTheDocument();
+    expect(await screen.findByText(/last month at the introductory rate/)).toBeInTheDocument();
   });
 
-  it("promoRemaining: 0 renders 'Standard pricing' at the standard amount, not the introductory band", async () => {
+  it("introMonthsRemaining: 0 renders 'Standard pricing' at the list amount, not the introductory band", async () => {
     mockFetch({
       data: {
-        clientSecret: null,
-        publishableKey: null,
-        mode: "purchase",
-        unitAmount: 1900,
-        currency: "aud",
-        promoRemaining: 0,
+        ...INTRO,
+        discountAmount: 0,
+        amountDueNow: 1900,
+        introMonthsRemaining: 0,
+        priceChangesOn: null,
       },
     });
 
@@ -400,9 +345,9 @@ describe("ENG-1001 — the introductory-pricing band", () => {
     expect(screen.queryByText("Introductory pricing")).not.toBeInTheDocument();
   });
 
-  it("no promoRemaining key at all: no band renders", async () => {
+  it("no introMonthsRemaining key at all: no band renders (callout still states the recurring charge)", async () => {
     mockFetch({
-      data: { clientSecret: null, publishableKey: null, mode: "purchase", unitAmount: 1900, currency: "aud" },
+      data: { clientSecret: null, publishableKey: null, mode: "subscribe", unitAmount: 1900, currency: "aud" },
     });
 
     render(<CheckoutForm />);
@@ -410,17 +355,18 @@ describe("ENG-1001 — the introductory-pricing band", () => {
     await screen.findByText("Order summary");
     expect(screen.queryByText("Introductory pricing")).not.toBeInTheDocument();
     expect(screen.queryByText("Standard pricing")).not.toBeInTheDocument();
+    expect(document.body.textContent).toMatch(/renews monthly/i);
   });
 
-  it("a degraded response with promoRemaining as a string renders no band and never 'NaN'", async () => {
+  it("a degraded response with introMonthsRemaining as a string renders no band and never 'NaN'", async () => {
     mockFetch({
       data: {
         clientSecret: null,
         publishableKey: null,
-        mode: "purchase",
+        mode: "subscribe",
         unitAmount: 1900,
         currency: "aud",
-        promoRemaining: "6",
+        introMonthsRemaining: "6",
       },
     });
 
@@ -432,20 +378,8 @@ describe("ENG-1001 — the introductory-pricing band", () => {
     expect(document.body.textContent).not.toMatch(/NaN/);
   });
 
-  // The scoped-selector rule (.rx/gotchas.md): `.trial-label`/`.trial-detail`
-  // are styled only when nested inside `.trial-banner-web` — a bare class
-  // selector renders as unstyled browser defaults.
   it("the band's label/detail are nested INSIDE .trial-banner-web, not siblings", async () => {
-    mockFetch({
-      data: {
-        clientSecret: null,
-        publishableKey: null,
-        mode: "purchase",
-        unitAmount: 900,
-        currency: "aud",
-        promoRemaining: 6,
-      },
-    });
+    mockFetch({ data: INTRO });
 
     const { container } = render(<CheckoutForm />);
     await screen.findByText("Introductory pricing");
@@ -456,16 +390,7 @@ describe("ENG-1001 — the introductory-pricing band", () => {
   });
 
   it("never sends the allowance: the POST carries no body", async () => {
-    const fetchMock = mockFetch({
-      data: {
-        clientSecret: null,
-        publishableKey: null,
-        mode: "purchase",
-        unitAmount: 900,
-        currency: "aud",
-        promoRemaining: 6,
-      },
-    });
+    const fetchMock = mockFetch({ data: INTRO });
 
     render(<CheckoutForm />);
     await screen.findByText("Introductory pricing");
@@ -475,43 +400,12 @@ describe("ENG-1001 — the introductory-pricing band", () => {
     expect(init?.body).toBeUndefined();
   });
 
-  it("no trial copy survives on the screen after a purchase-mode response", async () => {
-    mockFetch({
-      data: {
-        clientSecret: null,
-        publishableKey: null,
-        mode: "purchase",
-        unitAmount: 900,
-        currency: "aud",
-        promoRemaining: 6,
-      },
-    });
+  it("no trial copy survives on the screen after a subscribe-mode response", async () => {
+    mockFetch({ data: INTRO });
 
     render(<CheckoutForm />);
     await screen.findByText("Introductory pricing");
 
     expect(document.body.textContent).not.toMatch(/trial/i);
-  });
-});
-
-// ENG-1001 — page.tsx changed shape (it dropped its Supabase read and stopped
-// being async), and CLAUDE.md asks every change for a machine-checkable test.
-// This is deliberately NOT mocking `@/lib/supabase/server`: if the page still
-// reached for the server client, the import/call would fail here rather than
-// quietly passing against a mock.
-describe("ENG-1001 — CheckoutPage is a thin, data-free shell", () => {
-  it("renders CheckoutForm without touching Supabase or awaiting anything", () => {
-    const element = CheckoutPage();
-
-    // Synchronous: a Promise here would mean it is still doing server I/O.
-    expect(typeof (element as unknown as { then?: unknown }).then).toBe("undefined");
-    expect(element.type).toBe(CheckoutForm);
-    // No props: the allowance and the price come from the route, not from a
-    // second read here that could drift from it.
-    expect(element.props).toEqual({});
-  });
-
-  it("passes no trialDaysLeft — the free trial is retired (ENG-999)", () => {
-    expect(Object.keys(CheckoutPage().props)).not.toContain("trialDaysLeft");
   });
 });
