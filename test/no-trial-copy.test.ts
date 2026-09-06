@@ -25,9 +25,11 @@ const BANNED = [
   /\bdays,? (?:on|free) (?:us|of)\b/i,
 ];
 
-// The funnel itself. ENG-1003 owns every file under these, so the bar is zero
-// hits and stays zero.
-const FUNNEL_ROOTS = ["app/start", "app/signin"];
+// The funnel itself, plus every root whose pending entry has since been paid
+// off. ENG-1003 owns the first two; ENG-1008 cleared `components` and
+// `app/onboarding` (see the note under PENDING_ROOTS). The bar is zero hits
+// and stays zero.
+const FUNNEL_ROOTS = ["app/start", "app/signin", "components", "app/onboarding"];
 
 // Roots where trial copy still exists and is NOT this slice's to remove. Each
 // entry names the exact offending text, so the assertion is "the offenders are
@@ -53,17 +55,26 @@ const PENDING_ROOTS: Record<string, string[]> = {
     "You're on a free trial. When it ends you can choose to buy 30 days — nothing happens automatically and we have no card on file.",
     "Your free trial has ended. Buy 30 days to pick up where you left off.",
   ],
-  // Owned by NOBODY yet — ENG-999 + ENG-1003 together are what made this copy
-  // wrong, and a never-trialled account is now told its trial ended. Raised as
-  // a follow-up on ENG-1003; scanned here so the guard tells the truth about
-  // the copy a signed-up member actually sees, which does not all live under
-  // app/(member).
-  components: [
-    "Your free trial has ended",
-    "Your 30 days are up. Buy 30 days of full access to pick up where you left off.",
-  ],
-  "app/onboarding": ["30 days free"],
 };
+
+// ENG-1008 landed and removed two of the entries this list carried:
+//
+//   components:       "Your free trial has ended" + its body, in access-wall.tsx
+//   "app/onboarding": "30 days free", in the /onboarding nav greeting
+//
+// They were parked here deliberately by ENG-1003 so the copy could not be
+// forgotten — the guard stayed red-on-anything-new while naming the exact debt
+// that was still outstanding. Both roots are now scanned at the same ZERO bar as
+// the funnel, via FUNNEL_ROOTS above: note that DELETING an entry is only half
+// the job, because a root named in neither list is not scanned at all and the
+// guard would silently stop covering it. Promote, don't just delete.
+//
+// Deleting the entries IS the fix landing; do not re-add a root here to make a
+// red go away.
+//
+// `app/(member)` is left in place on purpose: ENG-1002 has landed and its two
+// strings look dead, but retiring that entry is ENG-1002's cleanup to claim, not
+// this ticket's — the subset semantics mean a stale entry costs nothing.
 
 function filesUnder(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {

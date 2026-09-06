@@ -56,7 +56,11 @@ export default async function OnboardingPage() {
     <>
       <nav className="onboarding-nav">
         <Wordmark className="brand" />
-        <span className="welcome">Welcome, {firstName} · 30 days free</span>
+        {/* ENG-1008: this greeting used to append the retired introductory offer
+            (ENG-999 removed it; ENG-1003 took it out of the funnel). /onboarding is
+            no longer in the signup path — a new account goes to /checkout — but the
+            URL still resolves, so the stale pitch was still being read. */}
+        <span className="welcome">Welcome, {firstName}</span>
       </nav>
 
       <div className="onboarding-web">

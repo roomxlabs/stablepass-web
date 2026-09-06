@@ -13,7 +13,8 @@ import { createClient } from "@supabase/supabase-js";
 //
 // Against the pre-ENG-585 code that member's Account read "Status: Active",
 // "30-day pass — Access to <yesterday>" and "Your access runs to <yesterday>",
-// while every content screen told them their free trial had ended.
+// while every content screen told them a free trial of theirs had ended (that
+// last part is ENG-1008; the wall now names a pass, not a trial).
 //
 // See .rx/fe-harness.md for the harness convention.
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "http://127.0.0.1:54321";
@@ -66,7 +67,18 @@ async function seedMember(slug: string, patch: SubPatch) {
 async function signIn(page: import("@playwright/test").Page, email: string) {
   await page.goto("/signin");
   await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(PASSWORD);
+  // `#password`, NOT getByLabel("Password"). getByLabel matches the accessible
+  // name as a case-insensitive SUBSTRING, so "Password" also matches the reveal
+  // control's `aria-label="Show password"` (components/password-input.tsx) —
+  // two elements, and Playwright strict mode throws. Note the button is NOT
+  // inside the <label>: they are siblings in `.input-group`, so restructuring
+  // the markup would not help. `{ exact: true }` would also fix it; `#password`
+  // is what ENG-956/ENG-1001/ENG-1002 already use, so match them.
+  //
+  // This spec was already broken by it on the base branch — every test here died
+  // in signIn() before reaching an assertion, which is why the stale wall string
+  // ENG-1002 pinned for this ticket to break was never caught by a red run.
+  await page.locator("#password").fill(PASSWORD);
   await page.getByRole("button", { name: "Sign in" }).click();
   await page.waitForURL("**/explore");
 }
@@ -86,7 +98,14 @@ test("expired paid member — Account says Ended, and the wall does not mention 
   // never be told a trial ended.
   await expect(page.getByText("Your access has paused")).toBeVisible();
   await expect(page.getByRole("link", { name: "Buy 30 days" })).toBeVisible();
-  await expect(page.getByText(/trial has ended/i)).toHaveCount(0);
+  // ENG-1008 removed the last of that vocabulary from the wall, so this can be
+  // the whole word rather than the one stale sentence — but scope it to the WALL.
+  // "trial" is ordinary racing vocabulary ("barrier trial") and already appears
+  // in this repo's post fixtures, so a page-wide sweep would go red the day these
+  // throwaway members follow anything and the feed renders.
+  await expect(page.getByTestId("access-wall").getByText(/trial/i)).toHaveCount(0);
+  // They HAVE paid before, so they must not get the first-time-buyer sentence.
+  await expect(page.getByText("You don't have a pass yet")).toHaveCount(0);
   await page.screenshot({ path: ".rx/review/eng-585-wall-paid.png", fullPage: true });
 
   await page.goto("/account");
@@ -108,11 +127,12 @@ test("expired paid member — Account says Ended, and the wall does not mention 
 // wordings from the Account screen, so the member this covers is now simply
 // someone who has never paid: `lapsed`, no Stripe customer.
 //
-// ⚠️ The WALL still says "Your free trial has ended" for them — that copy lives
-// in `components/access-wall.tsx`, keyed off `everSubscribed`, and it is stale
-// now that no trial exists. Deliberately left alone and asserted as-is here:
-// it is outside ENG-1002's surface and needs its own ticket. This test going
-// red is how you will know that ticket landed.
+// ENG-1008 is the ticket ENG-1002 predicted here. Until it landed, this test
+// pinned the WALL's stale "Your free trial has ended" verbatim — deliberately,
+// so that fixing the copy would turn this red and nobody could ship the fix
+// while leaving the e2e lying. That has now happened, and the assertion below
+// moved with it: a member with no Stripe customer is told they have no pass
+// yet, not that something they never had ran out.
 test("member who never paid — Account reads Ended, with no trial wording", async ({ page }) => {
   const { email } = await seedMember("never-paid", {
     status: "lapsed",
@@ -123,8 +143,13 @@ test("member who never paid — Account reads Ended, with no trial wording", asy
 
   await signIn(page, email);
 
-  await expect(page.getByText("Your free trial has ended")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Get full access" })).toBeVisible();
+  await expect(page.getByText("You don't have a pass yet")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Get full access" })).toHaveAttribute("href", "/checkout");
+  // The whole point of ENG-1008: this member has never subscribed, so nothing of
+  // theirs can have "ended". Assert the absence, not just the new presence — the
+  // old sentence living on elsewhere in the wall would still be the bug. Scoped
+  // to the wall for the "barrier trial" reason noted above.
+  await expect(page.getByTestId("access-wall").getByText(/trial/i)).toHaveCount(0);
   await page.screenshot({ path: ".rx/review/eng-585-wall-never-paid.png", fullPage: true });
 
   await page.goto("/account");
@@ -151,8 +176,11 @@ test("active member with a NULL period end is entitled, not expired", async ({ p
   await signIn(page, email);
 
   // No wall at all.
+  // No wall of either kind. (No page-wide /trial/i here: this member IS entitled,
+  // so the real feed renders, and "barrier trial" is legitimate post copy.)
+  await expect(page.getByTestId("access-wall")).toHaveCount(0);
   await expect(page.getByText("Your access has paused")).toHaveCount(0);
-  await expect(page.getByText(/trial has ended/i)).toHaveCount(0);
+  await expect(page.getByText("You don't have a pass yet")).toHaveCount(0);
 
   await page.goto("/account");
   await expect(page.getByText("Active", { exact: true })).toBeVisible();

@@ -1558,3 +1558,48 @@ Adding a second argument to a mocked Stripe call (e.g. `paymentIntents.create(pa
 single-arg assertion, even though the first arg still matches. Assertions that index
 `.mock.calls[n][0]` are unaffected. Expect to update a handful of pre-existing tests; it
 is a forced mechanical edit, not a regression.
+## Retiring a shared copy string: grep the REGEX forms, not just the literal
+ENG-1008 renamed `WALL_COPY.trialEnded` → `neverSubscribed` and changed its title.
+Grepping the repo for the literal `"Your free trial has ended"` found two pinning
+tests. The suite then failed on **three more** — `test/explore-feed.test.tsx`,
+`test/following-screen.test.tsx`, `test/saved-feed.test.tsx` — which pinned it as
+`findByText(/your free trial has ended/i)`, lower-cased and slash-delimited, so the
+literal grep missed all three. A fourth form hides in the `it("...")` NAME
+(`"shows the free-trial-ended wall"`), which no assertion grep finds at all.
+Before changing any string rendered by a shared component, grep case-insensitively
+for the phrase with `.` between words (`free.trial.has.ended`) **and** for a
+hyphenated slug of it (`free-trial-ended`), and check test names as well as bodies.
+Better: have the anchor read the constant. Those five call sites used the wall title
+as the positive "the 402 path actually rendered" anchor, which does not need the
+literal at all — they now import `WALL_COPY` and assert
+`WALL_COPY.neverSubscribed.title`, so the next copy change cannot break them.
+
+## Clearing a `PENDING_ROOTS` entry: PROMOTE the root, don't just delete it
+`test/no-trial-copy.test.ts` scans two lists — `FUNNEL_ROOTS` (zero hits allowed) and
+`PENDING_ROOTS` (hits allowed only if they match a named string). A root in **neither**
+list is not scanned at all. So "delete your entry from PENDING_ROOTS when your ticket
+lands" is half an instruction: deleting alone silently drops the root from coverage at
+the exact moment it becomes clean. ENG-1008 moved `components` and `app/onboarding`
+into `FUNNEL_ROOTS` instead, which is what the file's own comment says should happen
+("that root gets the same zero bar as the funnel"). Check the same shape on any other
+allowlist-plus-strict-list guard before assuming a deletion tightened anything.
+
+## `getByLabel("Password")` is ambiguous repo-wide — and NOT because of the markup
+`getByLabel` matches the accessible name as a **case-insensitive substring**, so
+`"Password"` also matches the reveal control's `aria-label="Show password"`
+(`components/password-input.tsx`) → *strict mode violation, resolved to 2 elements*.
+Get the cause right, because it decides the fix: the button is **not** inside the
+`<label>` — in `app/signin/sign-in-form.tsx` the `<label htmlFor="password">` and the
+`<PasswordInput>` are **siblings** inside `.input-group`, and the button lives in
+PasswordInput's own wrapper. So restructuring the markup fixes nothing;
+`getByLabel("Password", { exact: true })` or `page.locator("#password")` both do.
+
+`eng-956`, `eng-1001` and `eng-1002` had each already worked around it locally with
+`page.locator("#password")`, and ENG-1008 did the same for `eng-585`. Still carrying
+the broken form: `checkout`, `expiry-banner`, `trial-start`, `eng-762`,
+`signin-cta-sidebar-email` and `screenshots.spec.ts`.
+Consequence worth noting: a spec that cannot reach its assertions is not a guard, and
+this is why the stale wall string ENG-1002 deliberately pinned in eng-585 never showed
+up as a red run. **Before trusting "this e2e spec would have caught it", run it on the
+base branch.** A repo-wide sweep of the remaining six files wants its own ticket.
+
