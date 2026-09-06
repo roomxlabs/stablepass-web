@@ -201,3 +201,45 @@
     margin-top: 10px;
   }
 }
+
+/* The "Show more" pager (ENG-1038). Styled from this screen's OWN tokens, in
+   this module, rather than reaching for the browse grids' global
+   `.btn-showmore`: that class is added by PR #104 (ENG-960) and does not exist
+   on this base, so depending on it would ship an unstyled button until that PR
+   lands. Deliberately borrows `.website`'s pill shape — it is the only other
+   button on the screen, and a second, different-looking one would read as a
+   different kind of control. */
+.showMore {
+  display: block;
+  margin: 20px auto 32px;
+  padding: 10px 22px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line);
+  background: var(--white);
+  color: var(--brand-green);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.showMore:hover:not(:disabled) {
+  background: var(--brand-green-soft);
+  border-color: var(--brand-green-soft);
+}
+
+/* Not `cursor: not-allowed` — the button is disabled only for the moment a
+   fetch is in flight, and a "forbidden" cursor overstates that. */
+.showMore:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Sits between the last row and the retry button: the roster above it is still
+   valid, so this is a note about the MISSING rows, not an error screen. */
+.pageError {
+  margin: 16px 0 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}

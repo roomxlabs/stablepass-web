@@ -1896,3 +1896,31 @@ it does not keep the content true.** `.rx/gotchas.md` is `merge=union`, so a
 paragraph that was true when written lands verbatim on the launch branch long
 after it went stale. When you touch this file, re-read the paragraphs AROUND
 your edit and check they are still true of the merged tree — do not only append.
+
+## A shared helper introduced by an OPEN PR is not on your base (ENG-1038, 6 Sep 2026)
+
+**Symptom.** The ticket says "reuse `lib/browse.ts` — `splitBrowsePage()` / `browseRange()`, do not
+re-derive". You branch off `origin/feature/launch-v1`, import it, and the module does not exist.
+
+**Cause.** ENG-960 *extracted* those helpers, and ENG-960 is **PR #104, still open**. A worktree
+branched off the integration branch sees only **merged** work. This is the same blindness the
+migration-numbering note describes, one level up: it applies to any file an in-flight PR introduces,
+not just migrations.
+
+**Do this.** Do **not** re-cut the helper under a new name — that is how a codebase ends up with
+three paging variants that silently disagree on an off-by-one. Carry the file **byte-identical** from
+the open PR's branch and verify it:
+
+```bash
+git checkout origin/<their-branch> -- lib/browse.ts
+diff <(git show origin/<their-branch>:lib/browse.ts) lib/browse.ts && echo identical
+```
+
+An add/add merge of identical content resolves cleanly, so whoever merges second gets a no-op. Make
+**zero** edits to the carried file (an edit turns the clean add/add into a real conflict), say so in
+the PR body, and state that if their PR changes the file during review, theirs wins wholesale.
+
+**Note the second half of the mechanism may NOT be shared.** #104 shared the paging *arithmetic* but
+left the Show-more *button* copy-pasted between two grids with inline styles, and its `.btn-showmore`
+class lives in `app/globals.css` — also that PR's surface. Style a third surface's pager from its own
+CSS module rather than depending on a global class that is not on your base, or it ships unstyled.
