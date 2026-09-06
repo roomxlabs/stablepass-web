@@ -69,7 +69,14 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import { GET } from "@/app/api/horses/[id]/route";
-import { HORSE_PROFILE_COLUMNS } from "@/lib/horse/profile";
+// A HAND-WRITTEN copy of the projection, deliberately NOT the imported
+// `HORSE_PROFILE_COLUMNS`. Comparing the constant against itself passes on any
+// value, so widening the shared embed used to change nothing here — the exact
+// anti-pattern the feed-mapper tests already avoid. Editing this string is the
+// point: `HORSE_PROFILE_COLUMNS` has two consumers and one of them
+// (app/api/horses/[id]/route.ts) returns the trainer embed VERBATIM.
+const EXPECTED_HORSE_PROFILE_PROJECTION =
+  "id, sire, dam, display_name, racing_name, sex, is_gelded, colour, foaling_year, horse_age, horse_description, training_status, starts, wins, places, prize_money_cents, story, photo_url, shares_for_sale, trainer:trainer_id(id, name, stable_name, location, photo_url)";
 import { GET as horseFeedGET } from "@/app/api/horses/[id]/feed/route";
 
 function params(id: string) {
@@ -552,7 +559,7 @@ describe("GET /api/horses/:id — age + description come from the database (ENG-
 
     await get();
 
-    expect(horseSelectMock).toHaveBeenCalledWith(HORSE_PROFILE_COLUMNS);
+    expect(horseSelectMock).toHaveBeenCalledWith(EXPECTED_HORSE_PROFILE_PROJECTION);
     const projection = horseSelectMock.mock.calls[0]![0] as string;
     for (const column of ["horse_age", "horse_description", "foaling_year", "sex", "is_gelded"]) {
       expect(projection).toContain(column);
@@ -725,8 +732,6 @@ describe("GET /api/horses/:id — the trainer embed never ships an unsigned path
     // If this string needs editing, you are changing what the horse profile
     // read returns. `sb` is untyped, so this literal is the only thing that
     // notices — and the trainer embed below is returned VERBATIM by this route.
-    expect(horseSelectMock).toHaveBeenCalledWith(
-      "id, sire, dam, display_name, racing_name, sex, is_gelded, colour, foaling_year, horse_age, horse_description, training_status, starts, wins, places, prize_money_cents, story, photo_url, trainer:trainer_id(id, name, stable_name, location, photo_url)",
-    );
+    expect(horseSelectMock).toHaveBeenCalledWith(EXPECTED_HORSE_PROFILE_PROJECTION);
   });
 });

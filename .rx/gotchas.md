@@ -1579,7 +1579,9 @@ constraint is `spelling | breaking_in | pre_training | in_training | racing |
 retired`, so **seeding `farm_training`/`city_training` in an e2e fails with
 23514**. Cover the legacy collapse at unit level, where the value can still
 exist, and keep those switch cases in production code for clients rendering a
-cached pre-migration row.## `text-overflow: ellipsis` does NOTHING on an `inline-flex` pill (ENG-958, 5 Sep 2026)
+cached pre-migration row.
+
+## `text-overflow: ellipsis` does NOTHING on an `inline-flex` pill (ENG-958, 5 Sep 2026)
 
 **Symptom:** `.post-badge` was given `max-width` + `overflow:hidden` +
 `white-space:nowrap` + `text-overflow:ellipsis`, and a long label still clipped

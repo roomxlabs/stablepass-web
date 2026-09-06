@@ -24,9 +24,17 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     // and the embedded horse join are this route's own context and stay here.
     // Pinned exactly by test/trainers-route.test.ts.
     // `horse.photo_url` (ENG-958) is a bare object path in the PRIVATE
-    // `horse-photos` bucket, added to this SAME embed — trainer-posts.tsx
-    // batch-signs it client-side (this route is a plain BFF read, not the
-    // place bytes get minted). Pinned by test/trainers-route.test.ts.
+    // `horse-photos` bucket, added to this SAME embed. Shipping it is allowed
+    // under the transport rule in lib/storage/photos.ts because this path has a
+    // NAMED signer: `app/(member)/trainers/[id]/trainer-posts.tsx` batch-signs
+    // it with `signPhotoMap` under the viewer's own `supabaseBrowser` session —
+    // signing runs as the caller, so the path is that island's INPUT. This
+    // route is a plain BFF read, not where bytes get minted.
+    //
+    // The contrast is app/api/horses/[id]/route.ts, which STRIPS the trainer's
+    // `photo_url`: that envelope has no signer. Same rule, opposite answer.
+    // If you add another path to this embed, name its signer here or strip it.
+    // Pinned by test/trainers-route.test.ts.
     .select(`${POST_INTRINSIC_COLUMNS}, horse_id, horse:horse_id(display_name, racing_name, photo_url)`)
     .eq("source_trainer_id", id)
     .eq("status", "published")

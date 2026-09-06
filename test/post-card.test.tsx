@@ -896,6 +896,32 @@ describe("panelClampHeight — charges the between-paragraph gaps", () => {
     const heights = [160]; // 8 lines exactly at lineHeight 20
     expect(panelClampHeight(heights, 20)).toBe(160);
   });
+
+  // REVIEW GAP (ENG-958): every fixture above uses an EXACT multiple of
+  // lineHeight, so `Math.round` / `Math.ceil` / `Math.floor` are
+  // indistinguishable — this helper survived round→ceil with the suite
+  // byte-identical while its sibling `panelLineCount` bit. `panelClampHeight`
+  // is the one that computes the actual pixel `max-height`, so a mis-count here
+  // clamps at the wrong height SILENTLY. Real browsers report fractional
+  // heights (sub-pixel layout, 19.5px line boxes), so these are the realistic
+  // inputs, not contrived ones.
+  it("ROUNDS a hair-over-3-lines paragraph down to 3 — `ceil` would clamp a line too tall", () => {
+    // 58.500001 / 19.5 = 3.0000000513 lines. round → 3. ceil → 4.
+    expect(panelClampHeight([58.500001], 19.5, 12, 8)).toBe(58.5);
+  });
+
+  it("ROUNDS a 3.6-line paragraph up to 4 — `floor` would clamp a line too short", () => {
+    // 70.2 / 19.5 = 3.6 lines. round → 4. floor → 3.
+    expect(panelClampHeight([70.2], 19.5, 12, 8)).toBe(78);
+  });
+
+  it("a mis-count propagates through the GAP charge on a multi-paragraph update", () => {
+    // 3.0000000513 lines + 3.6 lines → round: 3 + 4 = 7 lines, one gap.
+    //   3*19.5 + 12 + 4*19.5 = 58.5 + 12 + 78 = 148.5
+    // ceil would take 4 + 4 = 8 lines: 78 + 12 + 78 = 168 — 19.5px too tall,
+    // and it would also exhaust the 8-line budget a paragraph early.
+    expect(panelClampHeight([58.500001, 70.2], 19.5, 12, 8)).toBe(148.5);
+  });
 });
 
 describe("PostCard — the head STACK order (ENG-958 parity item)", () => {

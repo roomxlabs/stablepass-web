@@ -69,25 +69,31 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   if (!horseRow) return fail("not_found", "Horse not found.", 404);
 
   const row = horseRow as HorseProfileRow;
-  // `photo_url` is STRIPPED before this leaves the server (ENG-958).
+  // `trainer.photo_url` is STRIPPED before this responds (ENG-958).
   //
-  // ENG-958 added `trainer.photo_url` to the shared `HORSE_PROFILE_COLUMNS` so
-  // the horse PROFILE PAGE could sign it for the post-card avatars. That
-  // constant has two consumers, and this route is the other one — it returns the
-  // embedded trainer verbatim, so the widening would have shipped a bare
-  // `trainer-photos` OBJECT PATH to browser JS. That is the exact escape hatch
-  // `lib/storage/photos.ts` exists to close: a path is not the bytes (minting
-  // still runs under the viewer's RLS), but an unsigned path in an envelope is
-  // one consumer away from being rendered into an `<img src>`, where it would
-  // resolve against the page and silently return HTML.
+  // The rule is the transport rule in lib/storage/photos.ts: a stored path may
+  // cross to the client only when a NAMED consumer is going to sign it. Here
+  // there is none. ENG-958 widened the shared `HORSE_PROFILE_COLUMNS` so the
+  // horse PROFILE PAGE could sign the trainer photo for its post-card avatars;
+  // that constant has two consumers and this route is the other one. It returns
+  // the embedded trainer VERBATIM, so the widening would have published a bare
+  // `trainer-photos` object path into this envelope with nobody responsible for
+  // it — one added consumer away from an `<img src>` that resolves the relative
+  // path against the page and silently gets HTML back.
   //
-  // Nothing consumes this field today, which is precisely why it needed a
-  // deliberate decision now rather than a discovery later. The route already
-  // signs the horse's own cover below for the same reason.
-  // The `?? null` is load-bearing: a horse with no trainer must still serialise
-  // as `trainer: null`, not as an empty object. Destructuring straight off a
-  // `?? {}` would quietly change this envelope's shape for every trainerless
-  // horse — a contract change smuggled in behind a security fix.
+  // Note this is NOT "no path may leave the server": app/api/trainers/[id]/feed
+  // deliberately ships `horse.photo_url`, because `trainer-posts.tsx` signs it
+  // client-side under the viewer's own RLS. The difference is the named signer,
+  // and this route has none — nothing consumes the field today, which is exactly
+  // why it wanted a decision now rather than a discovery later. The route signs
+  // the horse's own cover below, server-side, for the same reason.
+  //
+  // Pinned by the ENG-958 block in test/horses-route.test.ts with LITERAL
+  // assertions. The `?? null` is load-bearing and pinned there too: a horse with
+  // no trainer must still serialise as `trainer: null`, not as an empty object.
+  // Destructuring straight off a `?? {}` would quietly change this envelope's
+  // shape for every trainerless horse — a contract change smuggled in behind a
+  // security fix.
   const trainerRow = one(row.trainer);
   const trainer = trainerRow
     ? (({ photo_url: _photoPath, ...rest }) => rest)(trainerRow)

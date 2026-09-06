@@ -19,6 +19,33 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 // edge). `signPhoto` / `signPhotoMap` keep serving horse-photos and
 // trainer-photos; post-media paths are deny-by-construction (absolute URLs
 // still passthrough).
+//
+// ── THE TRANSPORT RULE (ENG-958) ─────────────────────────────────────────────
+// The canonical statement. Two comments used to disagree about this, so cite
+// THIS one.
+//
+// A stored object path may cross to the client ONLY when a NAMED consumer on
+// the other side is going to sign it. It must never be rendered.
+//
+// The invariant is *"an unsigned path is never painted"*, NOT *"an unsigned
+// path never leaves the server"* — the stronger rule is not what this app does
+// and cannot be, because signing runs as the CALLER. A client island holding a
+// `supabaseBrowser` session signs its own photos (that is the guardrail, not a
+// hole in it), so the path is its INPUT and has to be transported to it.
+// `app/api/trainers/[id]/feed/route.ts` ships `horse.photo_url` for exactly
+// this reason: `trainer-posts.tsx` batch-signs it with `signPhotoMap`.
+//
+// What the rule forbids is a path in an envelope with NO signer — nobody is
+// responsible for it, so the next consumer added is one `<img src=...>` away
+// from painting it, and a relative path resolves against the page and quietly
+// returns HTML. `app/api/horses/[id]/route.ts` was that case (its trainer embed
+// is returned verbatim and nothing consumes it), which is why that route strips
+// the field rather than publishing it.
+//
+// So, when you put a path in a response, answer in the comment: WHO signs this?
+// If you cannot name the consumer and its signing call, strip it or sign it
+// server-side before responding.
+// ─────────────────────────────────────────────────────────────────────────────
 export const HORSE_PHOTO_BUCKET = "horse-photos";
 export const TRAINER_PHOTO_BUCKET = "trainer-photos";
 export const POST_MEDIA_BUCKET = "post-media";

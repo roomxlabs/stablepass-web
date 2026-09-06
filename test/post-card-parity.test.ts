@@ -207,10 +207,17 @@ describe("ENG-761 item 5 — the profile stat label never wraps", () => {
 // ENG-958 — head avatar shape (boxy, not a disc) and the panel's line-clamp.
 // ===========================================================================
 describe("ENG-958 — the head avatar is a rounded BOX, not a circle", () => {
-  it("gives .post-avatar-web a 14px radius, not 50%", () => {
+  // Binds the TOKEN, not the number (review nit): `--radius-md` already exists
+  // and the comment above the rule names `Radius.md`. Both halves are asserted
+  // — the rule uses the token, AND the token still resolves to mobile's
+  // `AVATAR_BOX_RADIUS` of 14. Checking only the token would let someone retune
+  // `--radius-md` and drift off mobile silently; checking only the number would
+  // undo the nit. The e2e asserts the COMPUTED value, so it covers the join.
+  it("gives .post-avatar-web mobile's 14px radius via --radius-md, not 50%", () => {
     const avatar = rule(".post-avatar-web");
-    expect(avatar).toContain("border-radius: 14px");
+    expect(avatar).toContain("border-radius: var(--radius-md)");
     expect(avatar).not.toContain("border-radius: 50%");
+    expect(GLOBALS).toContain("--radius-md: 14px");
   });
 
   // The stable's mark, unlike a profile photo, stays a circle — a future

@@ -36,14 +36,15 @@ export interface FeedPost {
    * `horse.photo_url`, ALREADY SIGNED — the head avatar's photo (ENG-958).
    *
    * A SIGNED url, never the stored value: `photo_url` holds a bare object path
-   * in a PRIVATE bucket, and rendering a bare path into `<img
-   * src>` resolves it against the current page and silently returns HTML. The
+   * in a PRIVATE bucket, and rendering a bare path into `<img src>` resolves it
+   * against the current page and silently returns HTML. The screens mint it in
+   * their existing batched `signPhotoMap` read and hand the result here; the
+   * card never signs and never fetches.
+   *
    * (NB: `lib/storage/photos.ts` cites "guardrail #8" for this rule, but #8 in
    * `.rx/guardrails.md` is "No betting / bookmaker anything" — the private-bucket
    * rule is real and enforced in code, it is simply not one of the numbered
    * entries. Don't go looking for it there.)
-   * screens mint it in their existing batched `signPhotoMap` read and hand the
-   * result here; the card never signs and never fetches.
    *
    * Optional, and null-safe by design: a screen that has not resolved photos
    * gets the monogram the card has always drawn, not a broken image.

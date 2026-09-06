@@ -100,7 +100,14 @@ vi.mock("@/app/(member)/horses/[id]/horse-posts", () => ({
 }));
 
 import HorseProfilePage from "@/app/(member)/horses/[id]/page";
-import { HORSE_PROFILE_COLUMNS } from "@/lib/horse/profile";
+// A HAND-WRITTEN copy of the projection, deliberately NOT the imported
+// `HORSE_PROFILE_COLUMNS`. Comparing the constant against itself passes on any
+// value, so widening the shared embed used to change nothing here — the exact
+// anti-pattern the feed-mapper tests already avoid. Editing this string is the
+// point: `HORSE_PROFILE_COLUMNS` has two consumers and one of them
+// (app/api/horses/[id]/route.ts) returns the trainer embed VERBATIM.
+const EXPECTED_HORSE_PROFILE_PROJECTION =
+  "id, sire, dam, display_name, racing_name, sex, is_gelded, colour, foaling_year, horse_age, horse_description, training_status, starts, wins, places, prize_money_cents, story, photo_url, shares_for_sale, trainer:trainer_id(id, name, stable_name, location, photo_url)";
 
 /** A horse row as PostgREST returns it, computed columns included. */
 function horseRow(over: Record<string, unknown>) {
@@ -164,7 +171,7 @@ describe("horse profile page — age + description come from the database (ENG-6
       .find((columns) => columns.includes("display_name"));
 
     expect(projection).toBeTruthy();
-    expect(projection).toBe(HORSE_PROFILE_COLUMNS);
+    expect(projection).toBe(EXPECTED_HORSE_PROFILE_PROJECTION);
     for (const column of ["horse_age", "horse_description", "foaling_year", "sex", "is_gelded"]) {
       expect(projection).toContain(column);
     }
