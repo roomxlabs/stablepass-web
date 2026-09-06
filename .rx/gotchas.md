@@ -1739,3 +1739,86 @@ tells you when to stop:
 ENG-993 fixed the *mechanism* behind the second shape in `supabase-fake` (8 query methods that
 silently no-opped). Nothing prevents any of these from being **claimed** without being run — which
 is what this entry exists to prevent.
+## Client `/api/*` calls go through `apiFetch`, not bare `fetch` (ENG-961)
+`lib/api/client.ts` wraps `fetch` and centrally handles a 401 from a member BFF
+call (single-device eviction → clear session → `/signin?reason=signed-out-elsewhere`).
+Any NEW client-side `/api/*` call should use `apiFetch` or it silently opts out of
+eviction handling. Two call sites deliberately stay on bare `fetch`:
+`app/start/trial-start-form.tsx` and `app/forgot-password/forgot-password-form.tsx`
+— they are the SIGNED-OUT flows, and `/api/auth/*` is excluded by the wrapper too.
+
+**Do not widen the trigger to 402.** `GATED()` is a lapsed *subscription*, not a dead
+session (guardrail 3); signing those members out strands them with no way to reactivate.
+Every 401 under `app/api/*` is `UNAUTH()` behind an `if (!user)` guard — there is no
+route that 401s for a non-session reason, which is what makes the status a safe signal.
+
+## A `fetch` wrapper must forward the ORIGINAL argument shape
+`apiFetch(input, init)` calling `fetch(input, init)` with `init === undefined` passes a
+SECOND argument, and `fetch.mock.calls` then records `[url, undefined]`. That broke
+`test/post-media-client.test.ts`, which asserts `toHaveBeenCalledWith(url)` exactly.
+Branch on `init === undefined` and call `fetch(input)` — a drop-in wrapper has to be
+indistinguishable from `fetch` at the call site.
+
+## Member nav is plain `<a>`, so EVERY *shell* screen change is a full page load (ENG-961)
+`app/(member)/sidebar.tsx` renders `<a href>`, not `next/link`. So every hop taken
+through the sidebar — Explore -> Saved -> a profile — tears down the document and
+the JS heap, and the destination screen re-runs its server component and re-fetches
+from scratch.
+
+**One carve-out, and it is not "anywhere in the member shell":** `next/link` is
+imported in exactly one member file, `app/(member)/shares/shares-list.tsx:23`, used
+at `:281` for the row link to a horse profile. That hop IS a client-side transition
+and the module heap DOES survive it. It changes nothing about bookmarks (`/shares`
+holds no bookmark state), but do not restate the absolute — check with
+`grep -rn "next/link" "app/(member)"` before relying on "no client transitions
+exist", because an over-broad absolute here is how the next wrong conclusion gets
+built.
+
+Two consequences worth knowing before building anything "cross-screen":
+
+1. **A module-level store/bus/cache CANNOT carry state between member screens.**
+   It does not survive the reload. ENG-961 originally ported mobile's
+   `subscribeBookmarkChanges` bus for cross-surface bookmark sync; it was inert on
+   web and was removed before merge. The mobile precedent transfers badly because
+   React Navigation keeps sibling tab screens MOUNTED, so a module-level Set
+   reaches them — App Router with plain anchors never does. The five screens
+   holding their own `bookmarked` (explore-feed, following-screen, saved-feed,
+   trainers/[id]/trainer-posts, horses/[id]/horse-posts) are never co-mounted:
+   one feed per route, no parallel/intercepting routes.
+
+2. **"Screen A does not reflect a change made on screen B" is usually NOT a bug
+   here** — each screen re-reads its own `bookmark`/`reaction`/`follow` rows on
+   mount, so the reload already shows fresh state. Reproduce such a report against
+   the running app before building a sync mechanism for it.
+   `e2e/eng-961-bookmark-journey.spec.ts` pins the real behaviour end to end
+   (save on a horse profile -> sidebar link -> the card is on /saved).
+
+If the shell moves to `next/link` more broadly, both points flip — revisit anything
+that relies on the reload.
+
+## An auth-provider outage can sign EVERY member out at once (ENG-961, residual)
+The 401 eviction in `lib/api/client.ts` trusts `UNAUTH()`, and every `app/api/*`
+route emits `UNAUTH()` from a bare `if (!user)` — **discarding the `getUser()`
+error**. A transient GoTrue outage therefore nulls `user` for everyone at the same
+time, so every logged-in member gets a 401 they did not earn, is signed out, and is
+told their account was used on another device. This is a real storm, not a
+hypothetical, and it belongs next to the trigger rules rather than only in a PR
+description.
+
+What keeps it survivable today: `signOut({ scope: "local" })` clears only the
+browser that saw the 401, so members simply sign back in — `scope: "global"` would
+have revoked their sessions on every device from one spurious 401, which is not
+recoverable by the member. Keep the scope local.
+
+The proper fix is upstream and not in this ticket: distinguish "no session" from
+"could not reach the auth provider" in the route guards and emit a 5xx for the
+latter, so the client never reads an outage as an eviction. Do that before widening
+the eviction trigger any further.
+
+## The web onboarding mockup is horses-only "Step 1 of 2" — there is no trainer step
+`06-stage1-design/mockups/web/screens/05-onboarding.html` has ONE step (pick horses,
+"2 minimum to continue") and no trainer picker; `_archive/` has no onboarding variant.
+Mobile onboarding is trainers → horses → notifications, so any "web onboarding parity"
+ticket that asks for a trainer step has **no backing design** and is `needs-spec` per the
+guardrail, not `ready`. Note also that the "Step 1 of 2" copy in `horse-picker.tsx` is
+aspirational — no step 2 screen or step routing exists in code.

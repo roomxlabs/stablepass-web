@@ -13,6 +13,7 @@ import { supabaseBrowser } from "@/lib/supabase/client";
 import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@/lib/api/post-media";
 import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
 import type { FeedPost, ReactionEmoji } from "@/components/types";
+import { apiFetch } from "@/lib/api/client";
 
 type PostRow = PostIntrinsicRow;
 type ReactionRow = { post_id: string; emoji: ReactionEmoji };
@@ -48,7 +49,7 @@ export function HorsePosts({ horseId, horseName, trainerName, stableName = null,
       setLoading(true);
       setError(false);
       try {
-        const res = await fetch(`/api/horses/${horseId}/feed`);
+        const res = await apiFetch(`/api/horses/${horseId}/feed`);
         if (!res.ok) {
           if (!cancelled) setError(true);
           return;
@@ -145,7 +146,7 @@ export function HorsePosts({ horseId, horseName, trainerName, stableName = null,
   async function play(postId: string) {
     setPlayError((prev) => ({ ...prev, [postId]: false }));
     try {
-      const res = await fetch(`/api/posts/${postId}/playback`);
+      const res = await apiFetch(`/api/posts/${postId}/playback`);
       if (res.status !== 200) {
         setPlayError((prev) => ({ ...prev, [postId]: true }));
         return;

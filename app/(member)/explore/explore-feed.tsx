@@ -20,6 +20,7 @@ import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@
 import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
 import type { FeedPost, ReactionEmoji, RaceDayEntry, TrainerSummary } from "@/components/types";
 import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
+import { apiFetch } from "@/lib/api/client";
 
 const LIMIT = 10;
 
@@ -133,7 +134,7 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
       const params = new URLSearchParams({ limit: String(LIMIT) });
       if (forCursor) params.set("cursor", forCursor);
 
-      const res = await fetch(`/api/feed?${params}`);
+      const res = await apiFetch(`/api/feed?${params}`);
       if (res.status === 402) {
         setGated(true);
         return;
@@ -217,7 +218,7 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
       setHasMore(Boolean(meta.hasMore));
 
       // Best-effort impression tracking — never blocks rendering on failure.
-      fetch("/api/feed/seen", {
+      apiFetch("/api/feed/seen", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ postIds: ids }),
@@ -391,7 +392,7 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
   async function play(postId: string) {
     setPlayError((prev) => ({ ...prev, [postId]: false }));
     try {
-      const res = await fetch(`/api/posts/${postId}/playback`);
+      const res = await apiFetch(`/api/posts/${postId}/playback`);
       if (res.status !== 200) {
         setPlayError((prev) => ({ ...prev, [postId]: true }));
         return;

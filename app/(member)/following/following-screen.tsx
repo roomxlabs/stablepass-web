@@ -18,6 +18,7 @@ import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@
 import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
 import type { FeedPost, ReactionEmoji } from "@/components/types";
 import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
+import { apiFetch } from "@/lib/api/client";
 
 const LIMIT = 10;
 
@@ -182,7 +183,7 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
       const params = new URLSearchParams({ limit: String(LIMIT) });
       if (forCursor) params.set("cursor", forCursor);
 
-      const res = await fetch(`/api/feed/following?${params}`);
+      const res = await apiFetch(`/api/feed/following?${params}`);
       if (res.status === 402) {
         setGated(true);
         return;
@@ -262,7 +263,7 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
       setPosts((prev) => (forCursor ? [...prev, ...mapped] : mapped));
 
       // Best-effort impression tracking (the following feed is unseen-first).
-      fetch("/api/feed/seen", {
+      apiFetch("/api/feed/seen", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ postIds: ids }),
@@ -340,7 +341,7 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
   async function play(postId: string) {
     setPlayError((prev) => ({ ...prev, [postId]: false }));
     try {
-      const res = await fetch(`/api/posts/${postId}/playback`);
+      const res = await apiFetch(`/api/posts/${postId}/playback`);
       if (res.status !== 200) { setPlayError((prev) => ({ ...prev, [postId]: true })); return; }
       const body = await res.json().catch(() => null);
       const url = body?.data?.playbackUrl as string | undefined;

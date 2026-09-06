@@ -6,6 +6,7 @@
 // poster for a native <video>. No polling, no autoplay-on-mount.
 import { useState } from "react";
 import { PostMediaImage } from "./post-media-image";
+import { apiFetch } from "@/lib/api/client";
 
 const Play = () => (
   <svg className="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16l13-8Z" fill="currentColor" stroke="none" /></svg>
@@ -26,7 +27,7 @@ export function MediaPlayer({ postId, posterUrl, duration }: MediaPlayerProps) {
   async function onPlay() {
     setStatus("loading");
     try {
-      const res = await fetch(`/api/posts/${postId}/playback`, { method: "POST" });
+      const res = await apiFetch(`/api/posts/${postId}/playback`, { method: "POST" });
       if (res.status !== 200) {
         setStatus("error");
         return;

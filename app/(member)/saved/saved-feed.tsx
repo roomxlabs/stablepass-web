@@ -15,6 +15,7 @@ import { signPhotoMap, HORSE_PHOTO_BUCKET, TRAINER_PHOTO_BUCKET } from "@/lib/st
 import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@/lib/api/post-media";
 import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
 import type { FeedPost, ReactionEmoji } from "@/components/types";
+import { apiFetch } from "@/lib/api/client";
 
 const LIMIT = 10;
 
@@ -215,7 +216,7 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
   async function play(postId: string) {
     setPlayError((prev) => ({ ...prev, [postId]: false }));
     try {
-      const res = await fetch(`/api/posts/${postId}/playback`);
+      const res = await apiFetch(`/api/posts/${postId}/playback`);
       if (res.status !== 200) { setPlayError((prev) => ({ ...prev, [postId]: true })); return; }
       const body = await res.json().catch(() => null);
       const url = body?.data?.playbackUrl as string | undefined;

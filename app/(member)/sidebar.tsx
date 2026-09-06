@@ -14,6 +14,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { Wordmark, BrandMark } from "@/components/wordmark";
 import { formatUnreadBadge, UNREAD_CHANGED_EVENT } from "@/app/api/notifications/contract";
+import { apiFetch, suppressEviction } from "@/lib/api/client";
 
 type IconName = "home" | "user" | "horseshoe" | "heart" | "tag" | "bookmark" | "bell" | "account";
 
@@ -108,7 +109,7 @@ function useUnreadCount(pathname: string): number {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/notifications/unread-count", { cache: "no-store" });
+        const res = await apiFetch("/api/notifications/unread-count", { cache: "no-store" });
         if (!res.ok) throw new Error(String(res.status));
         const body = (await res.json()) as { data?: { unread?: number } };
         if (!cancelled) setUnread(body.data?.unread ?? 0);
@@ -150,7 +151,15 @@ export function Sidebar({ user }: { user: SidebarUser }) {
   }, [open]);
 
   async function signOut() {
+    // Deliberate sign-out: stop any in-flight member call that 401s on the way
+    // out from redirecting to "?reason=signed-out-elsewhere" and claiming the
+    // account was used on another device (ENG-961).
+    suppressEviction();
     await supabaseBrowser().auth.signOut();
+    // Re-arm AFTER the await settles. The window is a deadline, not a flag, and
+    // auth-js has no request timeout — a slow signOut would otherwise burn the
+    // whole window before the straggler 401s it exists to cover even arrive.
+    suppressEviction();
     router.push("/signin");
     router.refresh();
   }

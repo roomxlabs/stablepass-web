@@ -27,6 +27,7 @@ import { SharesDisclaimer } from "@/components/shares-disclaimer";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 import styles from "./shares-list.module.css";
+import { apiFetch } from "@/lib/api/client";
 
 // The exact projection is load-bearing in BOTH directions (see .rx/gotchas.md):
 // too narrow starves the row, and naming an undeployed column hard-fails the
@@ -124,7 +125,7 @@ function logWebsiteClick(trainerId: string) {
   // Fire-and-forget — the existing ENG-274 BFF. Never awaited and never allowed
   // to block or defer the navigation, so a slow log cannot cost the member the
   // click; `keepalive` lets it survive the page losing focus to the new tab.
-  void fetch(`/api/trainers/${trainerId}/website-click`, {
+  void apiFetch(`/api/trainers/${trainerId}/website-click`, {
     method: "POST",
     keepalive: true,
   }).catch(() => {

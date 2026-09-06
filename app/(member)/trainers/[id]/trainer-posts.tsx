@@ -15,6 +15,7 @@ import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@
 import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
 import type { FeedPost, ReactionEmoji } from "@/components/types";
 import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
+import { apiFetch } from "@/lib/api/client";
 
 // `photo_url` is a bare object path in the PRIVATE `horse-photos` bucket — this
 // route is a plain BFF read (not a signing surface), so the SCREEN batch-signs
@@ -55,7 +56,7 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
       setLoading(true);
       setError(false);
       try {
-        const res = await fetch(`/api/trainers/${trainerId}/feed`);
+        const res = await apiFetch(`/api/trainers/${trainerId}/feed`);
         if (!res.ok) {
           if (!cancelled) setError(true);
           return;
@@ -166,7 +167,7 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
   async function play(postId: string) {
     setPlayError((prev) => ({ ...prev, [postId]: false }));
     try {
-      const res = await fetch(`/api/posts/${postId}/playback`);
+      const res = await apiFetch(`/api/posts/${postId}/playback`);
       if (res.status !== 200) {
         setPlayError((prev) => ({ ...prev, [postId]: true }));
         return;
