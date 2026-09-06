@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { Wordmark, BrandMark } from "@/components/wordmark";
+import { formatUnreadBadge, UNREAD_CHANGED_EVENT } from "@/app/api/notifications/contract";
 
 type IconName = "home" | "user" | "horseshoe" | "heart" | "tag" | "bookmark" | "bell" | "account";
 
@@ -72,11 +73,64 @@ const STABLE_NAV: { href: string; label: string; icon: IconName }[] = [
 
 export type SidebarUser = { name: string; email: string; initial: string; trialLabel: string | null };
 
+/**
+ * The unread-notifications chip (ENG-957).
+ *
+ * Fetched from the BFF rather than passed down from the layout, for two reasons:
+ * the layout is a server component that renders ONCE per navigation to a new
+ * document, and the count has to change after the member reads something in the
+ * inbox — a prop would go stale the moment they clear a row. The BFF does a
+ * `head: true` count, so this costs a number, never the rows.
+ *
+ * Refreshed on navigation, per the ticket: `pathname` is the dependency, so
+ * moving between member screens re-reads it, and coming BACK from /notifications
+ * (where rows were just marked read) is exactly the case that must not show a
+ * stale chip.
+ *
+ * A failure renders NO chip rather than a zero: "0 unread" and "we couldn't ask"
+ * are different states, and quietly claiming the first is how a member stops
+ * trusting the badge.
+ */
+function useUnreadCount(pathname: string): number {
+  const [unread, setUnread] = useState(0);
+  // Bumped by the inbox's UNREAD_CHANGED_EVENT — "Mark all read" changes the
+  // count WITHOUT navigating, and without this the chip would go on claiming N
+  // unread beside a screen the member has just cleared.
+  const [revision, setRevision] = useState(0);
+
+  useEffect(() => {
+    const bump = () => setRevision((n) => n + 1);
+    window.addEventListener(UNREAD_CHANGED_EVENT, bump);
+    return () => window.removeEventListener(UNREAD_CHANGED_EVENT, bump);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/notifications/unread-count", { cache: "no-store" });
+        if (!res.ok) throw new Error(String(res.status));
+        const body = (await res.json()) as { data?: { unread?: number } };
+        if (!cancelled) setUnread(body.data?.unread ?? 0);
+      } catch {
+        if (!cancelled) setUnread(0);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname, revision]);
+
+  return unread;
+}
+
 export function Sidebar({ user }: { user: SidebarUser }) {
   const pathname = usePathname();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
+  const unreadCount = useUnreadCount(pathname);
+  const unreadBadge = formatUnreadBadge(unreadCount);
 
   // Navigating closes the drawer — otherwise it stays over the page you just opened.
   // Adjusted during render rather than in an effect: React's documented pattern for
@@ -104,19 +158,33 @@ export function Sidebar({ user }: { user: SidebarUser }) {
   function navList(items: typeof PRIMARY_NAV) {
     return (
       <ul className="sidebar-nav">
-        {items.map((item) => (
-          <li key={item.href}>
-            <a
-              className={isActive(item.href) ? "active" : undefined}
-              href={item.href}
-              title={item.label}
-              aria-current={isActive(item.href) ? "page" : undefined}
-            >
-              <Icon name={item.icon} />
-              <span className="nav-label">{item.label}</span>
-            </a>
-          </li>
-        ))}
+        {items.map((item) => {
+          const badge = item.href === "/notifications" ? unreadBadge : null;
+          return (
+            <li key={item.href}>
+              <a
+                className={isActive(item.href) ? "active" : undefined}
+                href={item.href}
+                title={item.label}
+                aria-current={isActive(item.href) ? "page" : undefined}
+              >
+                <Icon name={item.icon} />
+                {/* The count is carried on the LABEL, not only in the chip: the
+                    900-1279 rail hides .nav-label (globals.css) and would
+                    otherwise leave a bare number with nothing naming it. */}
+                <span className="nav-label">
+                  {item.label}
+                  {badge && <span className="sr-only"> — {badge} unread</span>}
+                </span>
+                {badge && (
+                  <span className="nav-badge" data-testid="sidebar-unread-badge" aria-hidden="true">
+                    {badge}
+                  </span>
+                )}
+              </a>
+            </li>
+          );
+        })}
       </ul>
     );
   }
