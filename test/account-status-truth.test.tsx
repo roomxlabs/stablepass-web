@@ -146,7 +146,9 @@ describe("Account status — the entitlement matrix", () => {
     await renderAccount({ status: "canceled", trial_ends_at: null, current_period_end: future });
 
     expect(statusValue()).toBe("Access ending");
-    expect(statusColour()).not.toBe("var(--red)");
+    // The POSITIVE assertion, not just "not red": entitlement decides the
+    // colour, and both entitled wordings are green.
+    expect(statusColour()).toBe("var(--brand-green)");
     expect(screen.getByText("30-day pass")).toBeInTheDocument();
     expect(document.body.textContent).toMatch(/continues to /);
     expect(document.body.textContent).toMatch(/will not continue/);
@@ -202,9 +204,31 @@ describe("Cancel control visibility", () => {
     expect(screen.getByTestId("cancel-open")).toBeInTheDocument();
   });
 
-  it("present for active + NULL period end (webhook in flight, still entitled)", async () => {
+  // THE MISSING PIN. `canCancel` is `entitled && status === "active" && ...`,
+  // and `active` + a PAST period end is the ONLY state where `entitled` and the
+  // raw status disagree — so without this case the `entitled &&` clause is dead
+  // weight that no test would notice being deleted (proved by mutation). The
+  // state is reachable in production: an `active` row whose period has elapsed
+  // but which the nightly `subscription-expiry-sweep` has not reached yet.
+  // Showing Cancel there, beside "Ended" / "No active pass", would be a fresh
+  // instance of the ENG-585 bug this file exists to prevent.
+  it("absent for active + PAST period end (entitlement decides, not the raw status)", async () => {
+    await renderAccount({ status: "active", trial_ends_at: null, current_period_end: past });
+    expect(screen.queryByTestId("cancel-open")).not.toBeInTheDocument();
+  });
+
+  // ⚠️ ABSENT, not present, for the webhook-in-flight window. The member IS
+  // entitled here — but `cancel_own_subscription()` stamps
+  // `current_period_end = coalesce(current_period_end, now())`, so cancelling
+  // with a null period revokes access IMMEDIATELY (until the late webhook
+  // restores it). Offering the control would mean a button promising "you keep
+  // the days you've paid for" that lands the member on the access wall, which
+  // breaks this ticket's own acceptance criterion. The window is seconds long.
+  it("absent for active + NULL period end (webhook in flight — cancelling now would revoke access)", async () => {
     await renderAccount({ status: "active", trial_ends_at: null, current_period_end: null });
-    expect(screen.getByTestId("cancel-open")).toBeInTheDocument();
+    expect(screen.queryByTestId("cancel-open")).not.toBeInTheDocument();
+    // …but the member is still ENTITLED, and the card must still say so.
+    expect(statusValue()).toBe("Active");
   });
 
   it("absent for canceled + FUTURE period end", async () => {

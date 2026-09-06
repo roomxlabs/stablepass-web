@@ -37,8 +37,20 @@ import { ok, UNAUTH, fail } from "@/lib/api/envelope";
  */
 export const MAX_REASON_LENGTH = 500;
 
-/** PostgREST surfaces the RPC's `raise ... using errcode = '42501'` as this. */
-const NO_ACTIVE_SUBSCRIPTION = "42501";
+// PostgREST surfaces the RPC's `raise ... using errcode = '42501'` as this.
+//
+// ⚠️ The code ALONE is not enough to identify it. `42501` is
+// `insufficient_privilege` generally — if a future migration ever dropped
+// `grant execute on function cancel_own_subscription to authenticated`, the
+// resulting "permission denied for function" would arrive with the SAME code,
+// and mapping it to 409 would tell every member they have no active
+// subscription while the real fault was a broken grant. So the RPC's own
+// message is matched too, and anything else falls through to the 500 below —
+// loud, which is what a broken grant should be. `e2e/eng-1002-cancel.spec.ts`
+// asserts the 409 against the real PostgREST, so a drift in this message
+// surfaces as a failing test rather than as a silently wrong status.
+const NO_ACTIVE_SUBSCRIPTION_CODE = "42501";
+const NO_ACTIVE_SUBSCRIPTION_MESSAGE = "no_active_subscription";
 
 export async function POST(req: Request) {
   const sb = await supabaseServer();
@@ -82,7 +94,10 @@ export async function POST(req: Request) {
     // status for the member — the request was well-formed and authenticated,
     // there is simply nothing active to cancel — where PostgREST's own 403 would
     // read as "you may not do this" and a 500 would read as our fault.
-    if (error.code === NO_ACTIVE_SUBSCRIPTION) {
+    if (
+      error.code === NO_ACTIVE_SUBSCRIPTION_CODE &&
+      (error.message ?? "").includes(NO_ACTIVE_SUBSCRIPTION_MESSAGE)
+    ) {
       return fail("no_active_subscription", "You don't have an active subscription to cancel.", 409);
     }
     // Fixed copy, never `error.message`: a constraint violation echoes the
@@ -94,7 +109,15 @@ export async function POST(req: Request) {
   // The RPC `returns subscription`, i.e. the whole updated row. Only these three
   // fields cross the wire: `cancel_reason` is deliberately not echoed, and
   // `stripe_customer_id`/`promo_passes_used` are none of the browser's business.
-  const row = data as { status: string; canceled_at: string | null; current_period_end: string | null };
+  const row = data as
+    | { status: string; canceled_at: string | null; current_period_end: string | null }
+    | null;
+  // Not reachable today — the RPC either returns the composite row or raises —
+  // but reading `.status` off a null would throw a bare TypeError, which Next
+  // serves as an un-enveloped 500. One line keeps every response in the
+  // contract's shape.
+  if (!row) return fail("cancel_failed", "Couldn't cancel your subscription. Please try again.", 500);
+
   return ok({
     status: row.status,
     canceledAt: row.canceled_at,

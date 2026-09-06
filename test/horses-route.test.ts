@@ -132,7 +132,7 @@ describe("GET /api/horses/:id", () => {
     expect(body.error.code).toBe("subscription_required");
   });
 
-  it("returns 402 when the trial has expired even though status is still trial", async () => {
+  it("returns 402 when the paid period has expired even though status is still active", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
     tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2020-01-01T00:00:00Z" } };
 
@@ -288,7 +288,7 @@ describe("GET /api/horses/:id/feed", () => {
     expect(body.error.code).toBe("subscription_required");
   });
 
-  it("returns 402 when the trial has expired even though status is still trial", async () => {
+  it("returns 402 when the paid period has expired even though status is still active", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
     tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2020-01-01T00:00:00Z" } };
 

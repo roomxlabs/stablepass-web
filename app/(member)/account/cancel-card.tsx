@@ -63,14 +63,28 @@ export function CancelCard({ endDate }: { endDate: string | null }) {
     setBusy(true);
     setError(null);
     const trimmed = reason.trim();
-    const res = await fetch("/api/subscription/cancel", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      // Absent, not empty-string: a whitespace-only comment is no comment, and
-      // the route stores null for it rather than a blank row of text Mel then
-      // has to read past.
-      body: JSON.stringify(trimmed ? { reason: trimmed } : {}),
-    });
+
+    // `fetch` REJECTS on offline / DNS failure / connection reset — it does not
+    // resolve with an !ok response. Without this catch that rejection escapes as
+    // an unhandled promise, `setBusy(false)` never runs, and the member is left
+    // staring at a disabled "Cancelling…" with the Keep button disabled too and
+    // no way out but a reload. The !ok paths below all recover correctly, which
+    // is exactly what made this easy to miss.
+    let res: Response;
+    try {
+      res = await fetch("/api/subscription/cancel", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        // Absent, not empty-string: a whitespace-only comment is no comment, and
+        // the route stores null for it rather than a blank row of text Mel then
+        // has to read past.
+        body: JSON.stringify(trimmed ? { reason: trimmed } : {}),
+      });
+    } catch {
+      setError("Couldn't reach the server. Please check your connection and try again.");
+      setBusy(false);
+      return;
+    }
 
     if (res.ok) {
       // The server component owns every word on this card, so the way to show
@@ -98,9 +112,16 @@ export function CancelCard({ endDate }: { endDate: string | null }) {
         <div>
           <div className="notif-title">Cancel your subscription</div>
           <div className="notif-sub">
+            {/*
+              `endDate` is non-null in practice: the page only mounts this
+              island once `current_period_end` has landed, precisely so neither
+              sentence here can promise continuity the RPC would revoke (see the
+              `canCancel` note in page.tsx). The fallback is defensive — an
+              unparseable timestamp — and deliberately promises nothing.
+            */}
             {endDate
               ? `You'll keep full access until ${endDate}.`
-              : "You'll keep the access you've already paid for."}
+              : "Your access continues for the period you've already paid for."}
           </div>
         </div>
         <button
@@ -127,7 +148,7 @@ export function CancelCard({ endDate }: { endDate: string | null }) {
       <p style={{ fontSize: 13.5, color: "var(--muted)", margin: "0 0 18px", lineHeight: 1.55 }}>
         {endDate
           ? `Your access continues until ${endDate} and will not continue after that. Nothing is charged now, and nothing is refunded — you keep the days you've already paid for.`
-          : "Your access continues to the end of the period you've paid for and will not continue after that. Nothing is charged now, and nothing is refunded."}
+          : "Your access continues to the end of the period you've already paid for and will not continue after that. Nothing is charged now, and nothing is refunded."}
       </p>
 
       <div className="input-group">

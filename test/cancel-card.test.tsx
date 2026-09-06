@@ -167,6 +167,27 @@ describe("<CancelCard>", () => {
     expect(refreshMock).not.toHaveBeenCalled();
   });
 
+  // A rejected fetch (offline, DNS failure, connection reset) is NOT an !ok
+  // response — it throws. Before the try/catch this escaped as an unhandled
+  // rejection, `setBusy(false)` never ran, and BOTH buttons stayed disabled
+  // forever with no error shown and no way out but a reload. The !ok paths all
+  // recovered correctly, which is what made the gap easy to miss.
+  it("a REJECTED fetch (offline) shows an error and leaves the panel usable", async () => {
+    const fetchMock = vi.fn(() => Promise.reject(new TypeError("Failed to fetch")));
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const user = userEvent.setup();
+    render(<CancelCard endDate="20 September 2026" />);
+
+    await openConfirm(user);
+    await user.click(screen.getByTestId("cancel-confirm-submit"));
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    // Not wedged: the member can retry, or back out.
+    expect(screen.getByTestId("cancel-confirm-submit")).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Keep my access" })).not.toBeDisabled();
+    expect(refreshMock).not.toHaveBeenCalled();
+  });
+
   // GUARDRAIL: the comment is untrusted member text and this component never
   // reads it back — not on success, and not anywhere else on the screen. The
   // member's own textarea legitimately still HOLDS what they typed (it is

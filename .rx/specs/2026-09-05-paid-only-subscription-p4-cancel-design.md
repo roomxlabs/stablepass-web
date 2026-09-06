@@ -143,7 +143,7 @@ on screen beside it. Inline styles are layout only, never treatment.
 | `status` | `current_period_end` | pill | plan meta | Cancel shown |
 |---|---|---|---|---|
 | `active` | future | Active (green) | Access to *date* | **yes** |
-| `active` | null | Active (green) | Access active | **yes** |
+| `active` | null | Active (green) | Access active | no — see below |
 | `active` | past | Ended (red) | Ended *date* | no |
 | `canceled` | future | Access ending (green) | Access to *date* | no |
 | `canceled` | past | Ended (red) | Ended *date* | no |
@@ -158,10 +158,31 @@ Both entitled wordings stay **green**: the colour answers "do you have access",
 true for both, and the wording carries "and it is winding down". A third state
 colour would be a new treatment with no design reference.
 
-`canCancel = entitled && status === "active"` is the one place the raw status
-decides rather than chooses words — legitimately, because the question is "is
-there an `active` row for the RPC to cancel", not "does this member have
-access".
+`canCancel = entitled && status === "active" && current_period_end !== null`.
+The status clause is the one place the raw status decides rather than chooses
+words — legitimately, because the question is "is there an `active` row for the
+RPC to cancel", not "does this member have access".
+
+**The third clause is the subtle one, and it was added after review.**
+`cancel_own_subscription()` stamps `current_period_end = coalesce(
+current_period_end, now())` — deliberately, so a `canceled` row can always
+expire (a `canceled` row with a null period would grant access forever and the
+expiry sweep could never reach it). The consequence in the UI is that cancelling
+during the just-paid / webhook-in-flight window revokes access **immediately**,
+until the late webhook advances the period and restores it. The member would
+click a control promising "you keep the days you've paid for" and land on
+"Ended" plus the access wall — breaking this ticket's own acceptance criterion
+that a cancelling member keeps content up to `current_period_end`. Verified
+against the live database during review. The window is seconds long and nobody
+needs to cancel inside it, so the control simply waits for the period to land.
+This narrows the ticket's stated rule ("shown only when `hasAccess(sub) &&
+status === 'active'`") — which is a necessary condition, so narrowing is
+compatible with it.
+
+The `entitled` clause also covers the `active`-but-EXPIRED row (the nightly
+expiry sweep has not reached it yet): that member reads "Ended" everywhere else
+on the card, so a Cancel button beside it would be a fresh ENG-585 bug. Both
+states now have a test.
 
 ## Test locations differ from the declared surface
 

@@ -1431,3 +1431,25 @@ tree under vitest's default 5s timeout. With a sibling worktree's suite running
 concurrently it times out; alone it passes in seconds. Before believing a red
 here, re-run the file on its own — and check whether another worker is running
 (`ps aux | grep vitest` shows the other checkout's path).
+
+## STALE: "there is no cancel route" — ENG-1002 brought it back
+**(2026-09-06, ENG-1002)** An earlier section of this file, `.rx/guardrails.md` #3
+and `CLAUDE.md` all still say the pass has **no cancel route** (true after ENG-567
+deleted it) and that the gate is `status in {trial, active}`. Both stopped being
+true on `feature/pricing-v1`:
+- `POST /api/subscription/cancel` exists again, with different semantics — it
+  calls the `cancel_own_subscription()` RPC, not a table update.
+- the gate is `{active, canceled}` + expiry (`has_content_access()`, ENG-999).
+`CLAUDE.md` and `.rx/guardrails.md` are outside ENG-1002's surface and are left
+for a doc ticket — but do not trust either on subscription state until then.
+
+## Cancelling with a NULL `current_period_end` revokes access immediately
+**(2026-09-06, ENG-1002)** `cancel_own_subscription()` stamps
+`current_period_end = coalesce(current_period_end, now())`, which is deliberate
+(a `canceled` row with a null period would grant access forever and
+`subscription-expiry-sweep` only touches `status='active'`, so nothing could ever
+reclaim it). The UI consequence is easy to miss: `active` + null period is the
+just-paid / webhook-in-flight window and is ENTITLED, so a naive
+`canCancel = entitled && status === "active"` offers the control there — and
+cancelling revokes access on the spot until the late webhook restores it. Any
+future cancel affordance must require a non-null `current_period_end`.

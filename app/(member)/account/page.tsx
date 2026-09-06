@@ -63,12 +63,15 @@ function formatEndDate(iso: string | null): string | null {
 // Has this timestamp already passed?
 //
 // ⚠️ Needed because NOT-entitled does NOT imply the date has passed.
-// `hasAccess()` denies `canceled`/`lapsed` on the STATUS alone, without reading
-// the date, and those rows legitimately carry a FUTURE `current_period_end`
-// (docs/specs/database.sql: "canceled keeps access until this"). Deriving a past
-// tense from `!entitled` would print "Ended 26 August 2026" ten days BEFORE that
-// date — a fresh instance of the exact bug this ticket is about, just inverted.
-// So the copy asks the clock, not the gate.
+//
+// (ENG-1002 narrowed WHY. This used to say "hasAccess() denies canceled/lapsed
+// on the STATUS alone"; `canceled` is now an entitled status that DOES read the
+// date, so `lapsed` is the remaining case — and a `lapsed` row can legitimately
+// carry a FUTURE `current_period_end`, e.g. a member lapsed by hand or by a
+// webhook before their period ran out.) Deriving a past tense from `!entitled`
+// would print "Ended 26 August 2026" ten days BEFORE that date — a fresh
+// instance of the exact bug this file is about, just inverted. So the copy asks
+// the clock, not the gate.
 //
 // A module-scope helper rather than an inline `Date.now()` in the component: the
 // repo's lint forbids calling an impure function during render, which is why
@@ -170,15 +173,33 @@ export default async function AccountPage() {
   const canceled = sub?.status === "canceled";
   const endedInPast = hasPassed(sub?.current_period_end ?? null);
 
-  // Who is offered the Cancel control (ENG-1002). Both halves are load-bearing:
+  // Who is offered the Cancel control (ENG-1002). All three clauses are
+  // load-bearing:
   //   * `entitled` — a lapsed member has nothing to cancel, and the RPC would
   //     answer 409 anyway. Offering it would be a button that only ever fails.
+  //     It also covers the `active`-but-EXPIRED row (the nightly expiry sweep
+  //     has not reached it yet): that member reads "Ended" everywhere else on
+  //     this card, and a Cancel button beside it would be a fresh instance of
+  //     the ENG-585 raw-status-contradicts-entitlement bug.
   //   * `status === "active"` — an already-cancelled member must not be shown
-  //     it, and this is the ONE place the raw status is read for a decision
-  //     rather than for wording. That is legitimate here and not an ENG-585
-  //     regression: the question is "is there an active row for the RPC to
-  //     cancel", which IS the status, not "does this member have access".
-  const canCancel = entitled && sub?.status === "active";
+  //     it. This is the ONE place the raw status is read for a decision rather
+  //     than for wording, legitimately: the question is "is there an active row
+  //     for the RPC to cancel", which IS the status.
+  //   * `current_period_end !== null` — ⚠️ THE SUBTLE ONE. A null period means
+  //     the member has JUST PAID and the Stripe webhook is still in flight.
+  //     `cancel_own_subscription()` stamps `current_period_end =
+  //     coalesce(current_period_end, now())` — deliberately, so a canceled row
+  //     can always expire (a canceled row with a null period would grant access
+  //     forever and the expiry sweep could never reach it). The consequence up
+  //     here is that cancelling in that window revokes access IMMEDIATELY, until
+  //     the late webhook advances the period and restores it. So the member
+  //     would click a control promising "you keep the days you've paid for" and
+  //     land on "Ended" plus the access wall — breaking this ticket's own
+  //     acceptance criterion that a cancelling member keeps content up to
+  //     `current_period_end`. The window is seconds long and nobody needs to
+  //     cancel inside it, so the control simply waits for the period to land.
+  //     Do not "simplify" this clause away.
+  const canCancel = entitled && sub?.status === "active" && sub.current_period_end !== null;
 
   // The pass does NOT auto-renew, so the card is still written as "buy days",
   // never as "manage a plan" — even for a cancelled member, whose next purchase

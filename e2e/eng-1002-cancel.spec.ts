@@ -265,6 +265,31 @@ test("a cancelled member whose period has passed is walled and reads as Ended", 
   await expect(page.getByTestId("cancel-open")).toHaveCount(0);
 });
 
+// ── 6b. The webhook-in-flight window offers no Cancel ───────────────────────
+// `active` + a NULL `current_period_end` is the just-paid window and IS
+// entitled. It is nonetheless not offered the control, because
+// `cancel_own_subscription()` stamps `current_period_end = coalesce(..., now())`
+// and would therefore revoke this member's access on the spot. Asserted here
+// rather than only in jsdom because the entitlement half is the real gate.
+test("an active member with a NULL period end is entitled but is offered no Cancel", async ({ page }) => {
+  const { email } = await seedMember("webhook-in-flight", {
+    status: "active",
+    current_period_end: null,
+    stripe_customer_id: "cus_eng1002_inflight",
+  });
+
+  await signIn(page, email);
+
+  // Entitled: no wall on a gated screen.
+  await expect(page.getByText("Your access has paused")).toHaveCount(0);
+
+  await page.goto("/account");
+  await expect(page.getByText("Active", { exact: true })).toBeVisible();
+  // No date printed that we do not have yet.
+  await expect(page.getByText("Access active")).toBeVisible();
+  await expect(page.getByTestId("cancel-open")).toHaveCount(0);
+});
+
 // ── 7. Unauthenticated → 401, never a cancel ────────────────────────────────
 test("an unauthenticated POST is 401", async ({ page }) => {
   const res = await page.request.post("/api/subscription/cancel", { data: {} });
