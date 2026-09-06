@@ -62,17 +62,45 @@ const SIGN_OUT_TIMEOUT_MS = 3000;
 // "Sign out" click would redirect to `?reason=signed-out-elsewhere` and tell the
 // member their account was used on another device, which is simply false and
 // reads as a security alert.
-let suppressed = false;
+//
+// TIME-BOUNDED ON PURPOSE (do not turn this back into a boolean). Every sign-out
+// and sign-in handler navigates with `router.push`, which is a same-document App
+// Router transition — this module is NOT re-evaluated, so a plain `let
+// suppressed = true` survives sign-out → sign-in and silently disables eviction
+// for the rest of the document's life. That is the same class of bug as the
+// `evicting` latch, and it fails quiet: no false sign-out, but no real one
+// either. A deadline cannot latch: it expires whether or not any code path
+// remembers to clear it. `clearEvictionSuppression()` below additionally clears
+// it eagerly on a successful sign-in, so the normal flow never even waits out
+// the window.
+//
+// The window only has to outlive requests already in flight when the member
+// clicked "Sign out" — seconds, not minutes.
+const SUPPRESSION_WINDOW_MS = 10_000;
+let suppressedUntil = 0;
 
 /** Call FIRST in a deliberate sign-out handler, before clearing the session. */
 export function suppressEviction(): void {
-  suppressed = true;
+  suppressedUntil = Date.now() + SUPPRESSION_WINDOW_MS;
+}
+
+/**
+ * Call after a SUCCESSFUL sign-in. Belt to the deadline's braces: it makes the
+ * new session's very first `apiFetch` eligible for eviction handling again
+ * instead of inheriting the tail of the previous sign-out's window.
+ */
+export function clearEvictionSuppression(): void {
+  suppressedUntil = 0;
+}
+
+function isSuppressed(): boolean {
+  return Date.now() < suppressedUntil;
 }
 
 /** Test-only: clear the latch/suppression between cases. */
 export function resetEvictionLatch(): void {
   evicting = false;
-  suppressed = false;
+  suppressedUntil = 0;
 }
 
 /**
@@ -113,7 +141,7 @@ export function isMemberApiRequest(input: RequestInfo | URL): boolean {
  * session that no longer exists.
  */
 async function handleEviction(): Promise<void> {
-  if (evicting || suppressed) return;
+  if (evicting || isSuppressed()) return;
   evicting = true;
   try {
     // `scope: "local"` clears THIS browser only. The default is "global", which

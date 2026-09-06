@@ -2,7 +2,15 @@ import { test, expect } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
 
 // ENG-961 — does a post saved on a HORSE PROFILE feed show up on /saved after a
-// SIDEBAR (client-side, App Router) navigation, without a full page reload?
+// SIDEBAR navigation?
+//
+// The sidebar hop is NOT a client-side transition: `app/(member)/sidebar.tsx`
+// renders plain `<a href>`, so this is a full document load and the JS heap is
+// torn down between the two screens. That is the POINT of the spec — /saved
+// re-derives its rows from its own fetch on mount, which is why no module-level
+// bookmark bus is needed (and why the ported one was inert). An earlier version
+// of this header asked "without a full page reload?", which described the
+// opposite of what is being proven.
 //
 // Why the horse profile and not Explore/Following: the local `feed` edge function
 // is a stub that always returns `{ data: [] }`, so Explore/Following cannot be

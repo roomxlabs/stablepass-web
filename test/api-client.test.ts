@@ -13,6 +13,7 @@ vi.mock("@/lib/supabase/client", () => ({
 
 import {
   apiFetch,
+  clearEvictionSuppression,
   isMemberApiRequest,
   resetEvictionLatch,
   suppressEviction,
@@ -198,6 +199,48 @@ describe("apiFetch — eviction is local, bounded, and suppressible", () => {
     await apiFetch("/api/notifications/unread-count");
     await settle();
     expect(assignMock).not.toHaveBeenCalled();
+  });
+
+  // THE REGRESSION TEST for the review finding: suppression must not be a
+  // one-way latch. Sign-out and sign-in both navigate with `router.push`, a
+  // same-document transition that does NOT re-evaluate lib/api/client.ts — so a
+  // boolean `suppressed` set at sign-out is still true after the member signs
+  // back in, and every genuine eviction for the rest of that document's life is
+  // swallowed in silence. Turning `suppressedUntil`/`isSuppressed()` back into a
+  // plain boolean makes this red.
+  it("a genuine 401 AFTER the suppression window still evicts", async () => {
+    vi.useFakeTimers();
+    try {
+      suppressEviction();
+
+      // t+0: a request already in flight at sign-out lands 401. Suppressed —
+      // this is the behaviour the window is there to preserve.
+      stubFetch(respond(401, UNAUTH_BODY));
+      await apiFetch("/api/notifications/unread-count");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(assignMock).not.toHaveBeenCalled();
+
+      // The member signs back in and keeps browsing — same document, same module
+      // instance. A real eviction now MUST be handled.
+      await vi.advanceTimersByTimeAsync(11_000);
+      stubFetch(respond(401, UNAUTH_BODY));
+      await apiFetch("/api/feed");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(assignMock).toHaveBeenCalledWith(SIGNED_OUT_REDIRECT);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The eager half of the same fix: a successful sign-in re-arms eviction at
+  // once rather than inheriting the tail of the previous sign-out's window.
+  it("re-arms immediately when sign-in clears the suppression", async () => {
+    suppressEviction();
+    clearEvictionSuppression();
+    stubFetch(respond(401, UNAUTH_BODY));
+    await apiFetch("/api/feed");
+    await settle();
+    expect(assignMock).toHaveBeenCalledWith(SIGNED_OUT_REDIRECT);
   });
 });
 

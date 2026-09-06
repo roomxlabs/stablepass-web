@@ -1759,11 +1759,20 @@ SECOND argument, and `fetch.mock.calls` then records `[url, undefined]`. That br
 Branch on `init === undefined` and call `fetch(input)` — a drop-in wrapper has to be
 indistinguishable from `fetch` at the call site.
 
-## Member nav is plain `<a>`, so EVERY screen change is a full page load (ENG-961)
-`app/(member)/sidebar.tsx` renders `<a href>`, not `next/link` — there is no
-`next/link` import anywhere in the member shell. So navigating Explore -> Saved ->
-a profile tears down the document and the JS heap, and the destination screen
-re-runs its server component and re-fetches from scratch.
+## Member nav is plain `<a>`, so EVERY *shell* screen change is a full page load (ENG-961)
+`app/(member)/sidebar.tsx` renders `<a href>`, not `next/link`. So every hop taken
+through the sidebar — Explore -> Saved -> a profile — tears down the document and
+the JS heap, and the destination screen re-runs its server component and re-fetches
+from scratch.
+
+**One carve-out, and it is not "anywhere in the member shell":** `next/link` is
+imported in exactly one member file, `app/(member)/shares/shares-list.tsx:23`, used
+at `:281` for the row link to a horse profile. That hop IS a client-side transition
+and the module heap DOES survive it. It changes nothing about bookmarks (`/shares`
+holds no bookmark state), but do not restate the absolute — check with
+`grep -rn "next/link" "app/(member)"` before relying on "no client transitions
+exist", because an over-broad absolute here is how the next wrong conclusion gets
+built.
 
 Two consequences worth knowing before building anything "cross-screen":
 
@@ -1784,8 +1793,27 @@ Two consequences worth knowing before building anything "cross-screen":
    `e2e/eng-961-bookmark-journey.spec.ts` pins the real behaviour end to end
    (save on a horse profile -> sidebar link -> the card is on /saved).
 
-If the shell ever moves to `next/link`, both points flip — revisit anything that
-relies on the reload.
+If the shell moves to `next/link` more broadly, both points flip — revisit anything
+that relies on the reload.
+
+## An auth-provider outage can sign EVERY member out at once (ENG-961, residual)
+The 401 eviction in `lib/api/client.ts` trusts `UNAUTH()`, and every `app/api/*`
+route emits `UNAUTH()` from a bare `if (!user)` — **discarding the `getUser()`
+error**. A transient GoTrue outage therefore nulls `user` for everyone at the same
+time, so every logged-in member gets a 401 they did not earn, is signed out, and is
+told their account was used on another device. This is a real storm, not a
+hypothetical, and it belongs next to the trigger rules rather than only in a PR
+description.
+
+What keeps it survivable today: `signOut({ scope: "local" })` clears only the
+browser that saw the 401, so members simply sign back in — `scope: "global"` would
+have revoked their sessions on every device from one spurious 401, which is not
+recoverable by the member. Keep the scope local.
+
+The proper fix is upstream and not in this ticket: distinguish "no session" from
+"could not reach the auth provider" in the route guards and emit a 5xx for the
+latter, so the client never reads an outage as an eviction. Do that before widening
+the eviction trigger any further.
 
 ## The web onboarding mockup is horses-only "Step 1 of 2" — there is no trainer step
 `06-stage1-design/mockups/web/screens/05-onboarding.html` has ONE step (pick horses,

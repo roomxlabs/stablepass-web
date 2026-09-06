@@ -7,6 +7,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
+import { clearEvictionSuppression } from "@/lib/api/client";
 import PasswordInput from "@/components/password-input";
 
 const GoogleMark = () => (
@@ -36,6 +37,11 @@ export function SignInForm({ notice }: { notice?: string | null }) {
       setBusy(false);
       return;
     }
+    // A deliberate sign-out suppresses 401 eviction handling for a short window
+    // (lib/api/client.ts). `router.push` keeps the same document alive across
+    // sign-out → sign-in, so clear it here rather than letting the new session
+    // inherit the tail of the old one's window.
+    clearEvictionSuppression();
     router.push("/explore");
     router.refresh();
   }
