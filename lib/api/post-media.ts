@@ -23,6 +23,7 @@
 // from an index past the end, so a status code can never confirm that a draft
 // exists.
 import { postPosterKey } from "@/lib/storage/photos";
+import { apiFetch } from "@/lib/api/client";
 
 const BATCH = 50;
 
@@ -101,7 +102,7 @@ export async function fetchPostMediaItems(postIds: string[]): Promise<Map<string
   for (let i = 0; i < unique.length; i += BATCH) {
     const chunk = unique.slice(i, i + BATCH);
     try {
-      const res = await fetch("/api/posts/media", {
+      const res = await apiFetch("/api/posts/media", {
         method: "POST",
         headers: { "content-type": "application/json" },
         // Post IDS ONLY. Adding a path here would hand the server something the
@@ -167,7 +168,7 @@ export async function fetchPostMediaSlide(
   // so asking would only spend a round trip to be told what is known here.
   if (!Number.isInteger(slideIndex) || slideIndex < 0 || slideIndex > MAX_SLIDE_INDEX) return null;
   try {
-    const res = await fetch("/api/posts/media", {
+    const res = await apiFetch("/api/posts/media", {
       method: "POST",
       headers: { "content-type": "application/json" },
       // The ENTIRE body. A post id and an ordinal — no path, no bucket, no
@@ -232,7 +233,7 @@ export async function resolvePostDisplayUrls(
   await Promise.all(
     videoIds.map(async (id) => {
       try {
-        const res = await fetch(`/api/posts/${id}/playback?posterOnly=1`);
+        const res = await apiFetch(`/api/posts/${id}/playback?posterOnly=1`);
         if (res.status === 402) throw new PostMediaError("gated");
         if (!res.ok) return;
         const json = await res.json().catch(() => null);

@@ -4,13 +4,21 @@ import { redirect } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
 import { SignInForm } from "./sign-in-form";
 import { Wordmark } from "@/components/wordmark";
+import { noticeForReason } from "@/lib/api/signed-out";
 
 export const metadata = { title: "Sign in · StablePass" };
 
-export default async function SignInPage() {
+export default async function SignInPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (user) redirect("/explore");
+
+  // Why the member is back here (ENG-961) — allow-listed copy only.
+  const notice = noticeForReason((await searchParams)?.reason);
 
   return (
     <div className="auth-page">
@@ -32,7 +40,7 @@ export default async function SignInPage() {
       </aside>
 
       <main className="auth-page-form">
-        <SignInForm />
+        <SignInForm notice={notice} />
       </main>
     </div>
   );

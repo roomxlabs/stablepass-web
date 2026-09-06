@@ -14,6 +14,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { Wordmark, BrandMark } from "@/components/wordmark";
 import { formatUnreadBadge, UNREAD_CHANGED_EVENT } from "@/app/api/notifications/contract";
+import { apiFetch } from "@/lib/api/client";
 
 type IconName = "home" | "user" | "horseshoe" | "heart" | "tag" | "bookmark" | "bell" | "account";
 
@@ -108,7 +109,7 @@ function useUnreadCount(pathname: string): number {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/notifications/unread-count", { cache: "no-store" });
+        const res = await apiFetch("/api/notifications/unread-count", { cache: "no-store" });
         if (!res.ok) throw new Error(String(res.status));
         const body = (await res.json()) as { data?: { unread?: number } };
         if (!cancelled) setUnread(body.data?.unread ?? 0);

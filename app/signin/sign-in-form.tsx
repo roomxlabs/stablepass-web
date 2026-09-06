@@ -18,7 +18,7 @@ const GoogleMark = () => (
   </svg>
 );
 
-export function SignInForm() {
+export function SignInForm({ notice }: { notice?: string | null }) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -60,6 +60,10 @@ export function SignInForm() {
       <h1>Welcome back.</h1>
       <p className="auth-sub">Sign in to pick up where you left off.</p>
 
+      {/* Eviction notice (ENG-961): why the member landed back here. `status`,
+          not `alert` — it is not a form error and must not compete with one. A
+          real sign-in error below supersedes it. */}
+      {notice && !error && <div className="form-error" role="status">{notice}</div>}
       {error && <div className="form-error" role="alert">{error}</div>}
 
       <div className="input-group">

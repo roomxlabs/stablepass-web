@@ -18,6 +18,8 @@ import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@
 import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
 import type { FeedPost, ReactionEmoji } from "@/components/types";
 import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
+import { apiFetch } from "@/lib/api/client";
+import { emitBookmarkChange, subscribeBookmarkChanges } from "@/lib/feed/bookmark-store";
 
 const LIMIT = 10;
 
@@ -182,7 +184,7 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
       const params = new URLSearchParams({ limit: String(LIMIT) });
       if (forCursor) params.set("cursor", forCursor);
 
-      const res = await fetch(`/api/feed/following?${params}`);
+      const res = await apiFetch(`/api/feed/following?${params}`);
       if (res.status === 402) {
         setGated(true);
         return;
@@ -262,7 +264,7 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
       setPosts((prev) => (forCursor ? [...prev, ...mapped] : mapped));
 
       // Best-effort impression tracking (the following feed is unseen-first).
-      fetch("/api/feed/seen", {
+      apiFetch("/api/feed/seen", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ postIds: ids }),
@@ -304,6 +306,20 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
     if (reactError) setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, reacted: prevReacted } : p)));
   }
 
+  // Cross-surface bookmark sync (ENG-961) — a save/unsave confirmed on ANY
+  // feed screen patches this screen's copy, so the icon no longer goes stale
+  // until a reload. Listener only patches local state; it never writes back,
+  // so there is no echo between screens.
+  useEffect(
+    () =>
+      subscribeBookmarkChanges((postId, bookmarked) => {
+        setPosts((prev) =>
+          prev.map((p) => (p.id === postId ? { ...p, bookmarked } : p)),
+        );
+      }),
+    [],
+  );
+
   async function bookmark(postId: string) {
     const target = posts.find((p) => p.id === postId);
     if (!target) return;
@@ -314,7 +330,12 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
     const { error: bookmarkError } = nextBookmarked
       ? await sb.from("bookmark").insert({ user_id: viewerId, post_id: postId })
       : await sb.from("bookmark").delete().eq("post_id", postId);
-    if (bookmarkError) setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, bookmarked: prevBookmarked } : p)));
+    if (bookmarkError) {
+      setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, bookmarked: prevBookmarked } : p)));
+      return;
+    }
+    // Confirmed write — tell the other feed screens (ENG-961).
+    emitBookmarkChange(postId, nextBookmarked);
   }
 
   /**
@@ -340,7 +361,7 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
   async function play(postId: string) {
     setPlayError((prev) => ({ ...prev, [postId]: false }));
     try {
-      const res = await fetch(`/api/posts/${postId}/playback`);
+      const res = await apiFetch(`/api/posts/${postId}/playback`);
       if (res.status !== 200) { setPlayError((prev) => ({ ...prev, [postId]: true })); return; }
       const body = await res.json().catch(() => null);
       const url = body?.data?.playbackUrl as string | undefined;

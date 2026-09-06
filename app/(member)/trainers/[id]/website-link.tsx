@@ -18,6 +18,7 @@
 // sends (or knows) a user id.
 
 import { safeHref } from "@/lib/trainer/website";
+import { apiFetch } from "@/lib/api/client";
 
 const ExternalLinkIcon = () => (
   <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">
@@ -68,7 +69,7 @@ export function WebsiteLink({ trainerId, websiteUrl, variant = "light" }: Websit
 
   function logClick() {
     // Not awaited — navigation must proceed regardless of the log's fate.
-    void fetch(`/api/trainers/${trainerId}/website-click`, {
+    void apiFetch(`/api/trainers/${trainerId}/website-click`, {
       method: "POST",
       keepalive: true,
     }).catch(() => {

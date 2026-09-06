@@ -37,6 +37,7 @@ import {
   type NotificationType,
 } from "@/app/api/notifications/contract";
 import styles from "./notifications-inbox.module.css";
+import { apiFetch } from "@/lib/api/client";
 
 // The glyph each alert type gets, in the sidebar's stroke idiom (24-box, 1.8
 // stroke via the shared `.ic` class) so the inbox reads as the same app.
@@ -85,7 +86,7 @@ export function NotificationsInbox() {
   // it). The old error is therefore cleared on success rather than up front.
   const load = useCallback(async () => {
     try {
-      const res = await fetch("/api/notifications", { cache: "no-store" });
+      const res = await apiFetch("/api/notifications", { cache: "no-store" });
       if (!res.ok) throw new Error(String(res.status));
       const body = (await res.json()) as Envelope;
       setItems(body.data ?? []);
@@ -114,7 +115,7 @@ export function NotificationsInbox() {
     if (!oldest || loadingMore) return;
     setLoadingMore(true);
     try {
-      const res = await fetch(`/api/notifications?before=${encodeURIComponent(oldest)}`, {
+      const res = await apiFetch(`/api/notifications?before=${encodeURIComponent(oldest)}`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(String(res.status));
@@ -139,7 +140,7 @@ export function NotificationsInbox() {
         // RECEIPT must not gate access to the content. Awaiting it makes every
         // click feel dead for a round-trip, and makes an unread alert entirely
         // un-openable on a flaky connection.
-        void fetch(`/api/notifications/${item.id}`, {
+        void apiFetch(`/api/notifications/${item.id}`, {
           method: "PATCH",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ read: true }),
@@ -172,7 +173,7 @@ export function NotificationsInbox() {
     const previous = items ?? [];
     setItems(previous.map((n) => ({ ...n, read: true })));
     try {
-      const res = await fetch("/api/notifications/read-all", { method: "POST" });
+      const res = await apiFetch("/api/notifications/read-all", { method: "POST" });
       if (!res.ok) throw new Error(String(res.status));
       announceUnreadChanged();
     } catch {
