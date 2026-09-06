@@ -42,8 +42,9 @@
  *  because the BFF route explicitly STRIPS it back out again: it is a bare
  *  object path in the PRIVATE `trainer-photos` bucket, so the profile page
  *  signs it itself (lib/storage/photos.ts) exactly as it already does for the
- *  horse's own `photo_url` below, while the route never lets the unsigned path
- *  reach a client. Unlike when ENG-959 wrote this note, that strip is now
+ *  horse's own `photo_url` below, while the route STRIPS it — the transport
+ *  rule in lib/storage/photos.ts (a path may cross only to a NAMED signer)
+ *  says that envelope has none. Unlike when ENG-959 wrote this note, that strip is now
  *  pinned by literal assertions — see the ENG-958 block in
  *  test/horses-route.test.ts. Widening this embed again means doing the same
  *  work: strip it in the route, or pay the response-shape change knowingly. */

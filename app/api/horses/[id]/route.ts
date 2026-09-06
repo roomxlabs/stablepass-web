@@ -89,8 +89,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   // the horse's own cover below, server-side, for the same reason.
   //
   // Pinned by the ENG-958 block in test/horses-route.test.ts with LITERAL
-  // assertions. The `?? null` is load-bearing and pinned there too: a horse with
-  // no trainer must still serialise as `trainer: null`, not as an empty object.
+  // assertions. The null branch below is load-bearing and pinned there too (the
+  // ternary's else, reached for an empty array embed via `one()`'s own
+  // `?? null`): a horse with no trainer must still serialise as `trainer: null`,
+  // not as an empty object.
   // Destructuring straight off a `?? {}` would quietly change this envelope's
   // shape for every trainerless horse — a contract change smuggled in behind a
   // security fix.

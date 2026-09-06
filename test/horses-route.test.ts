@@ -673,7 +673,10 @@ describe("GET /api/horses/:id — the trainer embed never ships an unsigned path
 
     expect(res.status).toBe(200);
     // A LITERAL key set — not `Object.keys(TrainerRow)`, not the imported
-    // constant. Widening the shared embed must fail HERE, loudly.
+    // constant. Note what this does and does NOT catch: these keys come from
+    // the FIXTURE, so it pins that the route STRIPS what it is handed. The
+    // tripwire for someone widening the shared projection is the literal
+    // -projection test at the bottom of this block; the two work as a pair.
     expect(Object.keys(body.data.trainer).sort()).toEqual(["id", "location", "name", "stable_name"]);
     expect("photo_url" in body.data.trainer).toBe(false);
     // The un-stripped fields still make it out — the strip is surgical.
@@ -698,7 +701,7 @@ describe("GET /api/horses/:id — the trainer embed never ships an unsigned path
     expect(JSON.stringify(body)).not.toContain(TRAINER_PATH);
   });
 
-  it("a trainerless horse still serialises `trainer: null`, never `{}` — the `?? null` is load-bearing", async () => {
+  it("a trainerless horse still serialises `trainer: null`, never `{}` — the null branch is load-bearing", async () => {
     entitled();
     tableData.horse = horseRowWithTrainer(null);
 
@@ -706,7 +709,9 @@ describe("GET /api/horses/:id — the trainer embed never ships an unsigned path
 
     expect(res.status).toBe(200);
     // `toBeNull` and not `toBeFalsy`: `{}` is truthy, but so is the bug where
-    // the strip destructures off a `?? {}` and emits an empty object.
+    // the strip destructures off a `?? {}` and emits an empty object. (The
+    // null comes from the ternary's else-branch in the route; `one()` supplies
+    // the `?? null` that makes an empty array embed reach it.)
     expect(body.data.trainer).toBeNull();
     expect(body.data.trainer).not.toEqual({});
     // The key must still be PRESENT — an `undefined` vanishes from JSON and
