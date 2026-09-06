@@ -36,7 +36,7 @@ describe("ENG-831 browse segregation — Horses / Trainers", () => {
       error: null,
     });
     const subChain = chainable({
-      data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null },
+      data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" },
       error: null,
     });
     fromMock.mockImplementation((table: string) => {
@@ -74,7 +74,7 @@ describe("ENG-831 browse segregation — Horses / Trainers", () => {
       error: null,
     });
     const subChain = chainable({
-      data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null },
+      data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" },
       error: null,
     });
     fromMock.mockImplementation((table: string) => {

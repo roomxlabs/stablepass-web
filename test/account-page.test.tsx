@@ -45,7 +45,11 @@ const { fromMock, appUserSelect } = vi.hoisted(() => {
     select: vi.fn(),
     eq: vi.fn(),
     maybeSingle: vi.fn(async () => ({
-      data: { status: "trial", trial_ends_at: "2026-09-14T00:00:00.000Z", current_period_end: null },
+      data: {
+        status: "active",
+        trial_ends_at: null,
+        current_period_end: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
+      },
     })),
   };
   subscriptionChain.select.mockImplementation(() => subscriptionChain);

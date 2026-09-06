@@ -1391,3 +1391,94 @@ So the promo test is a plain `promoUsed < 6` and the counter keeps climbing past
 threshold — `promoRemaining` must be clamped with `Math.max(0, …)` or a member on
 their tenth pass reads a negative number. Confirmed in the be migration comment and in
 `.rx/specs/2026-09-05-paid-only-subscription-epic-design.md`.
+
+## `getByLabel("Password")` is AMBIGUOUS in Playwright — every e2e spec uses it
+**(2026-09-06, ENG-1002)** `/signin` gained a show/hide control that is a
+`<button aria-label="Show password">` inside the password field's label, so
+`page.getByLabel("Password")` resolves to TWO elements and Playwright's strict
+mode throws `strict mode violation`. This is not local to one spec: `e2e/`'s
+`screenshots.spec.ts` (5 call sites) and `checkout.spec.ts` all still use the
+ambiguous form, so the sign-in helper of every older spec is broken.
+- **Do this:** `await page.locator("#password").fill(PASSWORD);` (the input
+  carries `id="password"`), and prefer `getByRole("button", { name: "Sign in",
+  exact: true })` for the submit.
+- Only `e2e/eng-1002-cancel.spec.ts` was fixed — repairing the rest is its own
+  ticket, since some of those specs are broken for OTHER reasons too (below).
+
+## ENG-999 retired `trial` — every fixture seeding `status: 'trial'` now 23514s
+**(2026-09-06, ENG-1002)** `20260905120000_paid_only_subscription.sql` narrowed
+the CHECK to `status in ('active','lapsed','canceled')` and made
+`has_content_access()` grant `{active, canceled} + expiry`. Two consequences that
+bite anything written before it:
+- an **e2e seed** of `status: 'trial'` is now a constraint violation, not a
+  fixture (`e2e/eng-585-status-truth.spec.ts` had one; fixed).
+- a **unit fixture** of `status: 'trial'` used to mean "entitled" and now means
+  "walled" — silently, since it is just data. Six suites (`feed-route`,
+  `following-screen`, `horses-route`, `saved-feed`, `shares-browse-segregation`,
+  `trainers-route`) used it as their entitled fixture and went red. Re-point them
+  to `status: 'active'` with the same date on `current_period_end`.
+- `e2e/expiry-banner.spec.ts` and `e2e/trial-start.spec.ts` seed trials through
+  the SIGNUP flow and cannot be fixed this way — they are dead until `/start` is
+  reworked.
+- Still stale afterwards: `components/access-wall.tsx` tells a member who never
+  paid "Your free trial has ended". Needs its own ticket.
+
+## `.rx/mockups.md` is STILL wrong — the real mockups are under `dev-handover/`
+**(2026-09-06, ENG-1002)** The manifest points at
+`<workspace>/06-stage1-design/mockups/web/` and asserts that
+`dev-handover/StablePass-mockups/mockups/web/` "has never existed". As of today
+the opposite is true: `06-stage1-design/` does not exist and
+`/home/reno-fathoni/Documents/rx/stable/dev-handover/StablePass-mockups/mockups/web/screens/`
+holds all eight screens. **`ls` the path before building against it** — this
+manifest has now been wrong three times in three different directions.
+
+## Unit tests live in `test/`, never colocated — grill-me keeps emitting colocated paths
+**(2026-09-06, ENG-1002)** The ticket's Surface asked for
+`app/api/subscription/cancel/route.test.ts` and `lib/api/access.test.ts`. All 70
+test files in this repo live in `test/` and none are colocated; vitest would run
+a colocated file, so this fails silently as a convention drift rather than an
+error. Put them in `test/<area>.test.ts` and note the deviation on the ticket.
+
+## jsdom leaks a controlled `<textarea>`'s value into `textContent`
+**(2026-09-06, ENG-1002)** In a real browser a textarea's `.value` (the dirty
+value) and its `textContent` diverge; in jsdom, once a value is typed via a
+dispatched input event it shows up in `element.textContent`/`innerHTML` too. So a
+guardrail assertion like "the member's comment is not rendered anywhere in the
+DOM" is not meaningful while the field that legitimately holds it is still
+mounted — strip form controls from a DOM clone before asserting, or the test is
+either falsely red or vacuously green depending on phrasing.
+
+## PostgREST returns timestamptz as `+00:00`, not `Z`
+**(2026-09-06, ENG-1002)** A fixture seeded with `new Date().toISOString()`
+(`…761Z`) reads back from PostgREST as `…761+00:00`, so a string `toBe()`
+comparison fails on an identical instant. Compare with `Date.parse()` on both
+sides in any e2e assertion that round-trips a timestamp through the API.
+
+## A loaded box makes `test/marketing-marquee.test.ts` time out (5s, scans `.next`)
+**(2026-09-06, ENG-1002)** Its last test walks the whole 24MB `.next/{server,static}`
+tree under vitest's default 5s timeout. With a sibling worktree's suite running
+concurrently it times out; alone it passes in seconds. Before believing a red
+here, re-run the file on its own — and check whether another worker is running
+(`ps aux | grep vitest` shows the other checkout's path).
+
+## STALE: "there is no cancel route" — ENG-1002 brought it back
+**(2026-09-06, ENG-1002)** An earlier section of this file, `.rx/guardrails.md` #3
+and `CLAUDE.md` all still say the pass has **no cancel route** (true after ENG-567
+deleted it) and that the gate is `status in {trial, active}`. Both stopped being
+true on `feature/pricing-v1`:
+- `POST /api/subscription/cancel` exists again, with different semantics — it
+  calls the `cancel_own_subscription()` RPC, not a table update.
+- the gate is `{active, canceled}` + expiry (`has_content_access()`, ENG-999).
+`CLAUDE.md` and `.rx/guardrails.md` are outside ENG-1002's surface and are left
+for a doc ticket — but do not trust either on subscription state until then.
+
+## Cancelling with a NULL `current_period_end` revokes access immediately
+**(2026-09-06, ENG-1002)** `cancel_own_subscription()` stamps
+`current_period_end = coalesce(current_period_end, now())`, which is deliberate
+(a `canceled` row with a null period would grant access forever and
+`subscription-expiry-sweep` only touches `status='active'`, so nothing could ever
+reclaim it). The UI consequence is easy to miss: `active` + null period is the
+just-paid / webhook-in-flight window and is ENTITLED, so a naive
+`canCancel = entitled && status === "active"` offers the control there — and
+cancelling revokes access on the spot until the late webhook restores it. Any
+future cancel affordance must require a non-null `current_period_end`.

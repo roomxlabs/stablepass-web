@@ -25,15 +25,15 @@ const SERVICE_ROLE_KEY =
 const PASSWORD = "harness-password-123!";
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
-// `subscription.trial_ends_at` is NOT NULL in the schema, so an `active` member
-// carries the (past) date their trial ran to before they converted. `hasAccess`
-// never reads it on an `active` row — but the DB will not let us omit it, and a
-// fixture that lied about that would not be reproducing a real member.
-const TRIAL_PAST = new Date(Date.now() - 40 * DAY).toISOString();
+// ENG-999 made `trial_ends_at` NULLABLE and vestigial, and dropped `trial` from
+// the status CHECK entirely. These fixtures therefore stop supplying it: a
+// member carrying a trial date is a member who cannot exist any more, and
+// seeding `status: 'trial'` now raises 23514 rather than reproducing anything.
+const TRIAL_PAST = null;
 
 type SubPatch = {
   status: string;
-  trial_ends_at: string;
+  trial_ends_at: string | null;
   current_period_end: string | null;
   stripe_customer_id: string | null;
 };
@@ -41,8 +41,8 @@ type SubPatch = {
 /**
  * A confirmed throwaway member whose `subscription` row is forced into `patch`.
  *
- * The createUser trigger provisions a trial subscription; we overwrite it with
- * the state under test. Service role, so this bypasses RLS — the point is to
+ * The createUser trigger provisions a `lapsed` subscription (ENG-999 — it used
+ * to be a 30-day trial); we overwrite it with the state under test. Service role, so this bypasses RLS — the point is to
  * manufacture states the app itself can never produce on demand.
  */
 async function seedMember(slug: string, patch: SubPatch) {
@@ -102,11 +102,21 @@ test("expired paid member — Account says Ended, and the wall does not mention 
   await page.screenshot({ path: ".rx/review/eng-585-account-expired-paid.png", fullPage: true });
 });
 
-// ── 2. Never paid, trial expired ────────────────────────────────────────────
-test("expired trial member who never paid — still told the TRIAL ended", async ({ page }) => {
-  const { email } = await seedMember("expired-trial", {
-    status: "trial",
-    trial_ends_at: new Date(Date.now() - HOUR).toISOString(),
+// ── 2. Never paid ───────────────────────────────────────────────────────────
+// Was "expired trial member — still told the TRIAL ended". ENG-999 retired the
+// trial (`trial` is no longer a valid status) and ENG-1002 removed the trial
+// wordings from the Account screen, so the member this covers is now simply
+// someone who has never paid: `lapsed`, no Stripe customer.
+//
+// ⚠️ The WALL still says "Your free trial has ended" for them — that copy lives
+// in `components/access-wall.tsx`, keyed off `everSubscribed`, and it is stale
+// now that no trial exists. Deliberately left alone and asserted as-is here:
+// it is outside ENG-1002's surface and needs its own ticket. This test going
+// red is how you will know that ticket landed.
+test("member who never paid — Account reads Ended, with no trial wording", async ({ page }) => {
+  const { email } = await seedMember("never-paid", {
+    status: "lapsed",
+    trial_ends_at: null,
     current_period_end: null,
     stripe_customer_id: null,
   });
@@ -115,13 +125,15 @@ test("expired trial member who never paid — still told the TRIAL ended", async
 
   await expect(page.getByText("Your free trial has ended")).toBeVisible();
   await expect(page.getByRole("link", { name: "Get full access" })).toBeVisible();
-  await page.screenshot({ path: ".rx/review/eng-585-wall-trial.png", fullPage: true });
+  await page.screenshot({ path: ".rx/review/eng-585-wall-never-paid.png", fullPage: true });
 
   await page.goto("/account");
-  await expect(page.getByText("Trial ended", { exact: true })).toBeVisible();
-  // Never a countdown for a trial that is over, and never a negative one.
+  await expect(page.getByText("Ended", { exact: true })).toBeVisible();
+  await expect(page.getByText("No active pass")).toBeVisible();
+  // Never a countdown, and no trial wording anywhere on this screen.
   await expect(page.getByText(/days left/)).toHaveCount(0);
-  await page.screenshot({ path: ".rx/review/eng-585-account-expired-trial.png", fullPage: true });
+  await expect(page.getByText(/trial/i)).toHaveCount(0);
+  await page.screenshot({ path: ".rx/review/eng-585-account-never-paid.png", fullPage: true });
 });
 
 // ── 3. THE TRAP: paid, webhook still in flight ──────────────────────────────
