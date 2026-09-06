@@ -1924,3 +1924,78 @@ the PR body, and state that if their PR changes the file during review, theirs w
 left the Show-more *button* copy-pasted between two grids with inline styles, and its `.btn-showmore`
 class lives in `app/globals.css` — also that PR's surface. Style a third surface's pager from its own
 CSS module rather than depending on a global class that is not on your base, or it ships unstyled.
+
+## The marketing site is noindex site-wide — "make this page indexable" is a 3-surface job (ENG-1041, 6 Sep 2026)
+
+`MARKETING_IS_INDEXABLE` in `lib/seo.ts` is `false` and **three** surfaces read it:
+`app/robots.ts`, `middleware.ts`'s `X-Robots-Tag`, and `app/(marketing)/layout.tsx`'s
+meta tag. A ticket that says "must not be noindexed" is therefore never a one-line
+metadata change, and it is never a reason to flip the flag — the flag is false
+because 19 real trainers are photographed beside placeholder biography.
+
+- **Do this:** carve out a PATH allowlist (`ALWAYS_INDEXABLE_PATHS`) read by all
+  three, not a flag flip. Scope it to the marketing host so the member space stays
+  noindex unconditionally, and test both directions — the exempt path AND that its
+  neighbours, near-miss paths and the app host are unchanged.
+- **`Disallow: /` in robots.txt beats a page's `index` meta tag**, because a crawler
+  that may not fetch the page never reads the tag. The `Allow:` line is mandatory,
+  not belt-and-braces. Next emits all `Allow:` before all `Disallow:`, and longest
+  match wins.
+- **Two different match semantics, easy to miss:** `Allow:` in robots.txt is a
+  PREFIX rule; an `includes()` allowlist is EXACT. robots.txt therefore already
+  permits crawling any future child route under an allowlisted path.
+- **`follow` is not symmetric with `index`.** `Disallow: /` stops crawlers FETCHING
+  the rest of the site; it does not stop them INDEXING a URL discovered as a link.
+  One indexable page inside a shared shell links `/start`, `/signin` and every other
+  legal route from its nav and footer. Use `follow: false` unless link discovery is
+  actually wanted.
+
+## A `force-static` page cannot have host-aware metadata — say so before claiming it does (ENG-1041)
+
+`/legal/*` renders on BOTH hosts from ONE prerendered HTML file. So a page-level
+`robots: { index: true }` says `index` on `app.stablepass.co` too, and no
+`generateMetadata` can prevent that — it has no request to read. The member space
+stays noindex only because the two HOST-AWARE surfaces (the `X-Robots-Tag` header
+and that host's `Disallow: /`) also apply, and Google resolves a meta-vs-header
+conflict to the most restrictive.
+- **Do this:** don't write "marketing space only" over all three surfaces; it is
+  true of two. Say which surface is unconditional and warn against "fixing" the
+  apparent disagreement by dropping a backstop. A reviewer WILL find this.
+
+## Adding a legal page: `content/legal/*.md` + a slug, but the parser has no inline links (ENG-1041)
+
+Adding a document to `/legal/[slug]` is three edits — a slug in `LEGAL_DOCUMENT_SLUGS`,
+a `content/legal/<slug>.md` with `title`/`lastUpdated` frontmatter, and a footer entry.
+But `lib/legal.ts`'s markdown subset deliberately does NOT interpret inline markup, so
+a document on the generic route can PRINT an address and cannot offer a working
+`mailto:`. A page that needs a live link, or its own `robots`, needs its own route.
+- **Keep a standalone slug OUT of `LEGAL_SLUGS`** (`LEGAL_STANDALONE_SLUGS` exists for
+  this). That constant drives `[slug]`'s `generateStaticParams`, so listing it there
+  makes two routes claim one path: the static segment wins and the prerender is dead
+  weight nobody can see is dead.
+- **Lift the whole document SHELL, not just the block renderer.** ENG-1041 first
+  shared only `<Block>` and still wrote the `<main>`/`.wrap`/`<article>` frame, kicker,
+  `<h1>` and "Last updated" line out twice — which is the part that actually drifts.
+  `legal-document.tsx` now owns the frame; `children` is the one seam.
+
+## The footer's Legal column is pinned in THREE places, exactly (ENG-1041)
+
+Adding a fifth link reds `test/marketing-shell.test.tsx`, `test/marketing-sheets.test.tsx`
+and `e2e/marketing-interactive.spec.ts`. Two are exact-list `toEqual` assertions.
+- **Do this:** update all three and keep them EXACT — do not relax to `toContain`. The
+  footer is the only discovery path for a page like the deletion route, so a silent
+  drop must red. `legal.module.css` is NOT covered by the ENG-991 marketing.css guard
+  (that guard diffs `marketing.css` against the mockup), so page-specific rules belong
+  there — but use the sheet's real tokens (`--line`, the 12/16/20/22/26/32 radius
+  ladder, the ported `.eyebrow`) rather than inventing values. A one-off `color-mix()`
+  or a `10px` radius is exactly what a fidelity reviewer catches.
+
+## Adding a public page? Add it to `e2e/legal.spec.ts`'s DOCUMENTS loop (ENG-1041)
+
+A unit test that imports and renders a page component proves the component renders.
+It does NOT prove the ROUTE resolves 200, that the canonical is emitted into the DOM,
+or that the page reads with scripting off (an explicit client requirement here). For a
+page whose entire purpose is "a store reviewer can open this URL", that gap matters.
+The `DOCUMENTS` loop in `e2e/legal.spec.ts` gives all of it for one array entry —
+but its ALIASES loop hardcodes an `<h1>` of "Terms & Conditions", so only join
+`DOCUMENTS`.

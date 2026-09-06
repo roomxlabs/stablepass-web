@@ -1052,3 +1052,70 @@ test.describe("repeat-signup wall on a real touch device", () => {
     await page.screenshot({ path: ".rx/review/r22-wall-touch.png", fullPage: true });
   });
 });
+
+/**
+ * ENG-1041 — the public account-deletion request page.
+ *
+ * Deliberately seeds NOTHING and signs in as nobody: the whole requirement is
+ * that this page answers to a visitor with no account, no session and no app
+ * installed. If this test ever needs a fixture, the page has regressed.
+ */
+test.describe("/legal/delete-account — the page Google Play's Data Safety form points at", () => {
+  test("renders for a signed-out visitor, with no price and no purchase route", async ({ page }) => {
+    await page.goto("/legal/delete-account");
+
+    await expect(page.getByRole("heading", { name: "Delete Your Account", level: 1 })).toBeVisible();
+
+    // The three things the ticket requires it state.
+    await expect(page.getByRole("heading", { name: /What deletion removes/i })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /What is retained, and why/i })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /How to request deletion/i })).toBeVisible();
+
+    // The email route: a real mailto, not a form. A form on a public page would
+    // be one validation message away from confirming whether an address has an
+    // account, which is the enumeration guardrail this page is held to.
+    const mailto = page.locator('main a[href^="mailto:"]');
+    await expect(mailto).toHaveCount(1);
+    await expect(mailto).toHaveAttribute("href", /^mailto:hello@stablepass\.co\?subject=/);
+    await expect(page.locator("main form")).toHaveCount(0);
+    await expect(page.locator("main input")).toHaveCount(0);
+
+    // Reader-app positioning (3.1.3(a)) over the page's own content. Scoped to
+    // <main>: the shared marketing nav carries the site's "Join stablepass."
+    // CTA on every page including /legal/privacy, which this ticket does not
+    // own and does not change.
+    const main = page.locator("main");
+    await expect(main.getByText(/\$/)).toHaveCount(0);
+    await expect(main.getByText(/\bAUD\b|\bGST\b/)).toHaveCount(0);
+
+    // It is served, not redirected — Play's reviewer opens this URL directly.
+    await expect(page).toHaveURL(/\/legal\/delete-account$/);
+
+    await page.screenshot({ path: ".rx/review/eng-1041-delete-account-desktop.png", fullPage: true });
+  });
+
+  test("is reachable from the footer of the marketing home", async ({ page }) => {
+    await page.goto("/");
+
+    const legal = page.locator(".foot-col").nth(2);
+    const link = legal.getByRole("link", { name: "Delete Your Account" });
+    await expect(link).toBeVisible();
+
+    // Not merely well-formed — it lands.
+    await link.click();
+    await expect(page).toHaveURL(/\/legal\/delete-account$/);
+    await expect(page.getByRole("heading", { name: "Delete Your Account", level: 1 })).toBeVisible();
+  });
+});
+
+test.describe("/legal/delete-account on a phone", () => {
+  const { defaultBrowserType: _dbt, ...iPhone13 } = devices["iPhone 13"];
+  void _dbt;
+  test.use(iPhone13);
+
+  test("renders the deletion page on a narrow viewport", async ({ page }) => {
+    await page.goto("/legal/delete-account");
+    await expect(page.getByRole("heading", { name: "Delete Your Account", level: 1 })).toBeVisible();
+    await page.screenshot({ path: ".rx/review/eng-1041-delete-account-mobile.png", fullPage: true });
+  });
+});

@@ -407,7 +407,10 @@ describe("contact — a mailto, and nothing that looks like a send", () => {
 });
 
 describe("footer — the two columns that became links", () => {
-  it("points all four Legal entries at W4's real /legal routes", () => {
+  // ENG-1041 added a fifth entry, /legal/delete-account. The list stays EXACT
+  // rather than becoming a "contains" check: the footer is the only discovery
+  // path for the deletion page Google Play requires, so a silent drop must red.
+  it("points all five Legal entries at W4's real /legal routes", () => {
     const { container } = render(<MarketingFooter />);
     const legal = [...container.querySelectorAll<HTMLElement>(".foot-col")][2];
 
@@ -416,6 +419,7 @@ describe("footer — the two columns that became links", () => {
       ["Terms & Conditions", "/legal/terms"],
       ["Cancellation & Refund Policy", "/legal/cancellation"],
       ["Acceptable Use Policy", "/legal/acceptable-use"],
+      ["Delete Your Account", "/legal/delete-account"],
     ]);
 
     // No button left in the column: with scripting off a button navigates nowhere.
