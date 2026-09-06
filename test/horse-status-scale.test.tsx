@@ -165,6 +165,29 @@ describe("app/globals.css — the status scale + shares pill grounds", () => {
     expect(css).not.toMatch(/\.tag\.status-spelling\b/);
     expect(css).not.toMatch(/\.tag\.status-retired\b/);
   });
+
+  // ─── The "Shares Available stays green" acceptance line ───────────────
+  //
+  // This was e2e-only until now, and the e2e suite is NOT in the default
+  // `npm test` gate — so the one acceptance line that says a colour must NOT
+  // change had no coverage anybody runs. The green is a three-hop chain:
+  //
+  //     #285D50  ->  --brand-green  ->  .tag.race-day  ->  the pill
+  //
+  // and each hop is pinned separately below, by LITERAL, so breaking any one
+  // of them is a red. Re-deriving the hex from the token (or the class from
+  // `statusTagClassOf`) would make the test agree with whatever the code says
+  // — which is exactly the failure mode this file exists to avoid.
+  it("pins --brand-green to its literal hex", () => {
+    // If this line moves, the Shares pill silently changes colour everywhere.
+    expect(css).toMatch(/--brand-green:\s*#285D50\s*;/);
+  });
+
+  it("keeps .tag.race-day — the Shares Available pill — on plain --brand-green", () => {
+    expect(css).toMatch(/\.tag\.race-day\s*\{\s*background:\s*var\(--brand-green\)\s*;\s*color:\s*var\(--cream\)\s*;\s*\}/);
+    // Not the dark token: that one belongs to In training, one row over.
+    expect(css).not.toMatch(/\.tag\.race-day\s*\{\s*background:\s*var\(--brand-green-dark\)/);
+  });
 });
 
 // ─── Page-render tests: the shares pill + CTA on the horse profile ────────
@@ -356,5 +379,25 @@ describe("horse profile page — Shares Available pill + trainer website CTA (EN
     const statusTag = container.querySelector(".status-row .tag.status-in-training");
     expect(statusTag).toBeTruthy();
     expect(statusTag!.textContent).toBe("In training");
+  });
+
+  // The render half of the "Shares Available stays green" chain. The CSS
+  // describe above pins #285D50 -> --brand-green -> .tag.race-day; this pins
+  // the last hop, that the pill the page actually draws is the element that
+  // rule selects. Asserted as a LITERAL class list, not via `statusTagClassOf`
+  // — the pill is deliberately NOT a training status and must never be routed
+  // through that mapping.
+  it("draws the Shares Available pill on the green .tag.race-day, never a status-* class", async () => {
+    tableData.horse = horseRow({ shares_for_sale: true, training_status: "in_training", trainer: TRAINER });
+    tableData.trainer = { data: { website_url: "https://wallerracing.example" } };
+
+    const { container } = await renderProfile();
+
+    const pill = screen.getByText("Shares Available");
+    expect(pill.className).toBe("tag race-day");
+    // Beside an In-training pill, which owns the DARK green — the two chips
+    // sharing a row is the whole reason in_training is not plain --brand-green.
+    expect(container.querySelector(".status-row .tag.status-in-training")).toBeTruthy();
+    expect(container.querySelector(".status-row .tag.race-day")).toBe(pill);
   });
 });
