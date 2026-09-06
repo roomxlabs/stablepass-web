@@ -21,7 +21,6 @@ import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
 import type { FeedPost, ReactionEmoji, RaceDayEntry, TrainerSummary } from "@/components/types";
 import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 import { apiFetch } from "@/lib/api/client";
-import { emitBookmarkChange, subscribeBookmarkChanges } from "@/lib/feed/bookmark-store";
 
 const LIMIT = 10;
 
@@ -342,20 +341,6 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
     }
   }
 
-  // Cross-surface bookmark sync (ENG-961) — a save/unsave confirmed on ANY
-  // feed screen patches this screen's copy, so the icon no longer goes stale
-  // until a reload. Listener only patches local state; it never writes back,
-  // so there is no echo between screens.
-  useEffect(
-    () =>
-      subscribeBookmarkChanges((postId, bookmarked) => {
-        setPosts((prev) =>
-          prev.map((p) => (p.id === postId ? { ...p, bookmarked } : p)),
-        );
-      }),
-    [],
-  );
-
   async function bookmark(postId: string) {
     const target = posts.find((p) => p.id === postId);
     if (!target) return;
@@ -371,10 +356,7 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
 
     if (bookmarkError) {
       setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, bookmarked: prevBookmarked } : p)));
-      return;
     }
-    // Confirmed write — tell the other feed screens (ENG-961).
-    emitBookmarkChange(postId, nextBookmarked);
   }
 
   // Follow, from the pill on the media. Optimistic like react/bookmark above,

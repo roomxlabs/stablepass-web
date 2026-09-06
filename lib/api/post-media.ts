@@ -282,7 +282,7 @@ export async function remintPostMedia(
       // guaranteed no-op AND skipping the server's re-gate. The whole bug is
       // that expired bytes survive in the HTTP cache; do not re-introduce it
       // on the recovery path.
-      const res = await fetch(
+      const res = await apiFetch(
         `/api/posts/${encodeURIComponent(postId)}/playback?posterOnly=1`,
         { cache: "no-store" },
       );
