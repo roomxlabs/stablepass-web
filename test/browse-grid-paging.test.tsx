@@ -241,21 +241,47 @@ describe("ENG-960 browse paging — the cap bounds the read, the pager keeps eve
     expect(horseChainFollowing.range).toHaveBeenCalledWith(0, BROWSE_PAGE_SIZE);
   });
 
-  it("INVARIANT: the pager can never outlive its roster — no rows, no Show more", async () => {
-    // This is what actually guarantees the pill switch cannot page into a stale
-    // offset, and it is why the two `setHasMore(false)` resets are belt-and-
-    // braces rather than load-bearing: the button is nested inside
-    // `!loading && horses.length > 0`, so a leftover `hasMore` from the previous
-    // pill has nothing to render into. Hoist the button out of that gate and
-    // this test reds.
+  it("INVARIANT: no rows, no roster container — the grid itself is gated on horses.length", async () => {
+    // Replaces a test that could not bite. Its predecessor used a zero-row
+    // fixture, so `splitBrowsePage` returned `hasMore: false` and the INNER
+    // `{hasMore && (<button>)}` satisfied "no Show more" on its own, whatever
+    // the outer gate said. Deleting `horses.length > 0` left all 1367 tests
+    // green — the assertion tested `hasMore`, not the roster gate, while its
+    // comment claimed the opposite (ENG-1016 class).
+    //
+    // So assert the gate's OWN observable effect instead: with no rows the
+    // roster container does not render at all. Delete `horses.length > 0` and
+    // an empty `.onboarding-grid-web` renders beneath the empty-state copy —
+    // this reds, on the exact clause named.
     const horseChain = pagedChain([]);
     fromMock.mockImplementation((table: string) => {
       if (table === "subscription") return chainable(ENTITLED_SUB);
       if (table === "horse") return horseChain;
       return chainable({ data: null, error: null });
     });
-    render(<HorsesGrid viewerId={VIEWER_ID} everSubscribed={false} />);
+    const { container } = render(<HorsesGrid viewerId={VIEWER_ID} everSubscribed={false} />);
     await waitFor(() => expect(screen.getByText(/No horses yet/)).toBeInTheDocument());
+    expect(container.querySelector(".onboarding-grid-web")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+  });
+
+  it("INVARIANT (trainers): no rows, no roster container — the same gate, pinned on the second grid", async () => {
+    // The body claimed this invariant was "true for both grids and tested for
+    // both". It was tested for neither. The trainers state machine is a
+    // structural duplicate of the horses one, and duplicates drift, so the
+    // gate is pinned here independently rather than by inspection.
+    const trainerChain = pagedChain([]);
+    fromMock.mockImplementation((table: string) => {
+      if (table === "subscription") return chainable(ENTITLED_SUB);
+      if (table === "trainer") return trainerChain;
+      return chainable({ data: null, error: null });
+    });
+    const { container } = render(<TrainersGrid viewerId={VIEWER_ID} everSubscribed={false} />);
+    // Anchored on the settled empty state, NOT on the absence itself — a bare
+    // `waitFor(...toBeNull())` passes on the very first tick, before the fetch
+    // resolves, and would hold whatever the gate did.
+    await waitFor(() => expect(screen.getByText(/No trainers yet/)).toBeInTheDocument());
+    expect(container.querySelector(".onboarding-grid-web")).toBeNull();
     expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
   });
 

@@ -72,10 +72,20 @@ export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; eve
 
       // Every fetch at offset 0 is a FRESH roster (first paint, or a pill
       // switch): reset the paging state with it, so Following can never inherit
-      // All's `hasMore` and page into a stale offset. Belt-and-braces — the
-      // render gates below make a stale pager structurally unreachable too (the
-      // button lives inside `!loading && horses.length > 0`), which is the
-      // invariant `browse-grid-paging.test.tsx` actually pins.
+      // All's `hasMore` and page into a stale offset.
+      //
+      // Honest note on what is pinned. The LOAD-BEARING defence is the render
+      // gate below (`!loading && horses.length > 0`): the Show-more button is
+      // nested inside it, so a stale `hasMore` has nothing to render into.
+      // That gate is now mutation-observable on BOTH grids — deleting
+      // `horses.length > 0` reds `browse-grid-paging.test.tsx`.
+      //
+      // This `setHasMore(false)` is genuine defence-in-depth and NO mutation
+      // reds it alone, because every state that would expose it is already
+      // caught by the gate: the empty-follows short-circuit leaves `horses`
+      // empty, and an offset-0 failure sets `error` and unmounts the grid. It
+      // is kept deliberately, and it is NOT claimed to be tested. Do not
+      // "prove" it with a test that only re-asserts the gate.
       if (offset === 0) {
         setLoading(true);
         setError(false);

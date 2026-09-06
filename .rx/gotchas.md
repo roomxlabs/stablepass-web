@@ -1862,8 +1862,10 @@ which targets `main`, not `feature/launch-v1`. **That is no longer the state of
 this branch.** An earlier revision of ENG-960 shipped the cap with no pager,
 making row 101 unreachable; Naufal rejected it (6 Sep 2026) — nothing may be
 truncated — and ENG-960 then lifted the mechanism into `lib/browse.ts` for both
-grids. So on `feature/launch-v1` **every row is reachable via "Show more"**, and
-`.range()` replaces `.limit()` in both grids.
+grids. So on `feature/launch-v1` **every row is reachable via "Show more"**:
+neither grid carries a `.limit()`; both page with `.range()`. (Stated that way
+deliberately — reading only the merged branch you will find no `.limit()`
+anywhere, so "replaces `.limit()`" describes a moment, not the tree.)
 
 Two things to carry rather than re-derive. `splitBrowsePage()` over-fetches ONE
 probe row (`BROWSE_FETCH_LIMIT = BROWSE_PAGE_SIZE + 1`) and answers
@@ -1872,3 +1874,25 @@ is the off-by-one PR #81 still carries and which offers "Show more" with nothing
 behind it when the total is an exact multiple of the page size. And the next
 offset is the RENDERED count, not the fetched count, so the probe row leaves no
 gap. Reuse `lib/browse.ts`; do not write a third copy of this.
+
+## A test can "pin" an invariant it never touches — check the fixture, not the title
+ENG-960 shipped a test titled *"INVARIANT: the pager can never outlive its
+roster"* whose comment said hoisting the Show-more button out of the
+`horses.length > 0` render gate would red it. It did not: the fixture supplied
+ZERO rows, so `splitBrowsePage` returned `hasMore: false` and the inner
+`{hasMore && (<button>)}` satisfied "no Show more" on its own, whatever the
+outer gate said. Deleting `horses.length > 0` left the whole 1367-test suite
+green. Renaming the test moved the false claim; it did not repair it.
+
+The shape to watch for: **an assertion satisfied by an inner guard tells you
+nothing about the outer one.** A negative assertion ("X is absent") is
+especially prone to this — absence is over-determined, so any one of several
+guards can produce it while the test appears to name a specific one. Fixing it
+meant asserting the gate's OWN effect (with no rows the `.onboarding-grid-web`
+container does not render at all), which is not reachable via `hasMore`.
+
+Corollary, learned the same day on the same file: **union protects the append;
+it does not keep the content true.** `.rx/gotchas.md` is `merge=union`, so a
+paragraph that was true when written lands verbatim on the launch branch long
+after it went stale. When you touch this file, re-read the paragraphs AROUND
+your edit and check they are still true of the merged tree — do not only append.
