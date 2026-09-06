@@ -213,7 +213,8 @@ describe("Next charge + intro change-over", () => {
     const next = screen.getByTestId("next-charge");
     expect(next.textContent).toMatch(/A\$9\.00 on /);
     const change = screen.getByTestId("change-over");
-    expect(change.textContent).toMatch(/A\$19\.00 from /);
+    expect(change.textContent).toMatch(/A\$19\.00 per month/);
+    expect(change.textContent).not.toMatch(/ from /);
     expect(pricesRetrieve).toHaveBeenCalledWith("price_standard");
     expect(couponsRetrieve).toHaveBeenCalledWith("intro_5");
   });

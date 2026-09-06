@@ -31,7 +31,9 @@ import { ok, UNAUTH, fail } from "@/lib/api/envelope";
 // The list price is NEVER hardcoded — `STRIPE_PRICE_ID_STANDARD` is retrieved
 // on every request and echoed as `unitAmount`/`currency`. The discount is
 // reported separately (`discountAmount` / `amountDueNow`) so the screen can
-// honestly say both "A$9.00 today" and "A$19.00 from March".
+// honestly say both "A$9.00 today" and "then A$19.00". The change-over is
+// remaining discounted invoices, not a calendar date — a cancel-and-return
+// path would make any printed month wrong.
 //
 // The card never touches our server (.rx/guardrails.md #4): we only create
 // Stripe objects here and hand back a clientSecret for the FE to confirm inline.
@@ -149,28 +151,6 @@ function idempotencyKey(scope: string, appUserId: string, body: unknown): string
   const digest = createHash("sha256").update(JSON.stringify(body)).digest("hex").slice(0, 16);
   const bucket = Math.floor(Date.now() / IDEMPOTENCY_BUCKET_MS);
   return `eng582-${scope}-${appUserId}-${bucket}-${digest}`;
-}
-
-// "March 2027" — the first month the member is charged the list price, in
-// Australia/Sydney. Remaining intro months are calendar months from now.
-export function introPriceChangeLabel(remaining: number, nowMs: number): string | null {
-  if (remaining <= 0) return null;
-  const parts = new Intl.DateTimeFormat("en-AU", {
-    timeZone: "Australia/Sydney",
-    year: "numeric",
-    month: "numeric",
-  }).formatToParts(new Date(nowMs));
-  const year = Number(parts.find((p) => p.type === "year")?.value);
-  const month = Number(parts.find((p) => p.type === "month")?.value);
-  if (!Number.isFinite(year) || !Number.isFinite(month)) return null;
-  const idx = month - 1 + remaining;
-  const y = year + Math.floor(idx / 12);
-  const m = ((idx % 12) + 12) % 12;
-  return new Intl.DateTimeFormat("en-AU", {
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(Date.UTC(y, m, 1)));
 }
 
 export async function POST() {
@@ -477,7 +457,9 @@ export async function POST() {
       amountDueNow,
       currency,
       introMonthsRemaining: remaining,
-      priceChangesOn: introPriceChangeLabel(remaining, Date.now()),
+      // Never a calendar month: remaining intro months are paid invoices, and
+      // a gap between subscriptions would make any derived date a lie.
+      priceChangesOn: null,
       subscriptionId: subscription.id,
     });
   } catch (err) {

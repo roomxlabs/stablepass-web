@@ -1187,7 +1187,7 @@ describe("ENG-1027 — the intro coupon is chosen server-side", () => {
     expect(body.data.discountAmount).toBe(1000);
     expect(body.data.amountDueNow).toBe(900);
     expect(body.data.introMonthsRemaining).toBe(6);
-    expect(body.data.priceChangesOn).toBe("March 2027");
+    expect(body.data.priceChangesOn).toBeNull();
   });
 
   it("used 2 → coupon intro_4, amountDueNow 900", async () => {

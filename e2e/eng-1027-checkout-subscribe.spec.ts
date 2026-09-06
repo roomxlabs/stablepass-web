@@ -101,7 +101,8 @@ test("ENG-1027 checkout — intro subscribe states recurring charge and the pric
     await expect(page.getByText("Order summary")).toBeVisible();
     await expect(page.getByText("Subscription · monthly")).toBeVisible();
     await expect(page.getByText("Introductory pricing")).toBeVisible();
-    await expect(page.getByText(/A\$9\.00 today, then A\$19\.00 from March 2027/)).toBeVisible();
+    await expect(page.getByText(/A\$9\.00 today, then A\$19\.00/)).toBeVisible();
+    await expect(page.getByText(/from March 2027/)).toHaveCount(0);
     await expect(page.getByText(/renews monthly/i)).toBeVisible();
     await expect(page.getByRole("button", { name: "Subscribe · A$9.00" })).toBeVisible();
     await expect(page.getByText("30 days of full access")).toHaveCount(0);
