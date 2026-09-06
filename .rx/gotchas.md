@@ -1642,14 +1642,33 @@ SECOND argument, and `fetch.mock.calls` then records `[url, undefined]`. That br
 Branch on `init === undefined` and call `fetch(input)` — a drop-in wrapper has to be
 indistinguishable from `fetch` at the call site.
 
-## FIVE screens hold their own `bookmarked`, not four
-`explore-feed`, `following-screen`, `saved-feed`, `trainers/[id]/trainer-posts` and
-`horses/[id]/horse-posts`. Tickets citing "the four feed screens" predate the horse
-profile feed. They now all subscribe to `lib/feed/bookmark-store.ts`; emit ONLY after a
-confirmed write (each screen rolls its own optimistic state back on failure, so an
-optimistic emit would desync every other screen with no rollback). Saved is the odd one
-out: list MEMBERSHIP changes there, so it drops a card on an unsave and refetches page 1
-on a save made elsewhere.
+## Member nav is plain `<a>`, so EVERY screen change is a full page load (ENG-961)
+`app/(member)/sidebar.tsx` renders `<a href>`, not `next/link` — there is no
+`next/link` import anywhere in the member shell. So navigating Explore -> Saved ->
+a profile tears down the document and the JS heap, and the destination screen
+re-runs its server component and re-fetches from scratch.
+
+Two consequences worth knowing before building anything "cross-screen":
+
+1. **A module-level store/bus/cache CANNOT carry state between member screens.**
+   It does not survive the reload. ENG-961 originally ported mobile's
+   `subscribeBookmarkChanges` bus for cross-surface bookmark sync; it was inert on
+   web and was removed before merge. The mobile precedent transfers badly because
+   React Navigation keeps sibling tab screens MOUNTED, so a module-level Set
+   reaches them — App Router with plain anchors never does. The five screens
+   holding their own `bookmarked` (explore-feed, following-screen, saved-feed,
+   trainers/[id]/trainer-posts, horses/[id]/horse-posts) are never co-mounted:
+   one feed per route, no parallel/intercepting routes.
+
+2. **"Screen A does not reflect a change made on screen B" is usually NOT a bug
+   here** — each screen re-reads its own `bookmark`/`reaction`/`follow` rows on
+   mount, so the reload already shows fresh state. Reproduce such a report against
+   the running app before building a sync mechanism for it.
+   `e2e/eng-961-bookmark-journey.spec.ts` pins the real behaviour end to end
+   (save on a horse profile -> sidebar link -> the card is on /saved).
+
+If the shell ever moves to `next/link`, both points flip — revisit anything that
+relies on the reload.
 
 ## The web onboarding mockup is horses-only "Step 1 of 2" — there is no trainer step
 `06-stage1-design/mockups/web/screens/05-onboarding.html` has ONE step (pick horses,

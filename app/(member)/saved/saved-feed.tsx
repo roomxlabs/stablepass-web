@@ -16,7 +16,6 @@ import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@
 import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
 import type { FeedPost, ReactionEmoji } from "@/components/types";
 import { apiFetch } from "@/lib/api/client";
-import { emitBookmarkChange, subscribeBookmarkChanges } from "@/lib/feed/bookmark-store";
 
 const LIMIT = 10;
 
@@ -194,32 +193,6 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
     }
   }
 
-  // Cross-surface bookmark sync (ENG-961). Saved is the one screen where the
-  // list MEMBERSHIP changes, not just an icon:
-  //   - unsaved elsewhere -> drop the card, it no longer belongs here.
-  //   - saved elsewhere   -> the post belongs here now, but its enriched row
-  //     (horse, trainer, signed media) lives on the screen that saved it, so
-  //     refetch the first page rather than synthesise a half-populated card.
-  // `postsRef` avoids a stale closure without resubscribing on every render.
-  const postsRef = useRef<FeedPost[]>([]);
-  useEffect(() => {
-    postsRef.current = posts;
-  }, [posts]);
-
-  useEffect(
-    () =>
-      subscribeBookmarkChanges((postId, bookmarked) => {
-        if (!bookmarked) {
-          setPosts((prev) => prev.filter((p) => p.id !== postId));
-          return;
-        }
-        if (postsRef.current.some((p) => p.id === postId)) return;
-        setCursor(null);
-        void fetchPage(null);
-      }),
-    [fetchPage],
-  );
-
   // Unsave — on the Saved screen this REMOVES the card (it's no longer saved).
   async function unsave(postId: string) {
     const idx = posts.findIndex((p) => p.id === postId);
@@ -237,10 +210,7 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
         next.splice(Math.min(idx, next.length), 0, removed);
         return next;
       });
-      return;
     }
-    // Confirmed write — tell the other feed screens (ENG-961).
-    emitBookmarkChange(postId, false);
   }
 
   async function play(postId: string) {

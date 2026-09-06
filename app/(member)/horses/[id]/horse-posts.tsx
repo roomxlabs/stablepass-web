@@ -14,7 +14,6 @@ import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@
 import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
 import type { FeedPost, ReactionEmoji } from "@/components/types";
 import { apiFetch } from "@/lib/api/client";
-import { emitBookmarkChange, subscribeBookmarkChanges } from "@/lib/feed/bookmark-store";
 
 type PostRow = PostIntrinsicRow;
 type ReactionRow = { post_id: string; emoji: ReactionEmoji };
@@ -126,20 +125,6 @@ export function HorsePosts({ horseId, horseName, trainerName, stableName = null,
     }
   }
 
-  // Cross-surface bookmark sync (ENG-961) — a save/unsave confirmed on ANY
-  // feed screen patches this screen's copy, so the icon no longer goes stale
-  // until a reload. Listener only patches local state; it never writes back,
-  // so there is no echo between screens.
-  useEffect(
-    () =>
-      subscribeBookmarkChanges((postId, bookmarked) => {
-        setPosts((prev) =>
-          prev.map((p) => (p.id === postId ? { ...p, bookmarked } : p)),
-        );
-      }),
-    [],
-  );
-
   async function bookmark(postId: string) {
     const target = posts.find((p) => p.id === postId);
     if (!target) return;
@@ -155,10 +140,7 @@ export function HorsePosts({ horseId, horseName, trainerName, stableName = null,
 
     if (bookmarkError) {
       setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, bookmarked: prevBookmarked } : p)));
-      return;
     }
-    // Confirmed write — tell the other feed screens (ENG-961).
-    emitBookmarkChange(postId, nextBookmarked);
   }
 
   async function play(postId: string) {
