@@ -98,6 +98,10 @@ export function AccountForms({
     // account was used on another device (ENG-961).
     suppressEviction();
     await supabaseBrowser().auth.signOut();
+    // Re-arm AFTER the await settles. The window is a deadline, not a flag, and
+    // auth-js has no request timeout — a slow signOut would otherwise burn the
+    // whole window before the straggler 401s it exists to cover even arrive.
+    suppressEviction();
     router.push("/signin");
     router.refresh();
   }
