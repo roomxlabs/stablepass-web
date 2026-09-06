@@ -88,12 +88,58 @@ describe("POST /api/auth/signup", () => {
     expect(body.data.subscription.trialEndsAt).toBeNull();
   });
 
+  // The `?? "lapsed"` fallback, which mockSuccess() can never reach because it
+  // always returns a row. ENG-999 dropped 'trial' from subscription_status_check
+  // entirely, so the fallback this route used to carry named a status the
+  // database can no longer hold; without this test, mutating it back to "trial"
+  // stays green. The read is `maybeSingle`, so `{ data: null }` is a shape the
+  // route genuinely has to survive (signup with email confirmation turned on,
+  // per the comment above the reads).
+  it("falls back to lapsed, not trial, when the subscription row is not readable yet", async () => {
+    signUpMock.mockResolvedValue({
+      data: { user: { id: "u1", identities: [{}] } },
+      error: null,
+    });
+    maybeSingleMock
+      .mockResolvedValueOnce({ data: { id: "u1", first_name: "Justin", last_name: "Alpar", name: "Justin Alpar", email: "jo@example.com" } })
+      .mockResolvedValueOnce({ data: null });
+
+    const res = await POST(req(VALID_BODY));
+    const body = await res.json();
+
+    expect(res.status).toBe(201);
+    expect(body.data.subscription.status).toBe("lapsed");
+    expect(body.data.subscription.trialEndsAt).toBeNull();
+  });
+
   // ENG-1003 retired the trial, so a duplicate email is no longer a dead end —
   // it is a plain "you already have an account, sign in".
   it("returns 409 account_exists when signUp errors with the user_already_exists code", async () => {
     signUpMock.mockResolvedValue({
       data: {},
       error: { code: "user_already_exists", message: "User already registered", status: 422 },
+    });
+
+    const res = await POST(req(VALID_BODY));
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.error.code).toBe("account_exists");
+    expect(body.error.message).toBe(
+      "You already have an account with that email — sign in to continue.",
+    );
+  });
+
+  // The THIRD detection path, and the reason it is still here. route.ts checks
+  // the stable `code` first, but keeps `/already registered/i` as the fallback
+  // "for older GoTrue builds that send no code" — builds we cannot reproduce
+  // locally. Delete this test and that regex becomes dead code by accident: a
+  // mutation removing it stays green, and the email half of the wall silently
+  // demotes to a generic 400 on exactly the deployments the fallback exists for.
+  it("returns 409 account_exists when signUp errors with 'already registered' and NO code", async () => {
+    signUpMock.mockResolvedValue({
+      data: {},
+      error: { message: "User already registered", status: 422 },
     });
 
     const res = await POST(req(VALID_BODY));
@@ -121,20 +167,20 @@ describe("POST /api/auth/signup", () => {
 
   // The `phone_in_use` pre-check (ENG-763) is gone: there is no trial left to
   // ration, so a duplicate phone is no longer refused at all.
-  it("never calls the phone_in_use RPC on the happy path", async () => {
+  //
+  // Note what this asserts and why it is ONE test, not two. A pure
+  // "the RPC was not called" assertion is a tautology once the call site is
+  // deleted — it cannot fail, and it does not prove the criterion it is written
+  // for ("a repeat phone now creates an account normally"). So the 201 is the
+  // positive control: together the two assertions say the signup went all the
+  // way through AND took no detour through the database to get there. The
+  // phone is deliberately spelled the way the old wall's fixture number was.
+  it("signs a duplicate-phone-shaped payload up normally, without consulting phone_in_use", async () => {
     mockSuccess();
 
-    await POST(req(VALID_BODY));
+    const res = await POST(req({ ...VALID_BODY, phone: "0400 000 000" }));
 
-    expect(rpcMock).not.toHaveBeenCalled();
-  });
-
-  it("never calls the phone_in_use RPC even for a duplicate-phone-shaped payload", async () => {
-    mockSuccess();
-
-    await POST(req({ ...VALID_BODY, phone: "0400 000 000" }));
-
-    expect(rpcMock).not.toHaveBeenCalledWith("phone_in_use", expect.anything());
+    expect(res.status).toBe(201);
     expect(rpcMock).not.toHaveBeenCalled();
   });
 

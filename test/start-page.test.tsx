@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -12,7 +12,13 @@ import { resolve } from "node:path";
 // mocks they close over have to come from vi.hoisted (same convention as
 // test/account-page.test.tsx's fromMock).
 const { getUserMock, redirectMock } = vi.hoisted(() => ({
-  getUserMock: vi.fn(async () => ({ data: { user: null } })),
+  // Typed explicitly rather than inferred from the default implementation: an
+  // inferred `async () => ({ data: { user: null } })` fixes `user` at `null`,
+  // and the signed-in test below then cannot hand it a user without tripping
+  // tsc. The nullable union is also the shape auth.getUser() genuinely returns.
+  getUserMock: vi.fn<() => Promise<{ data: { user: { id: string } | null } }>>(
+    async () => ({ data: { user: null } }),
+  ),
   redirectMock: vi.fn(),
 }));
 
@@ -31,6 +37,12 @@ vi.mock("next/navigation", () => ({
 import StartPage from "@/app/start/page";
 
 describe("/start page", () => {
+  beforeEach(() => {
+    getUserMock.mockReset();
+    getUserMock.mockResolvedValue({ data: { user: null } });
+    redirectMock.mockReset();
+  });
+
   it("renders the TrialStartForm for a signed-out visitor", async () => {
     render(await StartPage());
 
@@ -48,6 +60,20 @@ describe("/start page", () => {
 
     expect(screen.getByRole("heading", { name: "Create your account." })).toBeInTheDocument();
     expect(screen.queryByText(/already had your free trial/i)).not.toBeInTheDocument();
+  });
+
+  // The signed-in redirect is the ONE piece of behaviour on this page that this
+  // ticket did not change, and until this test existed nothing anywhere covered
+  // it: deleting `if (user) redirect("/explore")` outright left the whole suite
+  // green. It matters more after ENG-1003, not less — /start now leads to
+  // /checkout, so a signed-in member who lands here without the redirect is
+  // walked into creating a second account.
+  it("redirects a signed-in visitor to /explore instead of rendering the form", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
+
+    await StartPage();
+
+    expect(redirectMock).toHaveBeenCalledWith("/explore");
   });
 
   it("takes no searchParams prop and imports no wall — the page component reads neither", async () => {
