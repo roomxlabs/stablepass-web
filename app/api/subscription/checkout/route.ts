@@ -343,19 +343,81 @@ export async function POST() {
       const base = Math.max(Number.isNaN(currentEndMs) ? Date.now() : currentEndMs, Date.now());
       const newPeriodEnd = Math.floor((base + THIRTY_DAYS_MS) / 1000);
 
-      // KNOWN GAP, deliberately NOT closed by ENG-1001 (whose surface is the price
-      // choice, not the renewal race). Branch A has two defences against creating
-      // a duplicate — the `subscriptions.list` reuse lookup for the SEQUENTIAL
-      // race and an `idempotencyKey` for the CONCURRENT one. Branch B has
-      // neither: two tabs, or a StrictMode double-effect, produce two full-price
-      // PaymentIntents carrying the SAME absolute `new_period_end`, so confirming
-      // both is two charges for one 30-day extension. The Pay button disables on
-      // first click (checkout-form.tsx) but that only covers a single tab.
+      // Branch A has two defences against creating a duplicate — the
+      // `subscriptions.list` reuse lookup for the SEQUENTIAL race and an
+      // `idempotencyKey` for the CONCURRENT one. Branch B had NEITHER: two tabs, or
+      // a StrictMode double-effect, produced two full-price PaymentIntents carrying
+      // the same absolute `new_period_end`, so confirming both was two charges for
+      // one 30-day extension. The Pay button disables on first click
+      // (checkout-form.tsx) but that only ever covered a single tab.
       //
-      // Pre-existing, but ENG-1001 raises the stakes: the amount went from a
-      // sandbox A$1 to a real A$9/A$19. Naming it here rather than fixing it
-      // out-of-scope — see the ENG-1001 PR and its follow-up ticket.
-      const intent = await stripe.paymentIntents.create({
+      // ENG-1007 closes the CONCURRENT race with the key — the same defence Branch
+      // A relies on for that case. It is deliberately NOT full parity: Branch A also
+      // has the `subscriptions.list` reuse lookup for the SEQUENTIAL race, and
+      // Branch B still has no equivalent, so the key is the only thing standing
+      // here. A `paymentIntents.list`-and-adopt is the real second defence and is
+      // left to a follow-up: adopting someone's existing intent safely needs the
+      // same rigour Branch A's adopt path carries below (five separate
+      // re-assertions — price, quantity, metadata, cancel_at_period_end), which is
+      // a bigger design change than this bug's remit.
+      //
+      // The params are hoisted into a named const so the digest is taken over the
+      // EXACT object sent to Stripe. That matters: Stripe rejects a reused key whose
+      // parameters differ (`idempotency_error`), so a digest that drifted from the
+      // payload would turn this fix into a 502. Digesting them also gives each
+      // distinct charge its own key, which is what makes the collapse safe:
+      //  * `amount`/`currency` — a member who crosses the promo threshold between
+      //    two visits inside one bucket gets a fresh key rather than a replayed
+      //    promo-priced intent (the Branch A note above, applied here);
+      //  * `customer` — never collides across members (the key is user-scoped too);
+      //  * `metadata.new_period_end` — the absolute extension. Two tabs on the same
+      //    unchanged row derive the same value, so they collapse; once the first
+      //    payment has landed and the webhook has advanced `current_period_end`, a
+      //    genuine SECOND top-up derives a different value and is correctly allowed
+      //    through rather than swallowed.
+      //
+      // The scope is `"renewal"` — distinct from Branch A's `"subscription"` and
+      // from `"customer"` — so the branches can never hand Stripe the same key for
+      // the same member in the same bucket.
+      //
+      // TWO RESIDUAL GAPS, both deliberately left open (ENG-1007). Naming them in
+      // full because a partial list of known holes is worse than none — a later
+      // reader will otherwise take this as the complete set.
+      //
+      // (1) The stale-period-end window. The collapse relies on `new_period_end`
+      // being stable between two tabs, which holds whenever it is anchored to the
+      // stored `current_period_end`. It does NOT hold when an `active` row carries a
+      // null / unparseable / already-past one: the `Date.now()` fallback above then
+      // advances, so two requests landing in different SECONDS (the value is floored
+      // to 1s) derive different params and different keys, and both intents are
+      // created. A StrictMode double-effect still collapses; two hand-opened tabs
+      // may not.
+      //   Do NOT read that as "corrupt data only". `lib/api/access.ts` treats
+      //   `active` with a past `current_period_end` as a ROUTINE state — status is
+      //   flipped when the be webhook lands, not at expiry, and ENG-585 shipped a
+      //   user-visible bug in exactly that window. So the uncovered population is
+      //   expired-active members mid-webhook — plausibly the most motivated Branch B
+      //   visitors of all, since they are the ones clicking "pay again".
+      //   It is still left open, because every cheap close is worse: quantising the
+      //   fallback onto the bucket grid was tried and REVERTED (it moves a
+      //   money-bearing date by up to 10 minutes and breaks the separately-tested
+      //   guarantee that the fallback extends from NOW, never from a stale date),
+      //   and quantising only the DIGEST while sending the true params is worse
+      //   still — same key, different params is the one thing Stripe hard-rejects
+      //   (`idempotency_error`), turning a rare double charge into a deterministic
+      //   502 for members already in a bad state. The other option — refusing Branch
+      //   B outright on a stale row — is a product decision, not a bug fix.
+      //
+      // (2) The bucket boundary. Two requests milliseconds apart can still straddle
+      // a 10-minute bucket edge, get different keys, and both charge. Inherited from
+      // the shared helper above; Branch A survives it because `subscriptions.list`
+      // catches the sequential case, and Branch B has no such lookup (see above).
+      //
+      // Both are strictly narrower than what shipped before this change, which had
+      // NO protection for ANY member. Neither is closed here rather than smuggling a
+      // charge-semantics change into a bug fix — the same discipline ENG-1001 used
+      // when it found this very gap and documented it instead.
+      const intentCreateParams: Stripe.PaymentIntentCreateParams = {
         amount: unitAmount,
         currency,
         customer: customerId,
@@ -367,6 +429,9 @@ export async function POST() {
           kind: "renewal",
           new_period_end: String(newPeriodEnd),
         },
+      };
+      const intent = await stripe.paymentIntents.create(intentCreateParams, {
+        idempotencyKey: idempotencyKey("renewal", user.id, intentCreateParams),
       });
 
       // DO NOT re-add a `sb.from("subscription").update(...)` here. It was

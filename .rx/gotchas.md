@@ -1525,3 +1525,36 @@ phone now creates an account normally"). Pair every "X is no longer called" asse
 the positive control in the same test — assert the 201 as well — or the test file grows
 green assertions that measure nothing. Same for `not.toHaveBeenCalledWith(...)` sitting
 above `not.toHaveBeenCalled()`: the second strictly subsumes the first.
+
+## `active` + PAST `current_period_end` is a ROUTINE state, not corrupt data
+`lib/api/access.ts` `hasAccess()` returns entitlement for `active`/`canceled` purely on
+the date: status is flipped when the be `stripe-webhook` lands, **not** at expiry. So an
+`active` row routinely outlives its `current_period_end` (ENG-585 shipped a user-visible
+bug in exactly that window). Any ticket reasoning about "an active member" must decide
+what it does in that window — do not write it off as an upstream data problem. It bit
+ENG-1007, where it is the difference between a rare edge case and the most motivated
+users of the early-renewal path.
+
+## Checkout Branch B's `newPeriodEnd` fallback is CONTRACTED — do not quantise it
+`test/subscription-routes.test.ts` asserts "a PAST current_period_end falls back to now —
+never extends from a stale date" against the **real clock** with a ±5s tolerance. Rounding
+that fallback onto any grid (e.g. `IDEMPOTENCY_BUCKET_MS`, to stabilise an idempotency
+digest) shifts a money-bearing date and fails that test non-deterministically — it passes
+only when wall-clock happens to sit near a bucket boundary. Related trap: quantising only
+the DIGEST while sending the true params is worse, not better — same key + different params
+is precisely what Stripe rejects (`idempotency_error`), turning a rare double charge into a
+deterministic 502.
+
+## A frozen-clock idempotency test cannot fail
+`vi.setSystemTime()` with no advance makes any deterministic key implementation pass —
+including a broken one that digests `Date.now()` straight in. For "two tabs" races, always
+`vi.advanceTimersByTime(...)` between the two calls, and start **mid-bucket** (e.g.
+`T00:03:00Z`) since a round time like `T00:00:00Z` sits exactly on the 10-minute boundary
+and the advance would straddle it. Caught in ENG-1007 review, not by the green suite.
+
+## `toHaveBeenCalledWith` is arity-exact — adding an options arg breaks callers
+Adding a second argument to a mocked Stripe call (e.g. `paymentIntents.create(params,
+{ idempotencyKey })`) fails every existing `toHaveBeenCalledWith(objectContaining(...))`
+single-arg assertion, even though the first arg still matches. Assertions that index
+`.mock.calls[n][0]` are unaffected. Expect to update a handful of pre-existing tests; it
+is a forced mechanical edit, not a regression.
