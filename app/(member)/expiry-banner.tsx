@@ -83,18 +83,26 @@ export function expiryMessage(days: number): string {
 /**
  * The date this member is counting down to, or null when no banner is due.
  *
- * `endsAt` follows the STATUS, not "whichever date happens to be set": a trial
- * member counts down to `trial_ends_at`, everyone else to `current_period_end`.
- * An `active` member whose period end has not landed yet (the Stripe webhook is
- * in flight) therefore gets NO banner rather than a wrong one — `hasAccess`
- * deliberately treats that null as access-granting, and a null end is not an
- * imminent end.
+ * It is ALWAYS `current_period_end` now. This used to branch on the status — a
+ * trial member counted down to `trial_ends_at` — but ENG-999 retired the trial,
+ * so there is one paid period and one date that ends it. The branch is gone
+ * rather than left as an unreachable arm.
+ *
+ * A member whose period end has not landed yet (the Stripe webhook is in
+ * flight) gets NO banner rather than a wrong one — `hasAccess` deliberately
+ * treats that null as access-granting, and a null end is not an imminent end.
+ *
+ * A CANCELLED member inside their paid period does get the countdown, and that
+ * is correct: ENG-999 grants them access to `current_period_end` exactly like
+ * an uncancelled one, their access really is ending on that date, and "Renew
+ * now" is a real thing they can still do (the pass is bought outright, so
+ * buying another is always open). Cancelling silences nothing.
  */
 export function expiryEndsAt(sub: AccessRow | null, now: number = Date.now()): string | null {
-  // The shared gate decides entitlement — lapsed/canceled/expired all fall out
-  // here, and none of that logic is restated below.
+  // The shared gate decides entitlement — lapsed/expired fall out here, and
+  // none of that logic is restated below.
   if (!hasAccess(sub, now)) return null;
-  return sub!.status === "trial" ? sub!.trial_ends_at : sub!.current_period_end;
+  return sub!.current_period_end;
 }
 
 // ── Reading the dismissal without a setState-in-effect ──────────────────────

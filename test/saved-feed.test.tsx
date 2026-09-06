@@ -60,9 +60,10 @@ function bookmarkBuilder() {
 }
 
 beforeEach(() => {
-  // Not-gated default: an in-flight trial (future `trial_ends_at`) — matches the
-  // pre-ENG-585 default of `subStatus = "trial"` under the old status-only check.
-  subRow = { status: "trial", trial_ends_at: "2099-01-01T00:00:00.000Z", current_period_end: null };
+  // Not-gated default: an active row with a future `current_period_end`.
+  // ENG-999 retired the trial (a `trial` row is no longer entitled at all),
+  // so the not-gated default moved from `status: "trial"` to `status: "active"`.
+  subRow = { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00.000Z" };
   bookmarkData = BOOKMARKS;
   bookmarkError = null;
   bookmarkDeleteError = null;

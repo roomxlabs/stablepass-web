@@ -72,7 +72,7 @@ describe("GET /api/trainers/:id", () => {
     // in a private bucket. Returning it raw makes the browser resolve it as a
     // RELATIVE url (/trainers/<id>/ilham-....jpg) and the image silently 404s.
     getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
     tableData.trainer = {
       data: {
         id: "t1", name: "Ilham", display_name: null, stable_name: null,
@@ -107,7 +107,7 @@ describe("GET /api/trainers/:id", () => {
 
   it("returns 402 when the trial has expired even though status is still trial", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2020-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2020-01-01T00:00:00Z" } };
     const res = await GET(new Request("http://localhost/api/trainers/t1"), params("t1"));
     expect(res.status).toBe(402);
     expect((await res.json()).error.code).toBe("subscription_required");
@@ -123,7 +123,7 @@ describe("GET /api/trainers/:id", () => {
 
   it("selects the expiry columns, not just status", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
     tableData.trainer = { data: null };
     await GET(new Request("http://localhost/api/trainers/t1"), params("t1"));
     expect(subSelectMock).toHaveBeenCalledWith("status,trial_ends_at,current_period_end");
@@ -131,7 +131,7 @@ describe("GET /api/trainers/:id", () => {
 
   it("returns 404 not_found when there is no matching trainer row (never 403)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
     tableData.trainer = { data: null };
     const res = await GET(new Request("http://localhost/api/trainers/t1"), params("t1"));
     expect(res.status).toBe(404);
@@ -140,7 +140,7 @@ describe("GET /api/trainers/:id", () => {
 
   it("returns 200 with trainer + derived stats (Horses/Updates/Wins) + horses", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
     tableData.trainer = {
       data: {
         id: "t1",
@@ -244,7 +244,7 @@ describe("GET /api/trainers/:id/feed", () => {
 
   it("returns 402 when the trial has expired even though status is still trial", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2020-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2020-01-01T00:00:00Z" } };
 
     const res = await trainerFeedGET(new Request("http://localhost/api/trainers/t1/feed"), params("t1"));
     const body = await res.json();
@@ -266,7 +266,7 @@ describe("GET /api/trainers/:id/feed", () => {
 
   it("returns 200 with the trainer's published posts when entitled", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
     tableData.post = { data: [{ id: "p1" }] };
 
     const res = await trainerFeedGET(new Request("http://localhost/api/trainers/t1/feed"), params("t1"));
@@ -278,7 +278,7 @@ describe("GET /api/trainers/:id/feed", () => {
 
   it("selects the expiry columns, not just status", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
     tableData.post = { data: [] };
 
     await trainerFeedGET(new Request("http://localhost/api/trainers/t1/feed"), params("t1"));
@@ -292,7 +292,7 @@ describe("GET /api/trainers/:id/feed", () => {
   // would silently strip the ratio.
   it("selects aspect_ratio on the post feed", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
     tableData.post = { data: [] };
 
     await trainerFeedGET(new Request("http://localhost/api/trainers/t1/feed"), params("t1"));
@@ -310,7 +310,7 @@ describe("GET /api/trainers/:id/feed", () => {
   // at runtime. Pinning the exact string is the only way to catch either.
   it("pins the EXACT post projection — it is load-bearing in both directions", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
     tableData.post = { data: [] };
 
     await trainerFeedGET(new Request("http://localhost/api/trainers/t1/feed"), params("t1"));

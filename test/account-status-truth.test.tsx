@@ -15,6 +15,12 @@ import { render, screen } from "@testing-library/react";
 // who has just paid and whose Stripe webhook has not landed yet. ENG-566,
 // ENG-577 and ENG-582 each had to get this same null right one layer down;
 // rendering it as expired would lock the screen against a paying member.
+//
+// ENG-999 retired the free trial (there is no trial wording anywhere on this
+// screen any more) and ENG-1002 made `canceled` an ENTITLED status: a
+// cancelled member keeps the days they already paid for, so this file's
+// matrix now covers `canceled` alongside `active`/`lapsed` rather than a
+// third `trial` state.
 
 const DAY = 24 * 60 * 60 * 1000;
 const future = new Date(Date.now() + 10 * DAY).toISOString();
@@ -87,6 +93,13 @@ function statusValue(): string {
   return value?.textContent ?? "";
 }
 
+/** The inline colour React wrote onto the pill — asserted as a literal string. */
+function statusColour(): string {
+  const label = screen.getByText("Status");
+  const value = label.parentElement?.querySelector(".value") as HTMLElement | null;
+  return value?.style.color ?? "";
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -101,7 +114,7 @@ describe("Account status — the entitlement matrix", () => {
 
   // THE REGRESSION. This case fails against the pre-ENG-585 code, which
   // returned "Active" here.
-  it("active + PAST period end → NOT Active, and no past date sold as current access", async () => {
+  it("active + PAST period end → Ended, and no past date sold as current access", async () => {
     await renderAccount({ status: "active", trial_ends_at: null, current_period_end: past });
 
     expect(statusValue()).toBe("Ended");
@@ -126,42 +139,28 @@ describe("Account status — the entitlement matrix", () => {
     expect(screen.getByRole("link", { name: "Extend access" })).toBeInTheDocument();
   });
 
-  it("trial + FUTURE end → Trial · N days left (unchanged)", async () => {
-    await renderAccount({ status: "trial", trial_ends_at: future, current_period_end: null });
-    expect(statusValue()).toMatch(/^Trial · \d+ days left$/);
-    expect(screen.getByText("Trial — full access")).toBeInTheDocument();
+  // ENG-1002: `canceled` is now an ENTITLED status while inside its paid
+  // period. The pill must say so WITHOUT reading as "everything is fine" —
+  // hence a distinct label, still in the entitled (green) colour.
+  it("canceled + FUTURE period end → 'Access ending' (still entitled, not the red Ended colour)", async () => {
+    await renderAccount({ status: "canceled", trial_ends_at: null, current_period_end: future });
+
+    expect(statusValue()).toBe("Access ending");
+    expect(statusColour()).not.toBe("var(--red)");
+    expect(screen.getByText("30-day pass")).toBeInTheDocument();
+    expect(document.body.textContent).toMatch(/continues to /);
+    expect(document.body.textContent).toMatch(/will not continue/);
   });
 
-  it("trial + PAST end → reads as ended, with no 'days left' and no negative count", async () => {
-    await renderAccount({ status: "trial", trial_ends_at: past, current_period_end: null });
-    expect(statusValue()).toBe("Trial ended");
-    expect(statusValue()).not.toMatch(/days left/);
-    expect(statusValue()).not.toMatch(/-\d/);
-    expect(screen.getByText("No active pass")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Buy 30 days" })).toBeInTheDocument();
-  });
-
-  it("lapsed → Ended", async () => {
-    await renderAccount({ status: "lapsed", trial_ends_at: null, current_period_end: past });
-    expect(statusValue()).toBe("Ended");
-    expect(screen.queryByText(/^Access to /)).not.toBeInTheDocument();
-  });
-
-  it("canceled → Ended", async () => {
+  it("canceled + PAST period end → Ended", async () => {
     await renderAccount({ status: "canceled", trial_ends_at: null, current_period_end: past });
     expect(statusValue()).toBe("Ended");
+    expect(screen.getByText("No active pass")).toBeInTheDocument();
   });
 
-  // Not entitled does NOT mean the date has passed: `hasAccess()` denies
-  // `canceled`/`lapsed` on the status alone, and those rows can legitimately
-  // carry a FUTURE `current_period_end`. The card must not narrate a date that
-  // has not happened yet in the past tense.
-  it("canceled + FUTURE period end → never says 'Ended <a future date>'", async () => {
-    await renderAccount({ status: "canceled", trial_ends_at: null, current_period_end: future });
+  it("lapsed + past period end → Ended", async () => {
+    await renderAccount({ status: "lapsed", trial_ends_at: null, current_period_end: past });
     expect(statusValue()).toBe("Ended");
-    expect(screen.getByText("Access ended")).toBeInTheDocument();
-    expect(screen.queryByText(/^Ended \d/)).not.toBeInTheDocument();
-    // …and still never sells the future date as current access.
     expect(screen.queryByText(/^Access to /)).not.toBeInTheDocument();
   });
 
@@ -179,17 +178,71 @@ describe("Account card copy", () => {
     expect(document.body.textContent).not.toMatch(/auto-?renew/i);
   });
 
-  it("offers no cancel or payment-method affordance in any state", async () => {
+  it("offers no payment-method or reactivate affordance in any state", async () => {
     for (const sub of [
       { status: "active", trial_ends_at: null, current_period_end: future },
       { status: "active", trial_ends_at: null, current_period_end: past },
-      { status: "trial", trial_ends_at: future, current_period_end: null },
+      { status: "canceled", trial_ends_at: null, current_period_end: future },
     ]) {
       document.body.innerHTML = "";
       await renderAccount(sub);
-      expect(document.body.textContent).not.toMatch(/cancel/i);
       expect(document.body.textContent).not.toMatch(/payment method/i);
       expect(document.body.textContent).not.toMatch(/reactivate/i);
     }
+  });
+});
+
+// ENG-1002: only a member with an active row and remaining entitlement is
+// offered the Cancel control. A lapsed member has nothing to cancel (the RPC
+// would just answer 409), and an already-cancelled member must not be shown
+// it again.
+describe("Cancel control visibility", () => {
+  it("present for active + FUTURE period end", async () => {
+    await renderAccount({ status: "active", trial_ends_at: null, current_period_end: future });
+    expect(screen.getByTestId("cancel-open")).toBeInTheDocument();
+  });
+
+  it("present for active + NULL period end (webhook in flight, still entitled)", async () => {
+    await renderAccount({ status: "active", trial_ends_at: null, current_period_end: null });
+    expect(screen.getByTestId("cancel-open")).toBeInTheDocument();
+  });
+
+  it("absent for canceled + FUTURE period end", async () => {
+    await renderAccount({ status: "canceled", trial_ends_at: null, current_period_end: future });
+    expect(screen.queryByTestId("cancel-open")).not.toBeInTheDocument();
+  });
+
+  it("absent for canceled + PAST period end", async () => {
+    await renderAccount({ status: "canceled", trial_ends_at: null, current_period_end: past });
+    expect(screen.queryByTestId("cancel-open")).not.toBeInTheDocument();
+  });
+
+  it("absent for lapsed", async () => {
+    await renderAccount({ status: "lapsed", trial_ends_at: null, current_period_end: past });
+    expect(screen.queryByTestId("cancel-open")).not.toBeInTheDocument();
+  });
+
+  it("absent for a null subscription row", async () => {
+    await renderAccount(null);
+    expect(screen.queryByTestId("cancel-open")).not.toBeInTheDocument();
+  });
+});
+
+// ENG-999 retired the free trial outright — the branches were removed, not
+// left unreachable — so no state of this screen should print the word
+// "trial" anywhere any more.
+describe("No trial wording anywhere on this screen", () => {
+  it.each([
+    ["active + future", { status: "active", trial_ends_at: null, current_period_end: future }],
+    ["active + null", { status: "active", trial_ends_at: null, current_period_end: null }],
+    ["active + past", { status: "active", trial_ends_at: null, current_period_end: past }],
+    ["canceled + future", { status: "canceled", trial_ends_at: null, current_period_end: future }],
+    ["canceled + past", { status: "canceled", trial_ends_at: null, current_period_end: past }],
+    ["lapsed", { status: "lapsed", trial_ends_at: null, current_period_end: past }],
+    ["null row", null],
+  ] as const)("%s", async (_label, sub) => {
+    document.body.innerHTML = "";
+    await renderAccount(sub as Sub);
+    expect(document.body.textContent).not.toMatch(/trial/i);
   });
 });

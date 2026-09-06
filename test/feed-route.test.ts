@@ -82,7 +82,7 @@ describe("GET /api/feed", () => {
 
   it("returns 200 with the edge fn's data + meta when subscribed", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    singleMock.mockResolvedValue({ data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } });
+    singleMock.mockResolvedValue({ data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } });
     edgeFetchMock.mockResolvedValue(
       fakeRes(200, { data: [{ id: "p1" }], meta: { nextCursor: "c", hasMore: true } }),
     );
@@ -109,7 +109,7 @@ describe("GET /api/feed", () => {
 
   it("returns 400 invalid_cursor when the edge fn rejects the cursor", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    singleMock.mockResolvedValue({ data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } });
+    singleMock.mockResolvedValue({ data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } });
     edgeFetchMock.mockResolvedValue(fakeRes(400, {}));
 
     const res = await GET(req("http://localhost/api/feed?cursor=bad"));
@@ -169,7 +169,7 @@ describe("GET /api/feed", () => {
 
   it("never forwards shares= to the edge fn (Explore omits for-sale posts)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    singleMock.mockResolvedValue({ data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } });
+    singleMock.mockResolvedValue({ data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } });
     edgeFetchMock.mockResolvedValue(
       fakeRes(200, { data: [], meta: { nextCursor: null, hasMore: false } }),
     );

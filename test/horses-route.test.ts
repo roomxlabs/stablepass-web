@@ -91,7 +91,7 @@ describe("GET /api/horses/:id", () => {
     // REGRESSION: admin stores a BARE OBJECT PATH in a private bucket. Returned
     // raw, the browser resolves it as a RELATIVE url and the cover silently 404s.
     getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
     tableData.horse = {
       data: {
         id: "h1", display_name: "Kuda Ilham", racing_name: null, sire: null, dam: null,
@@ -134,7 +134,7 @@ describe("GET /api/horses/:id", () => {
 
   it("returns 402 when the trial has expired even though status is still trial", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2020-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2020-01-01T00:00:00Z" } };
 
     const res = await GET(new Request("http://localhost/api/horses/h1"), params("h1"));
     const body = await res.json();
@@ -156,7 +156,7 @@ describe("GET /api/horses/:id", () => {
 
   it("selects the expiry columns, not just status", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
     tableData.horse = { data: null };
 
     await GET(new Request("http://localhost/api/horses/h1"), params("h1"));
@@ -166,7 +166,7 @@ describe("GET /api/horses/:id", () => {
 
   it("returns 200 with the horse's displayName + stats (from the horse row) when a row exists", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
     tableData.horse = {
       data: {
         id: "h1",
@@ -210,7 +210,7 @@ describe("GET /api/horses/:id", () => {
 
   it("formats prize money at the k/M/plain thresholds", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
     tableData.race_horse = { data: [] };
 
     const base = {
@@ -245,7 +245,7 @@ describe("GET /api/horses/:id", () => {
 
   it("returns 404 not_found when there is no matching horse row (never 403)", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
     tableData.horse = { data: null };
 
     const res = await GET(new Request("http://localhost/api/horses/h1"), params("h1"));
@@ -290,7 +290,7 @@ describe("GET /api/horses/:id/feed", () => {
 
   it("returns 402 when the trial has expired even though status is still trial", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2020-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2020-01-01T00:00:00Z" } };
 
     const res = await horseFeedGET(new Request("http://localhost/api/horses/h1/feed"), params("h1"));
     const body = await res.json();
@@ -312,7 +312,7 @@ describe("GET /api/horses/:id/feed", () => {
 
   it("returns 200 with the horse's published posts when entitled", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
     tableData.post = { data: [{ id: "p1" }] };
 
     const res = await horseFeedGET(new Request("http://localhost/api/horses/h1/feed"), params("h1"));
@@ -324,7 +324,7 @@ describe("GET /api/horses/:id/feed", () => {
 
   it("selects the expiry columns, not just status", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
     tableData.post = { data: [] };
 
     await horseFeedGET(new Request("http://localhost/api/horses/h1/feed"), params("h1"));
@@ -338,7 +338,7 @@ describe("GET /api/horses/:id/feed", () => {
   // would silently strip the ratio.
   it("selects aspect_ratio on the post feed", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
     tableData.post = { data: [] };
 
     await horseFeedGET(new Request("http://localhost/api/horses/h1/feed"), params("h1"));
@@ -356,7 +356,7 @@ describe("GET /api/horses/:id/feed", () => {
   // at runtime. Pinning the exact string is the only way to catch either.
   it("pins the EXACT post projection — it is load-bearing in both directions", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
     tableData.post = { data: [] };
 
     await horseFeedGET(new Request("http://localhost/api/horses/h1/feed"), params("h1"));
@@ -400,7 +400,7 @@ describe("GET /api/horses/:id — age + description come from the database (ENG-
   /** An entitled session with no races — the 200 path. */
   function entitled() {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
     tableData.race_horse = { data: [] };
   }
 

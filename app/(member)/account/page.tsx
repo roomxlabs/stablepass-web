@@ -3,12 +3,17 @@
 // Server component under the (member) shell (auth already guarded by
 // app/(member)/layout.tsx). Reads the same subscriber/subscription/prefs shape
 // as GET /api/me directly via supabaseServer, avoiding an internal fetch — same
-// pattern as the W7 horse-profile page. The Subscription card is static (its
-// CTA just links to /checkout; W10 owns the real billing flow). The Profile +
-// Notifications forms and Sign out are the interactive AccountForms island.
+// pattern as the W7 horse-profile page. The Profile + Notifications forms and
+// Sign out are the interactive AccountForms island; the Cancel control at the
+// foot of the Subscription card is the CancelCard island (ENG-1002).
+//
+// ENG-999 retired the free trial, so there is no trial wording anywhere on this
+// screen any more — not as a pill, not as a plan name, not as a day count. The
+// branches were removed rather than left unreachable.
 import { supabaseServer } from "@/lib/supabase/server";
-import { ACCESS_COLUMNS, hasAccess } from "@/lib/api/access";
+import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
 import { AccountForms, type AccountPrefs, type AccountSubscriber } from "./account-forms";
+import { CancelCard } from "./cancel-card";
 
 export const metadata = { title: "Account · StablePass" };
 
@@ -29,13 +34,11 @@ type PrefsRow = {
   pref_race_result: boolean;
   pref_milestone: boolean;
 };
-type SubscriptionRow = { status: string; trial_ends_at: string | null; current_period_end: string | null };
-
-function trialDaysLeft(trialEndsAt: string | null): number {
-  if (!trialEndsAt) return 0;
-  const ms = new Date(trialEndsAt).getTime() - Date.now();
-  return Math.max(0, Math.ceil(ms / (24 * 60 * 60 * 1000)));
-}
+// The subscription row is typed as `AccessRow` — the type that travels WITH
+// `ACCESS_COLUMNS` — rather than a local restatement of the same three columns.
+// A local copy is how a select and its reader drift, and `sb` is untyped so
+// nothing would catch it. `trial_ends_at` is still in both because
+// `app/(member)/layout.tsx` still reads it; this screen does not.
 
 // "14 September 2026". Used only in prose about when access ends — never for a
 // countdown, which stays on the shared Math.ceil day convention above.
@@ -69,8 +72,8 @@ function formatEndDate(iso: string | null): string | null {
 //
 // A module-scope helper rather than an inline `Date.now()` in the component: the
 // repo's lint forbids calling an impure function during render, which is why
-// `trialDaysLeft` and `formatEndDate` are shaped this way too. `now` is
-// injectable for the same reason it is on `hasAccess`.
+// `formatEndDate` is shaped this way too. `now` is injectable for the same
+// reason it is on `hasAccess`.
 function hasPassed(iso: string | null, now: number = Date.now()): boolean {
   if (!iso) return false;
   const ts = Date.parse(iso);
@@ -90,25 +93,35 @@ function hasPassed(iso: string | null, now: number = Date.now()): boolean {
 // So entitlement is asked FIRST, from the shared `hasAccess()` (lib/api/access.ts,
 // ENG-569) — the same predicate the BFF, the expiry banner and the backend's
 // `has_content_access()` use. The raw status is then only allowed to choose
-// BETWEEN WORDINGS ("trial ended" vs "ended"), never to decide the answer.
+// BETWEEN WORDINGS, never to decide the answer.
 //
 // ⚠️ `current_period_end IS NULL` on an `active` row means ENTITLED, not
 // expired — that is a member who has just paid and whose Stripe webhook has not
 // landed yet. `hasAccess()` already encodes that, which is precisely why this
 // function must not re-derive it. Three tickets (ENG-566/577/582) have had to
 // get this same null right one layer down.
-function statusPill(sub: SubscriptionRow | null, entitled: boolean): { label: string; colour: string } {
+// ⚠️ ENG-1002 extends this WITHOUT disturbing that ordering. `canceled` is now
+// an ENTITLED status (the member paid for a period and cancelling does not
+// refund it), so it is answered inside the `entitled` branch and the raw status
+// only picks between "Active" and "Access ending" — exactly the licence the
+// paragraph above grants it. Putting a `status === "canceled"` test ahead of
+// the entitlement question would re-introduce the ENG-585 bug with the sign
+// flipped: a member who cancelled this morning, still has 29 paid days, and
+// would be told their access had ended.
+//
+// Both entitled wordings stay GREEN. The colour answers "do you have access",
+// which is the entitlement question and is `true` for both; the WORDING carries
+// "and it is winding down". A third state colour would be a new treatment this
+// screen's design has no reference for.
+function statusPill(sub: AccessRow | null, entitled: boolean): { label: string; colour: string } {
   if (entitled) {
-    if (sub?.status === "trial") {
-      const days = trialDaysLeft(sub.trial_ends_at);
-      return { label: `Trial · ${days} day${days === 1 ? "" : "s"} left`, colour: "var(--brand-green)" };
+    if (sub?.status === "canceled") {
+      return { label: "Access ending", colour: "var(--brand-green)" };
     }
     return { label: "Active", colour: "var(--brand-green)" };
   }
   // Not entitled. "Lapsed" / "Canceled" were internal status vocabulary leaking
-  // onto the member's screen; what they need to know is that it has ended, and
-  // whether the thing that ended was the free trial or a pass they paid for.
-  if (sub?.status === "trial") return { label: "Trial ended", colour: "var(--red)" };
+  // onto the member's screen; what they need to know is that it has ended.
   return { label: "Ended", colour: "var(--red)" };
 }
 
@@ -129,7 +142,7 @@ export default async function AccountPage() {
   ]);
 
   const row = subscriberRow as (SubscriberRow & PrefsRow) | null;
-  const sub = subscriptionRow as SubscriptionRow | null;
+  const sub = subscriptionRow as AccessRow | null;
 
   // ENG-566's backfill has already populated first/last for every legacy
   // `name`-only member, so these render populated. If both really are empty the
@@ -149,61 +162,69 @@ export default async function AccountPage() {
   // date>" and "Your access runs to <past date>" from a `current_period_end`
   // nobody had compared to the clock.
   const entitled = hasAccess(sub);
-  const isTrial = sub?.status === "trial";
   const { label: pillLabel, colour: pillColour } = statusPill(sub, entitled);
-  const days = trialDaysLeft(sub?.trial_ends_at ?? null);
   const endDate = formatEndDate(sub?.current_period_end ?? null);
 
-  // A member who is entitled on a trial, an entitled paid member, and a member
-  // whose access is gone are three different screens — and only the first two
-  // are "you have access".
-  const onTrial = entitled && isTrial;
-  const onPass = entitled && !isTrial;
-
+  // Two screens now, not three: you have access, or you do not. Within "you
+  // have access" the only remaining question is whether it is winding down.
+  const canceled = sub?.status === "canceled";
   const endedInPast = hasPassed(sub?.current_period_end ?? null);
 
-  // The pass does NOT auto-renew and there is no cancel route to reach
-  // (ENG-567 deleted /api/subscription/cancel outright), so the whole card is
-  // written as "buy days", never as "manage a plan". An active member is an
-  // early renewal, not a subscriber with something to cancel — which is why
-  // even they get a forward CTA rather than a "Manage" one.
+  // Who is offered the Cancel control (ENG-1002). Both halves are load-bearing:
+  //   * `entitled` — a lapsed member has nothing to cancel, and the RPC would
+  //     answer 409 anyway. Offering it would be a button that only ever fails.
+  //   * `status === "active"` — an already-cancelled member must not be shown
+  //     it, and this is the ONE place the raw status is read for a decision
+  //     rather than for wording. That is legitimate here and not an ENG-585
+  //     regression: the question is "is there an active row for the RPC to
+  //     cancel", which IS the status, not "does this member have access".
+  const canCancel = entitled && sub?.status === "active";
+
+  // The pass does NOT auto-renew, so the card is still written as "buy days",
+  // never as "manage a plan" — even for a cancelled member, whose next purchase
+  // is a fresh pass rather than a resumed plan. Cancelling (ENG-1002) stops the
+  // NEXT pass, it does not end this one, so it does not change the CTA either:
+  // buying more days stays open to a cancelled member for as long as anyone.
   //
   // "Extend access" is only honest while there is access to extend. Once it has
   // ended the CTA is the wall's CTA — the same "Buy 30 days" the member sees on
   // every other screen and on mobile.
-  const ctaLabel = onPass ? "Extend access" : "Buy 30 days";
+  const ctaLabel = entitled ? "Extend access" : "Buy 30 days";
 
-  const planName = onTrial ? "Trial — full access" : onPass ? "30-day pass" : "No active pass";
-  const planMeta = onTrial
-    ? `${days} day${days === 1 ? "" : "s"} remaining · no card on file`
-    : onPass
-      ? endDate
-        ? `Access to ${endDate}`
-        : // `current_period_end` is null and the member IS entitled: they have
-          // just paid and the webhook has not landed. Not expired — do not
-          // print a date we do not have yet.
-          "Access active"
-      : endedInPast
-        ? // Past tense, and only ever for a date that IS in the past — see
-          // `endedInPast`. This is the one honest use of the date: "Ended 16
-          // August 2026" tells the member what happened, where "Access to 16
-          // August 2026" told them it was still running.
-          `Ended ${endDate}`
-        : "Access ended";
+  const planName = entitled ? "30-day pass" : "No active pass";
+  const planMeta = entitled
+    ? endDate
+      ? `Access to ${endDate}`
+      : // `current_period_end` is null and the member IS entitled: they have
+        // just paid and the webhook has not landed. Not expired — do not
+        // print a date we do not have yet.
+        "Access active"
+    : endedInPast
+      ? // Past tense, and only ever for a date that IS in the past — see
+        // `endedInPast`. This is the one honest use of the date: "Ended 16
+        // August 2026" tells the member what happened, where "Access to 16
+        // August 2026" told them it was still running.
+        `Ended ${endDate}`
+      : "Access ended";
 
   // No price anywhere on this card. The amount is whatever the Stripe price
   // says at checkout (A$1.00 in sandbox, A$19.00 in production) — a literal
   // here would make the screen claim one number while Stripe charges another,
   // and "AU$19/month" additionally implied a monthly plan that does not exist.
-  const planCopy = onTrial
-    ? "You're on a free trial. When it ends you can choose to buy 30 days — nothing happens automatically and we have no card on file."
-    : onPass
+  //
+  // The cancelled-but-entitled sentence is the new one (ENG-1002) and it has to
+  // say BOTH halves: access continues to <date>, and it will not continue after
+  // that. Saying only the first reads like nothing happened; saying only the
+  // second reads like they have been cut off today.
+  const planCopy = entitled
+    ? canceled
       ? endDate
+        ? `You've cancelled. Your access continues to ${endDate} and will not continue after that. The days you've already paid for are yours to keep — you can buy another 30 days whenever you like.`
+        : "You've cancelled. Your access continues to the end of the period you've paid for and will not continue after that. You can buy another 30 days whenever you like."
+      : endDate
         ? `Your access runs to ${endDate}. It does not renew — buy another 30 days whenever you like, and any days you've already paid for are kept.`
         : "Your access is active. It does not renew — buy another 30 days whenever you like, and any days you've already paid for are kept."
-      : isTrial
-        ? "Your free trial has ended. Buy 30 days to pick up where you left off."
-        : "Your access has ended. Buy 30 days to pick up where you left off.";
+    : "Your access has ended. Buy 30 days to pick up where you left off.";
 
   return (
     <div className="settings-page">
@@ -233,6 +254,16 @@ export default async function AccountPage() {
           </div>
           <p style={{ fontSize: 13.5, color: "var(--muted)", margin: 0, lineHeight: 1.55 }}>{planCopy}</p>
         </div>
+        {/*
+          ENG-1002. Rendered INSIDE the Subscription card, at its foot, because
+          the sentence it needs the member to have read — "access continues to
+          <date>" — is the one directly above it. It is a client island only for
+          the confirm step's local state; the card around it stays a server
+          component, and the island is handed a FORMATTED STRING, never the row.
+          Absent entirely for a cancelled or lapsed member, so there is no
+          disabled control and nothing to explain away.
+        */}
+        {canCancel && <CancelCard endDate={endDate} />}
       </div>
 
       <AccountForms initialSubscriber={subscriber} initialPrefs={prefs} />
