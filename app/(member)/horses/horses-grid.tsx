@@ -5,7 +5,7 @@
 // a plain RLS-scoped supabaseBrowser read (horse_select_sub gates to
 // active + content-access), mapped onto the shared HorseSummary view model and
 // rendered with the reused W4 <HorseCard> in the onboarding grid's skin.
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
 import { AccessWall } from "@/components/access-wall";
@@ -14,7 +14,7 @@ import { supabaseBrowser } from "@/lib/supabase/client";
 import type { HorseSummary } from "@/components/types";
 import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 import { BrowseFilter, type BrowseFilterValue } from "@/components/browse-filter";
-import { BROWSE_PAGE_SIZE } from "@/lib/browse";
+import { BROWSE_PAGE_SIZE, splitBrowsePage } from "@/lib/browse";
 
 type Trainer = { name: string };
 type HorseRow = { id: string; display_name: string; racing_name: string | null; trainer: Trainer | Trainer[] | null };
@@ -38,14 +38,34 @@ export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; eve
   // Distinguishes "follows nothing" from "follows horses, none available" —
   // the two produce the same empty roster but are different sentences.
   const [followsNothing, setFollowsNothing] = useState(false);
+  // Paging. `hasMore` drives the Show-more button; `loadingMore` disables it
+  // while a page is in flight so a double click cannot request the same offset
+  // twice and append it twice.
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // Bumped on every new run (and on unmount), so a page that lands LATE cannot
+  // setState on a dead tree or append its rows under a different pill. The old
+  // `cancelled` closure flag only covered unmount/filter-change; with a
+  // Show-more button in play, a load-more in flight when the member switches
+  // All -> Following would otherwise append stale rows to the new roster.
+  const runRef = useRef(0);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      setError(false);
-      setGated(false);
-      setFollowsNothing(false);
+  const fetchPage = useCallback(async (offset: number) => {
+    const run = ++runRef.current;
+    const live = () => runRef.current === run;
+
+      // Every fetch at offset 0 is a FRESH roster (first paint, or a pill
+      // switch): reset the paging state with it, or Following would inherit
+      // All's `hasMore` and page into a stale offset.
+      if (offset === 0) {
+        setLoading(true);
+        setError(false);
+        setGated(false);
+        setFollowsNothing(false);
+        setHasMore(false);
+      } else {
+        setLoadingMore(true);
+      }
       const sb = supabaseBrowser();
 
       const { data: sub } = await sb.from("subscription").select(ACCESS_COLUMNS).eq("user_id", viewerId).maybeSingle();
@@ -59,10 +79,10 @@ export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; eve
       // Strictly stricter than the test it replaces: identical for entitled,
       // lapsed and canceled rows, and it additionally catches expired ones. It
       // can only wall MORE members, never reveal content to one.
-      if (cancelled) return;
+      if (!live()) return;
       setGateChecked(true);
       if (!hasAccess(sub as AccessRow | null)) {
-        setGated(true); setLoading(false);
+        setGated(true); setLoading(false); setLoadingMore(false);
         return;
       }
 
@@ -81,8 +101,8 @@ export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; eve
           .select("horse_id")
           .eq("user_id", viewerId)
           .not("horse_id", "is", null);
-        if (cancelled) return;
-        if (followError) { setError(true); setLoading(false); return; }
+        if (!live()) return;
+        if (followError) { setError(true); setLoading(false); setLoadingMore(false); return; }
         followedIds = [
           ...new Set(
             ((followRows ?? []) as { horse_id: string | null }[])
@@ -93,7 +113,13 @@ export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; eve
         // Short-circuit: `.in("id", [])` is a wasted round trip whose answer we
         // already know, and it is the common case for a member who follows
         // nobody (mobile's `browseReadHitsNetwork` makes the same call).
-        if (followedIds.length === 0) { setFollowsNothing(true); setHorses([]); setLoading(false); return; }
+        // Paging state is reset here too, not just at offset 0: this branch
+        // RETURNS before the roster query, so leaving `hasMore` set would offer
+        // a Show-more button for a roster we never fetched.
+        if (followedIds.length === 0) {
+          setFollowsNothing(true); setHorses([]); setHasMore(false);
+          setLoading(false); setLoadingMore(false); return;
+        }
       }
 
       let query = sb
@@ -111,24 +137,40 @@ export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; eve
       // (`getTrainerHorses`).
       if (followedIds) query = query.in("id", followedIds);
 
+      // A TOTAL order is required once this is paged. `display_name` alone
+      // leaves ties broken by whatever the planner returns, and a tie ordered
+      // differently between two requests silently drops or duplicates a row
+      // across the `.range` boundary. `id` is the tiebreaker, so two windows
+      // can never disagree. (Lifted from #81's `2951602` with the paging.)
+      //
+      // `.range` is inclusive, so this asks for BROWSE_PAGE_SIZE + 1 rows —
+      // see `BROWSE_FETCH_LIMIT` in lib/browse.ts for why one extra.
       const { data, error: fetchError } = await query
         .order("display_name")
-        .limit(BROWSE_PAGE_SIZE);
+        .order("id")
+        .range(offset, offset + BROWSE_PAGE_SIZE);
 
-      if (cancelled) return;
-      if (fetchError) { setError(true); setLoading(false); return; }
+      if (!live()) return;
+      if (fetchError) { setError(true); setLoading(false); setLoadingMore(false); return; }
 
-      const mapped: HorseSummary[] = ((data ?? []) as HorseRow[]).map((h) => {
+      const { page, hasMore: more } = splitBrowsePage((data ?? []) as HorseRow[]);
+      const mapped: HorseSummary[] = page.map((h) => {
         const trainer = one(h.trainer);
         // Formatted per side of the `||` so a `racing_name` of just "(AUS)"
         // falls through to the display name (ENG-761 item 6).
         return { id: h.id, name: displayHorseNameOrEmpty(h.racing_name) || displayHorseNameOrEmpty(h.display_name), trainerName: trainer?.name ?? "Stablepass" };
       });
-      setHorses(mapped);
+      setHorses((prev) => (offset === 0 ? mapped : [...prev, ...mapped]));
+      setHasMore(more);
       setLoading(false);
-    })();
-    return () => { cancelled = true; };
+      setLoadingMore(false);
   }, [viewerId, filter]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial data fetch, not derived state
+    fetchPage(0);
+    return () => { runRef.current += 1; };
+  }, [fetchPage]);
 
   return (
     <div className="page-pad">
@@ -167,11 +209,28 @@ export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; eve
           under a pill that already reads aria-pressed="true". That is a
           wrong-answer render, not a flicker. */}
       {!gated && !error && !loading && horses.length > 0 && (
-        <div className="onboarding-grid-web">
-          {horses.map((h) => (
-            <HorseCard key={h.id} horse={h} onClick={() => router.push(`/horses/${h.id}`)} />
-          ))}
-        </div>
+        <>
+          <div className="onboarding-grid-web">
+            {horses.map((h) => (
+              <HorseCard key={h.id} horse={h} onClick={() => router.push(`/horses/${h.id}`)} />
+            ))}
+          </div>
+          {/* Paging, not truncation: the cap bounds each READ, and this button
+              reaches everything past it. `horses.length` is the next offset —
+              it is exactly the number of rows already rendered, and the extra
+              probe row is dropped rather than shown, so offsets stay aligned. */}
+          {hasMore && (
+            <button
+              type="button"
+              className="btn btn-light"
+              style={{ margin: "24px auto 0", display: "block" }}
+              disabled={loadingMore}
+              onClick={() => fetchPage(horses.length)}
+            >
+              {loadingMore ? "Loading…" : "Show more"}
+            </button>
+          )}
+        </>
       )}
     </div>
   );

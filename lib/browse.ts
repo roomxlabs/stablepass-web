@@ -1,23 +1,41 @@
-// Browse paging — the shared cap for the Horses / Trainers browse grids.
+// Browse paging — the shared page size for the Horses / Trainers browse grids.
 //
 // ENG-960 (parity audit rows 12/13/38). Mirrors mobile's `BROWSE_PAGE_SIZE`
 // (stablepass-mobile `lib/browse.ts:24`), which bounds every `listHorses` /
-// `listTrainers` read at 100 rows. ENG-956 already set this precedent on the
-// web side: `app/(member)/shares/shares-list.tsx` declares
-// `SHARES_PAGE_SIZE = 100` with the same "mirrors mobile" note. The browse
-// grids were the only holdout — before this they read UNBOUNDED.
+// `listTrainers` read. ENG-956 already set this precedent on the web side:
+// `app/(member)/shares/shares-list.tsx` declares `SHARES_PAGE_SIZE = 100` with
+// the same "mirrors mobile" note. The browse grids were the only holdout —
+// before this they read UNBOUNDED.
 //
-// SCOPE NOTE — the "Show more" half of the ticket is deliberately not here.
-// The ticket asks to "keep that mechanism, align the number or note why not",
-// where "that mechanism" is the 60-item `Show more` pager from web PR #81
-// (`perf/query-batch`). That PR is still open, targets `main` (not this
-// ticket's `feature/launch-v1` base) and is CONFLICTING, so the mechanism does
-// not exist anywhere on this branch — there is no pager to keep and no 60 to
-// align. This ships the *cap* half (the number the ticket actually names) and
-// leaves the pager to follow #81, per the ticket's own escape clause.
+// THE NUMBER IS A DECISION, NOT AN ACCIDENT. web PR #81 (`perf/query-batch`)
+// pages at 60; mobile and web's own Shares list page at 100. Both are defensible
+// on perf, and with the "Show more" pager below no row is unreachable at either
+// value, so the tiebreak is repo consistency: 100 is what the other two bounded
+// web/mobile browse reads already use, and a member scanning A-Z gets fewer
+// clicks to cross the alphabet.
 //
-// Consequence worth knowing while #81 is unlanded: with no pager, a roster
-// larger than the cap is truncated with no way to reach row 101. That is the
-// same bound mobile has shipped since ENG-424, and strictly better than the
-// unbounded read it replaces, but it is why #81 finishes the job.
+// PAGING, NOT TRUNCATION. An earlier revision of this file shipped the cap as a
+// bare `.limit()` with no pager, which made row 101 unreachable from browse.
+// Both grids now read `.range(offset, offset + BROWSE_PAGE_SIZE)` behind a
+// "Show more" button — the mechanism ENG-960 asked to keep, lifted from #81's
+// `2951602` (only the paging shape; #81's unrelated perf work stays with #81).
 export const BROWSE_PAGE_SIZE = 100;
+
+// Off-by-one guard, and the one place it is explained.
+//
+// #81 settles "is there another page?" with `rows.length === PAGE_SIZE`. That is
+// wrong when the total is an EXACT multiple of the page size: the last full page
+// offers "Show more", and pressing it fetches an empty page. Requesting ONE more
+// row than we render answers the question exactly — if the extra row came back
+// there is genuinely more, and we drop it from the render. `.range()` bounds are
+// inclusive, so `offset + BROWSE_PAGE_SIZE` is PAGE_SIZE + 1 rows.
+export const BROWSE_FETCH_LIMIT = BROWSE_PAGE_SIZE + 1;
+
+/**
+ * Split a raw `.range(offset, offset + BROWSE_PAGE_SIZE)` result into the page
+ * we render and the answer to "is there more?". Shared so the two grids cannot
+ * drift apart on the off-by-one.
+ */
+export function splitBrowsePage<T>(rows: T[]): { page: T[]; hasMore: boolean } {
+  return { page: rows.slice(0, BROWSE_PAGE_SIZE), hasMore: rows.length > BROWSE_PAGE_SIZE };
+}

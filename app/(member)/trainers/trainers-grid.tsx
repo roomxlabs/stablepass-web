@@ -5,12 +5,12 @@
 // (trainer_select_sub gates to content-access), sorted A-Z by name, each card
 // showing display_name || name, stable · location, and the trainer's active horse
 // count. Never reads trainer_contact (admin-only PII).
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
 import { AccessWall } from "@/components/access-wall";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { BROWSE_PAGE_SIZE } from "@/lib/browse";
+import { BROWSE_PAGE_SIZE, splitBrowsePage } from "@/lib/browse";
 
 type TrainerRow = {
   id: string;
@@ -36,13 +36,23 @@ export function TrainersGrid({ viewerId, everSubscribed }: { viewerId: string; e
   const [loading, setLoading] = useState(true);
   const [gated, setGated] = useState(false);
   const [error, setError] = useState(false);
+  // Paging — same shape as HorsesGrid; see lib/browse.ts for the off-by-one.
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const runRef = useRef(0);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      setError(false);
-      setGated(false);
+  const fetchPage = useCallback(async (offset: number) => {
+    const run = ++runRef.current;
+    const live = () => runRef.current === run;
+
+      if (offset === 0) {
+        setLoading(true);
+        setError(false);
+        setGated(false);
+        setHasMore(false);
+      } else {
+        setLoadingMore(true);
+      }
       const sb = supabaseBrowser();
 
       const { data: sub } = await sb.from("subscription").select(ACCESS_COLUMNS).eq("user_id", viewerId).maybeSingle();
@@ -57,7 +67,7 @@ export function TrainersGrid({ viewerId, everSubscribed }: { viewerId: string; e
       // lapsed and canceled rows, and it additionally catches expired ones. It
       // can only wall MORE members, never reveal content to one.
       if (!hasAccess(sub as AccessRow | null)) {
-        if (!cancelled) { setGated(true); setLoading(false); }
+        if (live()) { setGated(true); setLoading(false); setLoadingMore(false); }
         return;
       }
 
@@ -88,23 +98,35 @@ export function TrainersGrid({ viewerId, everSubscribed }: { viewerId: string; e
         .from("trainer")
         .select("id, name, display_name, stable_name, location, horses:horse!trainer_id(id)")
         .eq("status", "active")
+        // TOTAL order (`id` tiebreaker) — a `name` tie ordered differently
+        // between two requests would drop or duplicate a trainer across the
+        // `.range` boundary. `.range` is inclusive, so this asks for one row
+        // more than we render; see BROWSE_FETCH_LIMIT in lib/browse.ts.
         .order("name")
-        .limit(BROWSE_PAGE_SIZE);
+        .order("id")
+        .range(offset, offset + BROWSE_PAGE_SIZE);
 
-      if (cancelled) return;
-      if (fetchError) { setError(true); setLoading(false); return; }
+      if (!live()) return;
+      if (fetchError) { setError(true); setLoading(false); setLoadingMore(false); return; }
 
-      const mapped: TrainerCardVM[] = ((data ?? []) as TrainerRow[]).map((t) => ({
+      const { page, hasMore: more } = splitBrowsePage((data ?? []) as TrainerRow[]);
+      const mapped: TrainerCardVM[] = page.map((t) => ({
         id: t.id,
         title: t.display_name || t.name,
         subtitle: [t.stable_name, t.location].filter(Boolean).join(" · "),
         horseCount: (t.horses ?? []).length,
       }));
-      setTrainers(mapped);
+      setTrainers((prev) => (offset === 0 ? mapped : [...prev, ...mapped]));
+      setHasMore(more);
       setLoading(false);
-    })();
-    return () => { cancelled = true; };
+      setLoadingMore(false);
   }, [viewerId]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial data fetch, not derived state
+    fetchPage(0);
+    return () => { runRef.current += 1; };
+  }, [fetchPage]);
 
   return (
     <div className="page-pad">
@@ -119,7 +141,8 @@ export function TrainersGrid({ viewerId, everSubscribed }: { viewerId: string; e
       )}
 
       {!gated && !error && trainers.length > 0 && (
-        <div className="onboarding-grid-web">
+        <>
+          <div className="onboarding-grid-web">
           {trainers.map((t) => (
             <button key={t.id} type="button" className="trainer-card-web" onClick={() => router.push(`/trainers/${t.id}`)}>
               <div className="trainer-thumb" aria-hidden="true">{initials(t.title)}</div>
@@ -130,7 +153,19 @@ export function TrainersGrid({ viewerId, everSubscribed }: { viewerId: string; e
               <div className="trainer-meta">{t.horseCount} {t.horseCount === 1 ? "horse" : "horses"}</div>
             </button>
           ))}
-        </div>
+          </div>
+          {hasMore && (
+            <button
+              type="button"
+              className="btn btn-light"
+              style={{ margin: "24px auto 0", display: "block" }}
+              disabled={loadingMore}
+              onClick={() => fetchPage(trainers.length)}
+            >
+              {loadingMore ? "Loading…" : "Show more"}
+            </button>
+          )}
+        </>
       )}
     </div>
   );

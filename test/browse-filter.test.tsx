@@ -12,7 +12,7 @@ const VIEWER_ID = "8f3c1a2b-1234-4abc-9def-0123456789ab";
 
 function chainable(result: { data: unknown; error: unknown }) {
   const obj: Record<string, unknown> = {};
-  for (const method of ["select", "eq", "in", "not", "order", "limit", "maybeSingle", "single"]) {
+  for (const method of ["select", "eq", "in", "not", "order", "limit", "range", "maybeSingle", "single"]) {
     obj[method] = vi.fn(() => obj);
   }
   obj.then = (onFulfilled: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) =>
@@ -209,7 +209,7 @@ describe("ENG-960 browse pills — All | Following", () => {
       error: null,
     });
     const followChain: Record<string, unknown> = {};
-    for (const m of ["select", "eq", "in", "not", "order", "limit", "maybeSingle", "single"]) {
+    for (const m of ["select", "eq", "in", "not", "order", "limit", "range", "maybeSingle", "single"]) {
       followChain[m] = vi.fn(() => followChain);
     }
     followChain.then = (onF: (v: unknown) => unknown, onR?: (e: unknown) => unknown) =>

@@ -15,7 +15,7 @@ const VIEWER_ID = "8f3c1a2b-1234-4abc-9def-0123456789ab";
 
 function chainable(result: { data: unknown; error: unknown }) {
   const obj: Record<string, unknown> = {};
-  for (const method of ["select", "eq", "in", "not", "order", "limit", "maybeSingle", "single"]) {
+  for (const method of ["select", "eq", "in", "not", "order", "limit", "range", "maybeSingle", "single"]) {
     obj[method] = vi.fn(() => obj);
   }
   obj.then = (onFulfilled: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) =>
@@ -146,7 +146,7 @@ describe("ENG-960 browse reversal — for-sale horses fold back into browse", ()
     });
   });
 
-  it("both grids cap the read at BROWSE_PAGE_SIZE (100), matching mobile", async () => {
+  it("both grids bound the read at BROWSE_PAGE_SIZE (100) via .range, never unbounded", async () => {
     const horseChain = chainable({ data: [], error: null });
     const trainerChain = chainable({ data: [], error: null });
     fromMock.mockImplementation((table: string) => {
@@ -156,15 +156,22 @@ describe("ENG-960 browse reversal — for-sale horses fold back into browse", ()
       return chainable({ data: null, error: null });
     });
 
+    // `.range` is inclusive, so (0, PAGE_SIZE) is PAGE_SIZE + 1 rows: the page
+    // we render plus the one probe row that answers "is there more?" exactly.
+    // The bound is on the QUERY BUILDER, not a client-side slice — a grid that
+    // dropped it would read the whole table.
     const { unmount } = render(<HorsesGrid viewerId={VIEWER_ID} everSubscribed={false} />);
-    await waitFor(() => expect(horseChain.limit).toHaveBeenCalledWith(BROWSE_PAGE_SIZE));
+    await waitFor(() => expect(horseChain.range).toHaveBeenCalledWith(0, BROWSE_PAGE_SIZE));
+    expect(horseChain.limit).not.toHaveBeenCalled();
     unmount();
 
     render(<TrainersGrid viewerId={VIEWER_ID} everSubscribed={false} />);
-    await waitFor(() => expect(trainerChain.limit).toHaveBeenCalledWith(BROWSE_PAGE_SIZE));
+    await waitFor(() => expect(trainerChain.range).toHaveBeenCalledWith(0, BROWSE_PAGE_SIZE));
+    expect(trainerChain.limit).not.toHaveBeenCalled();
 
     // Pin the number itself, not just that both agree — the ticket asks for
-    // mobile's BROWSE_PAGE_SIZE, which is 100.
+    // mobile's BROWSE_PAGE_SIZE, which is 100. Reachability past it is proved
+    // in test/browse-grid-paging.test.tsx.
     expect(BROWSE_PAGE_SIZE).toBe(100);
   });
 });
