@@ -1857,7 +1857,18 @@ returns 200 when it is). That one curl is the whole pre-flight.
 has capped every browse read at `BROWSE_PAGE_SIZE = 100` since ENG-424 and
 ENG-956's `shares-list.tsx` had already mirrored it as `SHARES_PAGE_SIZE = 100`.
 ENG-960 added `lib/browse.ts` (`BROWSE_PAGE_SIZE = 100`) for the two grids.
-The 60-item "Show more" PAGER is a different thing and lives only in web PR #81
-(`perf/query-batch`), which targets `main`, not `feature/launch-v1` — so on the
-launch branch the cap exists with no pager, and row 101 is unreachable until #81
-lands. Don't "fix" that by inventing a second pager.
+The 60-item "Show more" PAGER originated in web PR #81 (`perf/query-batch`),
+which targets `main`, not `feature/launch-v1`. **That is no longer the state of
+this branch.** An earlier revision of ENG-960 shipped the cap with no pager,
+making row 101 unreachable; Naufal rejected it (6 Sep 2026) — nothing may be
+truncated — and ENG-960 then lifted the mechanism into `lib/browse.ts` for both
+grids. So on `feature/launch-v1` **every row is reachable via "Show more"**, and
+`.range()` replaces `.limit()` in both grids.
+
+Two things to carry rather than re-derive. `splitBrowsePage()` over-fetches ONE
+probe row (`BROWSE_FETCH_LIMIT = BROWSE_PAGE_SIZE + 1`) and answers
+`hasMore: rows.length > BROWSE_PAGE_SIZE` — **not** `=== BROWSE_PAGE_SIZE`, which
+is the off-by-one PR #81 still carries and which offers "Show more" with nothing
+behind it when the total is an exact multiple of the page size. And the next
+offset is the RENDERED count, not the fetched count, so the probe row leaves no
+gap. Reuse `lib/browse.ts`; do not write a third copy of this.
