@@ -13,8 +13,13 @@
 //
 // EVERY amount on this screen is formatted from `unitAmount`/`currency` — there
 // is deliberately no currency symbol and no price literal anywhere in this file.
-// The sandbox price is A$1.00 and production is A$19.00; a hardcode would make
-// the screen claim one number while Stripe charges another.
+// There are now two prices (a promotional one and a standard one) and the route
+// picks between them from the member's counter, so a hardcode here would make
+// the screen claim one number while Stripe charges another — for half the members.
+//
+// `promoRemaining` is DISPLAY ONLY. It arrives on the response; it is never sent
+// back. Nothing this file posts can influence what the member is charged (the
+// route takes no request body at all).
 //
 // .rx/guardrails.md #4 — the card never touches our server: Stripe Elements owns
 // the card input and we only exchange a clientSecret with Stripe directly. No
@@ -34,6 +39,10 @@ type Pricing = {
   mode: CheckoutMode;
   currentPeriodEnd: string | null;
   newPeriodEnd: string | null;
+  // How many of the member's introductory passes are still available AT the
+  // promotional price, this one included. Null when an older/degraded response
+  // omitted it — the band is then simply not rendered rather than guessed at.
+  promoRemaining: number | null;
 };
 
 // The not-ready states are deliberately SPLIT. They used to be one
@@ -115,7 +124,53 @@ function OrderSummary({ pricing }: { pricing: Pricing | null }) {
   );
 }
 
-function CheckoutHeader({ trialDaysLeft, pricing }: { trialDaysLeft: number; pricing: Pricing | null }) {
+// The introductory-pricing band.
+//
+// DESIGN NOTE: 04-checkout.html has NO promo treatment — it shows a single price
+// and knows nothing about an allowance. Rather than invent a component, this
+// composes the screen family's established informational band, `.trial-banner-web`
+// (soft green fill, green left rule) with its `.trial-label` eyebrow and
+// `.trial-detail` body. Those two child classes are SCOPED — the rules are
+// `.trial-banner-web .trial-label`, not bare class selectors — so they must stay
+// nested inside the parent or they render as unstyled browser defaults. Same
+// pattern as `app/start/trial-used-wall.tsx` and `app/(member)/expiry-banner.tsx`.
+// No new CSS, no new colour, no new radius. Flagged on the PR as a copy addition
+// with no backing mockup.
+//
+// The amount is always formatted from the route's `unitAmount`/`currency`, so the
+// band can never disagree with the charge.
+function PromoBand({ pricing }: { pricing: Pricing | null }) {
+  if (!pricing || pricing.promoRemaining == null) return null;
+  const amount = formatMoney(pricing.unitAmount, pricing.currency);
+  const remaining = pricing.promoRemaining;
+
+  // `promoRemaining` counts the passes still available at the promotional price
+  // INCLUDING this one, so > 0 means this purchase is itself the discounted one.
+  if (remaining > 0) {
+    return (
+      <div className="trial-banner-web">
+        <div className="trial-label">Introductory pricing</div>
+        <div className="trial-detail">
+          This pass is {amount} — your introductory rate.{" "}
+          {remaining === 1
+            ? "It is the last one at this price."
+            : `${remaining} of your introductory passes are left at this price, this one included.`}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="trial-banner-web">
+      <div className="trial-label">Standard pricing</div>
+      <div className="trial-detail">
+        You&rsquo;ve used all of your introductory passes. This pass is {amount}.
+      </div>
+    </div>
+  );
+}
+
+function CheckoutHeader({ pricing }: { pricing: Pricing | null }) {
   const isRenewal = pricing?.mode === "renewal";
   const endsOn = formatDate(pricing?.currentPeriodEnd ?? null);
   const extendsTo = formatDate(pricing?.newPeriodEnd ?? null);
@@ -140,9 +195,10 @@ function CheckoutHeader({ trialDaysLeft, pricing }: { trialDaysLeft: number; pri
           Paying now adds another 30 days to your access.
         </p>
       ) : (
+        // No trial copy: ENG-999 retired the free trial, so "your 30-day trial
+        // ends in N days" (the mockup's line) is now false for every member.
         <p className="checkout-sub">
-          Your 30-day trial ends in {trialDaysLeft} day{trialDaysLeft === 1 ? "" : "s"}. Get 30 days of full access to
-          keep your stable, your follows, and your alerts going.
+          Get 30 days of full access to keep your stable, your follows, and your alerts going.
         </p>
       )}
     </>
@@ -269,7 +325,7 @@ function PaymentPlaceholder({ pricing, variant }: { pricing: Pricing | null; var
   );
 }
 
-export function CheckoutForm({ trialDaysLeft }: { trialDaysLeft: number }) {
+export function CheckoutForm() {
   const [state, setState] = useState<CheckoutState>({ status: "loading" });
   // Held separately from `state` so the order summary keeps showing the real
   // price even when the payment slot degrades to the placeholder.
@@ -301,6 +357,10 @@ export function CheckoutForm({ trialDaysLeft }: { trialDaysLeft: number }) {
           mode: data.mode === "renewal" ? "renewal" : "purchase",
           currentPeriodEnd: data.currentPeriodEnd ?? null,
           newPeriodEnd: data.newPeriodEnd ?? null,
+          // Type-checked rather than `?? null`: a non-number (a stale route, a
+          // proxy that stringified it) must fall back to "don't show the band",
+          // never to a band rendering "NaN passes left".
+          promoRemaining: typeof data.promoRemaining === "number" ? data.promoRemaining : null,
         });
       }
 
@@ -356,7 +416,8 @@ export function CheckoutForm({ trialDaysLeft }: { trialDaysLeft: number }) {
     <div className="checkout-page">
       <div className="checkout-container">
         <div className="checkout-left">
-          <CheckoutHeader trialDaysLeft={trialDaysLeft} pricing={pricing} />
+          <CheckoutHeader pricing={pricing} />
+          <PromoBand pricing={pricing} />
           {state.status === "ready" && stripePromise ? (
             <Elements stripe={stripePromise} options={{ clientSecret: state.clientSecret }}>
               <PayForm pricing={pricing} />

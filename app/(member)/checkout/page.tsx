@@ -1,6 +1,16 @@
 // Checkout screen (04-checkout.html) — embedded Stripe Elements, no hosted
-// redirect (.rx/guardrails.md #4). Server component: reads trial_ends_at for the
-// "trial ends in N days" sub-copy.
+// redirect (.rx/guardrails.md #4).
+//
+// There is no free trial any more (ENG-999 retired it; `subscription.trial_ends_at`
+// survives only as a nullable vestige that nothing sets). This page therefore no
+// longer reads it and no longer passes a `trialDaysLeft` down — the old sub-copy
+// would have rendered "your 30-day trial ends in 0 days" to every member forever.
+//
+// Nothing else about the member's row is read here: the price, and the remaining
+// promotional allowance the screen displays, are decided SERVER-SIDE by
+// /api/subscription/checkout from `subscription.promo_passes_used` and arrive with
+// the clientSecret. Reading the counter here too would just create a second,
+// drift-prone source of truth for a number that decides what someone is charged.
 //
 // An `active` member is deliberately NOT redirected away any more. The pass does
 // not auto-renew, so paying again BEFORE expiry (early renewal) is a first-class
@@ -11,27 +21,10 @@
 // The actual Stripe Customer/Subscription/PaymentIntent creation + Elements
 // mount happens client-side in CheckoutForm (POSTs /api/subscription/checkout on
 // mount) — this page never talks to Stripe directly.
-import { supabaseServer } from "@/lib/supabase/server";
 import { CheckoutForm } from "./checkout-form";
 
 export const metadata = { title: "Checkout · StablePass" };
 
-function trialDaysLeft(trialEndsAt: string | null): number {
-  if (!trialEndsAt) return 0;
-  const ms = new Date(trialEndsAt).getTime() - Date.now();
-  return Math.max(0, Math.ceil(ms / (24 * 60 * 60 * 1000)));
-}
-
-export default async function CheckoutPage() {
-  const sb = await supabaseServer();
-  const { data: { user } } = await sb.auth.getUser();
-  const userId = user!.id;
-
-  const { data: sub } = await sb
-    .from("subscription")
-    .select("status,trial_ends_at")
-    .eq("user_id", userId)
-    .maybeSingle();
-
-  return <CheckoutForm trialDaysLeft={trialDaysLeft(sub?.trial_ends_at ?? null)} />;
+export default function CheckoutPage() {
+  return <CheckoutForm />;
 }
