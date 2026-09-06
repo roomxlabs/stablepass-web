@@ -8,9 +8,9 @@ import {
   legalCanonicalUrl,
   readLegalDocument,
   redirectTargetFor,
-  type LegalBlock,
 } from "@/lib/legal";
 
+import Block from "../legal-blocks";
 import styles from "../legal.module.css";
 
 /**
@@ -65,28 +65,6 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
     // each need one URL to treat as the document's home.
     alternates: { canonical: legalCanonicalUrl(slug) },
   };
-}
-
-function Block({ block }: { block: LegalBlock }) {
-  switch (block.kind) {
-    case "heading":
-      return block.level === 2 ? (
-        <h2 className={styles.section}>{block.text}</h2>
-      ) : (
-        <h3 className={styles.subsection}>{block.text}</h3>
-      );
-    case "list":
-      return (
-        <ul className={styles.list}>
-          {block.items.map((item, index) => (
-            // Index, not the text: two identical bullets are legal copy, not a bug.
-            <li key={index}>{item}</li>
-          ))}
-        </ul>
-      );
-    case "paragraph":
-      return <p className={styles.body}>{block.text}</p>;
-  }
 }
 
 export default async function LegalPage({ params }: PageProps) {

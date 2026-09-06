@@ -44,6 +44,31 @@ export type LegalSlug = LegalDocumentSlug | LegalRedirectSlug;
 export const LEGAL_SLUGS: readonly LegalSlug[] = [...LEGAL_DOCUMENT_SLUGS, ...LEGAL_REDIRECT_SLUGS];
 
 /**
+ * Documents that own a dedicated route instead of riding `/legal/[slug]`.
+ *
+ * ENG-1041. `/legal/delete-account` is the URL pasted into Google Play's Data
+ * Safety form. Its prose lives in `content/legal/delete-account.md` like every
+ * other legal document — a non-engineer must be able to reword a compliance
+ * page without touching JSX — but it needs two things the generic route cannot
+ * give it: a real `mailto:` action (the markdown subset below deliberately does
+ * not interpret inline links) and its own `robots` metadata.
+ *
+ * DELIBERATELY NOT IN `LEGAL_SLUGS`. That constant drives the `[slug]` route's
+ * `generateStaticParams`, so listing it there would have two routes claim one
+ * path — the static segment would win and the dynamic prerender would be dead
+ * weight nobody could see was dead. A test pins this separation.
+ */
+export const LEGAL_STANDALONE_SLUGS = ["delete-account"] as const;
+export type LegalStandaloneSlug = (typeof LEGAL_STANDALONE_SLUGS)[number];
+
+/** Every slug with a `content/legal/*.md` behind it, however it is routed. */
+export type LegalContentSlug = LegalDocumentSlug | LegalStandaloneSlug;
+
+export function isLegalStandaloneSlug(slug: string): slug is LegalStandaloneSlug {
+  return (LEGAL_STANDALONE_SLUGS as readonly string[]).includes(slug);
+}
+
+/**
  * Canonical origin for the legal pages.
  *
  * The routes render on BOTH hosts — `stablepass.co/legal/*` and
@@ -87,7 +112,7 @@ export type LegalBlock =
   | { kind: "list"; items: string[] };
 
 export type LegalDocument = {
-  slug: LegalDocumentSlug;
+  slug: LegalContentSlug;
   /** Frontmatter `title` — the page's <h1>. */
   title: string;
   /** Frontmatter `lastUpdated`, an ISO `YYYY-MM-DD` date. */
@@ -235,7 +260,7 @@ function parseBlocks(body: string, label: string): LegalBlock[] {
 /** Where the documents live. Resolved from the project root, at build time. */
 export const LEGAL_CONTENT_DIR = path.join(process.cwd(), "content", "legal");
 
-export function parseLegalDocument(slug: LegalDocumentSlug, source: string): LegalDocument {
+export function parseLegalDocument(slug: LegalContentSlug, source: string): LegalDocument {
   const label = `content/legal/${slug}.md`;
   const { fields, body } = parseFrontmatter(source, label);
 
@@ -248,7 +273,7 @@ export function parseLegalDocument(slug: LegalDocumentSlug, source: string): Leg
   return { slug, title, lastUpdated, blocks: parseBlocks(body, label) };
 }
 
-export function readLegalDocument(slug: LegalDocumentSlug): LegalDocument {
+export function readLegalDocument(slug: LegalContentSlug): LegalDocument {
   return parseLegalDocument(slug, readFileSync(path.join(LEGAL_CONTENT_DIR, `${slug}.md`), "utf8"));
 }
 
