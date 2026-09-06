@@ -66,10 +66,18 @@ export const MARKETING_IS_INDEXABLE = false;
  * be crawled and only the exact-match header is holding it out of the index.
  * Add the child to this list deliberately, or give it its own rule.
  *
- * MARKETING SPACE ONLY. The member space is `noindex` unconditionally and this
- * must never change that — `/legal/*` renders on the app host too, and the
- * canonical for every one of those pages is the apex, so the app host's copy
- * has nothing to gain from being indexed and would only compete with it.
+ * MARKETING SPACE ONLY — but only two of the three surfaces can enforce that,
+ * and it is worth being exact about which. `middleware.ts` and `app/robots.ts`
+ * are host-aware and DO restrict the exemption to the marketing host. The third
+ * surface, the page's own metadata, cannot: the page is `force-static`, so a
+ * single HTML file is served on both hosts and its `<meta name="robots">` says
+ * `index` on `app.stablepass.co` as well. The member space is still noindex
+ * there, held by the header and by that host's `Disallow: /` — not by the tag.
+ * Do not remove either of those on the grounds that the tag "already says so".
+ *
+ * `/legal/*` renders on the app host too and the canonical for every one of
+ * those pages is the apex, so the app host's copy has nothing to gain from
+ * being indexed and would only compete with it.
  */
 export const ALWAYS_INDEXABLE_PATHS: readonly string[] = ["/legal/delete-account"];
 

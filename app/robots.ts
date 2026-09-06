@@ -22,8 +22,8 @@ export default async function robots(): Promise<MetadataRoute.Robots> {
   // X-Robots-Tag header middleware sets for the very same request.
   const host = normaliseHost(store.get("x-forwarded-host") ?? store.get("host"));
 
-  const indexable =
-    !isLocalHost(host) && spaceForHost(host) === "marketing" && MARKETING_IS_INDEXABLE;
+  const marketing = !isLocalHost(host) && spaceForHost(host) === "marketing";
+  const indexable = marketing && MARKETING_IS_INDEXABLE;
 
   if (!indexable) {
     // Covers the member space (always), a developer machine, and the marketing
@@ -34,7 +34,6 @@ export default async function robots(): Promise<MetadataRoute.Robots> {
     // what its meta tag said, because a crawler that may not fetch the page
     // never reads the tag. `Allow` wins on longest-match, which is how one
     // path is carved out of a site-wide disallow.
-    const marketing = !isLocalHost(host) && spaceForHost(host) === "marketing";
     if (marketing) {
       return {
         rules: [{ userAgent: "*", allow: [...ALWAYS_INDEXABLE_PATHS], disallow: "/" }],

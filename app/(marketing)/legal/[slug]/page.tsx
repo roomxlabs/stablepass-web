@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
 
 import {
-  formatLastUpdated,
   isLegalDocumentSlug,
   LEGAL_SLUGS,
   legalCanonicalUrl,
@@ -10,8 +9,7 @@ import {
   redirectTargetFor,
 } from "@/lib/legal";
 
-import Block from "../legal-blocks";
-import styles from "../legal.module.css";
+import LegalDocumentShell from "../legal-document";
 
 /**
  * `/legal/[slug]` (ENG-590 / W4).
@@ -85,18 +83,5 @@ export default async function LegalPage({ params }: PageProps) {
 
   const document = readLegalDocument(slug);
 
-  return (
-    <main className={styles.page}>
-      <div className="wrap">
-        <article className={styles.doc}>
-          <span className={`eyebrow ${styles.kicker}`}>Legal</span>
-          <h1 className={styles.title}>{document.title}</h1>
-          <p className={styles.updated}>Last updated {formatLastUpdated(document.lastUpdated)}</p>
-          {document.blocks.map((block, index) => (
-            <Block key={`${block.kind}-${index}`} block={block} />
-          ))}
-        </article>
-      </div>
-    </main>
-  );
+  return <LegalDocumentShell document={document} />;
 }

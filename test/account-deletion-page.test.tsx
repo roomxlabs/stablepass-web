@@ -195,11 +195,26 @@ describe("reader-app positioning — no price, no purchase route", () => {
 /* ── indexing: the carve-out, and its blast radius ───────────────────── */
 
 describe("the page is not noindexed — and nothing else changed", () => {
-  it("declares itself indexable in its own metadata, overriding the layout", () => {
+  it("declares itself indexable, but does not hand crawlers the rest of the site", () => {
     // The marketing layout sets robots:{index:false} while the site shows real
     // trainers beside placeholder biography. Next merges layout -> page per
     // top-level key, so this page naming `robots` replaces that value.
-    expect(generateMetadata().robots).toEqual({ index: true, follow: true });
+    //
+    // `follow: false` is the asymmetry that matters and is easy to "tidy" into
+    // symmetry by mistake. `Disallow: /` stops a crawler FETCHING the rest of
+    // the site; it does not stop it INDEXING a URL discovered as a link. This
+    // is the one page crawlers are invited into and it renders inside the
+    // shared marketing shell, whose nav and footer link /start, /signin and the
+    // other legal routes. Play needs this page findable — that is `index`. It
+    // never needed link discovery.
+    expect(generateMetadata().robots).toEqual({ index: true, follow: false });
+  });
+
+  it("links nothing but mailto from its own content, so nofollow is belt to that braces", () => {
+    const { container } = render(<DeleteAccountPage />);
+    const hrefs = [...container.querySelectorAll("a")].map((a) => a.getAttribute("href") ?? "");
+    expect(hrefs.length).toBeGreaterThan(0);
+    for (const href of hrefs) expect(href).toMatch(/^mailto:/);
   });
 
   it("sets its own canonical rather than inheriting the layout's", () => {
