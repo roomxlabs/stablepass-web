@@ -69,6 +69,10 @@ vi.mock("@/lib/supabase/server", () => ({
   })),
 }));
 
+vi.mock("@/lib/stripe", () => ({
+  getStripe: vi.fn(() => null),
+}));
+
 import AccountPage from "@/app/(member)/account/page";
 
 describe("AccountPage — app_user select", () => {
@@ -97,11 +101,8 @@ describe("AccountPage — app_user select", () => {
       .find((c) => c.table === "subscription");
     expect(subCall).toBeTruthy();
     const columns = subCall!.chain.select.mock.calls[0]![0] as string;
-    expect(columns).toContain("status");
-    expect(columns).toContain("trial_ends_at");
-    // `current_period_end` drives the "Access to {date}" copy for an active
-    // member — dropping it would silently render "Your access is active."
-    // forever instead of the real end date.
-    expect(columns).toContain("current_period_end");
+    expect(columns).toBe(
+      "status,trial_ends_at,current_period_end,intro_months_used,stripe_customer_id,canceled_at",
+    );
   });
 });
