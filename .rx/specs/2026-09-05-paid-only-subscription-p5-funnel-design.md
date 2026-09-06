@@ -70,3 +70,43 @@ form or `/signin` · `trial-used-wall.tsx` gone and unimported · `?trial=used` 
 form · repeat email → 409 `account_exists`, both detection paths tested · repeat phone now
 succeeds (deterrent removed by decision) · validation unchanged · `app/(marketing)/**` and
 `content/legal/**` untouched in the diff.
+
+---
+
+## Implementation notes (6 Sep 2026)
+
+Where the build met reality and the spec above was written from a stale read.
+
+**The design source's `_archive` copy does NOT supersede the live file here.** The manifest
+convention says it does, but `03-trial-start.html` carries its own header — *"revised 15 Aug
+2026 … previous version archived at `_archive/03-trial-start.2026-08-15.html`"* — and the
+archived file is the older **three-field** screen (Your name / Email / Phone). The live file is
+the six-field screen the app already implements. Built against the live file; the archive is
+history, not a newer revision. The layout was already 1:1 and did not move — this slice is copy
+only, and no CSS was added.
+
+**The mockup's `.trial-banner-web` block is still deliberately absent** and nothing replaced it.
+It was dropped on client instruction (17 Aug 2026); ENG-1003 makes it doubly wrong because what
+it said was the trial offer. No price band goes in its place: the figure the member is charged
+is quoted at `/checkout` from Stripe's `unitAmount`, and deleting `trial-used-wall.tsx` was
+supposed to take the last hardcoded price out of the member app.
+
+**Success redirected to `/onboarding`, not the feed.** The ticket said "redirect to `/checkout`,
+not the feed"; the code actually went to `/onboarding`. Same conclusion either way — `/checkout`
+— but the horse-picker is now skipped at signup rather than merely re-ordered. It stays
+reachable at its own URL.
+
+**Tests do not live where the surface said.** The surface listed
+`app/api/auth/signup/route.test.ts` and `app/start/__tests__/*`; this repo puts every unit test
+in a flat `test/` directory. Surface widened, collision-free, to `test/signup-route.test.ts`,
+`test/trial-start-form.test.tsx`, `test/sign-in-form.test.tsx`, `test/trial-used-wall.test.tsx`
+(deleted) and a new `test/no-trial-copy.test.ts`. Also widened to `e2e/trial-start.spec.ts` and
+the `/start?trial=used` blocks of `e2e/screenshots.spec.ts`, which asserted against a route
+variant this slice deletes and would otherwise be permanently red.
+
+**One change inside `route.ts` that the ticket did not list.** The 201 envelope's status
+fallback was `subscription?.status ?? "trial"`. ENG-999 dropped `trial` from
+`subscription_status_check` entirely, so that default named a status the database can no longer
+hold; it is now `"lapsed"`. The envelope **shape** is unchanged, `trial_ends_at` survives as a
+nullable vestige and is still read, and `sign-in-form.tsx`'s test
+*"keeps the 30-days-free value proposition"* was inverted rather than deleted.

@@ -1,17 +1,22 @@
 import { supabaseServer } from "@/lib/supabase/server";
 import { created, fail } from "@/lib/api/envelope";
-import { normalizePhone } from "@/lib/format/phone";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// The repeat-signup wall (ENG-763, R22). ONE code and ONE message for both the
-// phone hit and the email hit: the wall must not reveal which credential
-// matched (resolved open question on the ticket), so the two branches are
-// deliberately indistinguishable to the caller. The form keys its wall UI off
-// the CODE, not this message.
-const TRIAL_ALREADY_USED = "trial_already_used";
-const TRIAL_ALREADY_USED_MESSAGE =
-  "Looks like you've already had your free trial. Sign in to join stablepass.";
+// A duplicate EMAIL. Was `trial_already_used` (ENG-763's repeat-signup wall);
+// with the trial retired there is nothing to have used up, so this is now the
+// plain, honest fact: the address already has an account and the way in is to
+// sign in. The message is the copy the form renders verbatim — the form
+// deliberately keeps no branch of its own on this code (ENG-1003).
+//
+// A duplicate PHONE is no longer refused at all. The `phone_in_use` pre-check
+// existed only to enforce one free trial per number; there is no trial to
+// ration, so the number is not a deterrent any more. ENG-742's index and its
+// RPC both stay in the database — the backstop still degrades a duplicate phone
+// to NULL rather than failing the insert — this route simply stops calling it.
+const ACCOUNT_EXISTS = "account_exists";
+const ACCOUNT_EXISTS_MESSAGE =
+  "You already have an account with that email — sign in to continue.";
 const MIN_PASSWORD = 8;
 // AU postcode: exactly four digits, stored as text so '0800' survives. Never
 // parseInt it, and never widen this to accept 'VIC 3000' — the DB has a
@@ -21,8 +26,11 @@ const POSTCODE_RE = /^\d{4}$/;
 const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 
 // POST /api/auth/signup — the ONLY creation path for a new subscriber. Anon
-// signUp; the DB trigger handle_new_user() provisions app_user + a 30-day
-// trial subscription. Never a second creation path, never the service role.
+// signUp; the DB trigger handle_new_user() provisions app_user + a subscription
+// row that is born `lapsed` (ENG-999 — no trial). The new account therefore
+// holds NO access and reads zero content rows until Stripe says otherwise, and
+// the form sends it straight to /checkout. Never a second creation path, never
+// the service role.
 export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
   // Trim everything up front: a whitespace-only field is empty, and '3000 '
@@ -52,51 +60,6 @@ export async function POST(req: Request) {
   }
 
   const sb = await supabaseServer();
-
-  // ---- the pre-signup wall (ENG-763) -------------------------------------
-  // One free trial per phone number. This check is the ONLY thing that can tell
-  // a member their number has already had a trial: ENG-742's backstop index
-  // deliberately does NOT fail the signup, it degrades the duplicate phone to
-  // NULL and issues the trial anyway, because `handle_new_user` is an AFTER
-  // INSERT trigger on auth.users and anything it raises 500s the whole insert
-  // and echoes the row back (the ENG-566 outage). Per stablepass-be's
-  // docs/specs/api-contract.md: "a client cannot detect 'phone already used'
-  // from the signup response" — so the wall lives here, before the account is
-  // created, and `phone_in_use` is the documented supported signal.
-  //
-  // It is a DETERRENT, not a security control. GoTrue's /auth/v1/signup is
-  // publicly reachable, so anyone willing to curl it directly walks straight
-  // past this. Making it a real gate needs a verified phone (OTP at signup),
-  // which is out of scope. Do not describe this as enforcement.
-  //
-  // The number is sent AS TYPED because the RPC normalises in its own body,
-  // which is what keeps the comparison identical to the index's. normalizePhone
-  // is only used to skip a pointless round trip: the RPC's contract is that
-  // null/empty/garbage input returns false, so a value that normalises to null
-  // can never be in use.
-  if (normalizePhone(phone) !== null) {
-    const { data: phoneTaken, error: rpcError } = await sb.rpc("phone_in_use", {
-      p_phone: phone,
-    });
-
-    if (rpcError) {
-      // Fail OPEN, by design (ticket decision): during a deploy skew where web
-      // is ahead of the migration the RPC is missing (PGRST202) and walling
-      // every signup would take the funnel down. The DB backstop still degrades
-      // a duplicate phone to NULL, so the worst case is an extra trial, not a
-      // duplicate phone in app_user.
-      //
-      // The error CODE only. Never the message, and never `phone`: PostgREST
-      // forwards Postgres DETAIL verbatim and this endpoint handles PII.
-      console.warn("[signup] phone_in_use unavailable, allowing signup:", rpcError.code);
-    } else if (phoneTaken === true) {
-      // Strict `=== true`. `.rpc()` returns `{ data: null, error }` on failure
-      // and `sb` is untyped, so a truthiness test here would wall a legitimate
-      // signup on any shape we did not expect. Only an explicit boolean true
-      // from the database closes this door.
-      return fail(TRIAL_ALREADY_USED, TRIAL_ALREADY_USED_MESSAGE, 409);
-    }
-  }
 
   const { data, error } = await sb.auth.signUp({
     email,
@@ -131,13 +94,11 @@ export async function POST(req: Request) {
     (error && (duplicateCode === "user_already_exists" || /already registered/i.test(error.message))) ||
     (!error && data?.user && Array.isArray(data.user.identities) && data.user.identities.length === 0);
   if (looksLikeDuplicate) {
-    // Was `email_taken`. An address that already has an account has, for this
-    // product, already had its free trial, so it gets the SAME wall as a repeat
-    // phone (ENG-763 decision 2) rather than a second, subtly different dead
-    // end. The old code is gone rather than aliased: this BFF has exactly one
-    // consumer, app/start/trial-start-form.tsx, and two codes meaning one thing
-    // is how the two branches drift apart.
-    return fail(TRIAL_ALREADY_USED, TRIAL_ALREADY_USED_MESSAGE, 409);
+    // BOTH detection paths above are load-bearing and both stay. Supabase
+    // resists enumeration and returns the duplicate either way depending on the
+    // GoTrue build, so dropping one silently demotes half the duplicates to a
+    // generic 400 — which is a worse experience, not a safer one.
+    return fail(ACCOUNT_EXISTS, ACCOUNT_EXISTS_MESSAGE, 409);
   }
 
   if (error) {
@@ -191,10 +152,15 @@ export async function POST(req: Request) {
     ? await sb.from("subscription").select("status,trial_ends_at").eq("user_id", userId).maybeSingle()
     : { data: null };
 
+  // Envelope shape unchanged. The FALLBACK moved from "trial" to "lapsed":
+  // ENG-999 dropped 'trial' from subscription_status_check entirely, so the old
+  // default named a status the database can no longer hold. `trial_ends_at`
+  // survives as a nullable vestige and is still read here rather than dropped,
+  // because the key is part of the published 201 shape.
   return created({
     subscriber,
     subscription: {
-      status: subscription?.status ?? "trial",
+      status: subscription?.status ?? "lapsed",
       trialEndsAt: subscription?.trial_ends_at ?? null,
     },
   });

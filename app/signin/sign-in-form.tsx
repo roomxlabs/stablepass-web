@@ -109,10 +109,16 @@ export function SignInForm() {
       {/* Sits directly under "Forgot your password?", so the reader here is often
           someone who already HAS an account and cannot get in. Lead with the fact
           that this creates a NEW account — the old "Not subscribed yet? Start 30
-          days free" read as a way back in and produced duplicate accounts. */}
+          days free" read as a way back in and produced duplicate accounts
+          (ENG-583/1). The "— 30 days free" tail that replaced it has now gone
+          the same way for the opposite reason: ENG-1003 retired the trial, so it
+          was advertising something the funnel does not offer. The link name still
+          says create an account on its own, which is what ENG-583/1 actually
+          fixed; no offer is put in its place, because the price the member pays
+          is quoted at /checkout from Stripe. */}
       <div className="auth-foot">
         Don&apos;t have an account?{" "}
-        <a href="/start">Create an account — 30 days free</a>
+        <a href="/start">Create an account</a>
       </div>
     </form>
   );

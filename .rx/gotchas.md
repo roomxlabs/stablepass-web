@@ -1482,3 +1482,46 @@ just-paid / webhook-in-flight window and is ENTITLED, so a naive
 `canCancel = entitled && status === "active"` offers the control there — and
 cancelling revokes access on the spot until the late webhook restores it. Any
 future cancel affordance must require a non-null `current_period_end`.
+## RESOLVED by ENG-1003 — signup no longer calls `phone_in_use`
+The "a LEAKED e2e user bricks every later run" entry above is **dead as of ENG-1003**.
+`POST /api/auth/signup` no longer consults the RPC at all (the trial it rationed is
+retired), so a stale `+61 400 000 000` in `app_user` walls nothing and the recovery
+`DELETE` in that entry is chasing a ghost. The RPC and `idx_app_user_phone` still
+exist server-side — ENG-742's backstop still degrades a duplicate phone to NULL — so
+`lib/format/phone.ts` and its parity test stay; they simply have no production caller
+now. A repeat phone signs up normally, by decision.
+
+## `_archive/` does NOT always supersede the live mockup — read the file's own header
+The manifest convention says an archived mockup supersedes the live one. On
+`mockups/web/screens/03-trial-start.html` that is **backwards**: the live file's header
+says *"revised 15 Aug 2026 … Previous version archived at
+`_archive/03-trial-start.2026-08-15.html`"*, and the archive is the older **three-field**
+screen (Your name / Email / Phone) against the live six-field one the app actually
+implements. Building to the archive would have deleted first/last name, postcode and
+password from `/start`. Check the live file's own header before applying the convention —
+it names its predecessor when it has one. (Also still true, verified again 6 Sep 2026:
+`.rx/mockups.md` points at `06-stage1-design/mockups/web/`, which does not exist. The real
+tree is `dev-handover/StablePass-mockups/mockups/web/`, OUTSIDE this repo.)
+
+## A copy-guard test is only as good as its pattern list — mutate it before trusting it
+ENG-1003's `test/no-trial-copy.test.ts` originally banned `/free trial/`, `/30 days free/`
+and `/30 days, on us/` — and the single largest piece of trial copy it was written to keep
+out, the aside quote *"30 days on us — no credit card, no auto-charge"*, matched **none** of
+them (no comma, and "no credit card" is the pitch without ever saying "trial"). It passed
+green while the thing it guarded against could be pasted straight back. Two rules:
+1. **Mutation-test a grep guard**: restore the exact string the ticket deleted and confirm
+   the test goes RED. Green after that mutation means the guard is decorative.
+2. **Never key an allowlist on line numbers** when the scanner strips comments. A plain
+   `raw.replace(/\/\*[\s\S]*?\*\//g, "")` deletes the newlines *inside* the comment, so
+   `i + 1` is an index into the stripped body, not a file line — it drifts the moment
+   anyone adds a multi-line JSX comment, and it silently ALLOWS whatever else lands on the
+   allowed index. Blank the comment out instead — `.replace(/[^\n]/g, "")` inside the
+   callback — and key the allowlist on the offending **text**.
+
+## An absence-only assertion is a tautology once the call site is deleted
+`expect(rpcMock).not.toHaveBeenCalled()` after the RPC call has been removed from the route
+can never fail, and does not prove the acceptance criterion it was written for ("a repeat
+phone now creates an account normally"). Pair every "X is no longer called" assertion with
+the positive control in the same test — assert the 201 as well — or the test file grows
+green assertions that measure nothing. Same for `not.toHaveBeenCalledWith(...)` sitting
+above `not.toHaveBeenCalled()`: the second strictly subsumes the first.
