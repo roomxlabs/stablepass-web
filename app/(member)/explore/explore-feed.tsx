@@ -10,11 +10,12 @@
 // viewer's own `reaction`/`bookmark` rows (RLS returns only the viewer's own).
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { AccessWall } from "@/components/access-wall";
-import { PostCard, mediaBoxProps } from "@/components/post-card";
+import { PostCard, PostAvatar, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { RaceDayBand } from "@/components/race-day-band";
 import { TrainerCard } from "@/components/trainer-card";
 import { supabaseBrowser } from "@/lib/supabase/client";
+import { signPhotoMap, HORSE_PHOTO_BUCKET, TRAINER_PHOTO_BUCKET } from "@/lib/storage/photos";
 import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@/lib/api/post-media";
 import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
 import type { FeedPost, ReactionEmoji, RaceDayEntry, TrainerSummary } from "@/components/types";
@@ -28,9 +29,10 @@ type PostRow = PostIntrinsicRow & { horse_id: string };
 
 // `id` for the Follow pill (a name is not a key), `stable_name`/`location` for the
 // STABLE UPDATE panel footer. Stable identity only — there is no owner field here
-// and none may be added.
-type HorseTrainer = { id: string; name: string; stable_name: string | null; location: string | null };
-type HorseRow = { id: string; display_name: string; trainer: HorseTrainer | HorseTrainer[] | null };
+// and none may be added. `photo_url` (both sides) is a bare object path in a
+// PRIVATE bucket — signed below, never rendered raw (ENG-958).
+type HorseTrainer = { id: string; name: string; stable_name: string | null; location: string | null; photo_url: string | null };
+type HorseRow = { id: string; display_name: string; photo_url: string | null; trainer: HorseTrainer | HorseTrainer[] | null };
 type ReactionRow = { post_id: string; emoji: ReactionEmoji };
 type BookmarkRow = { post_id: string };
 
@@ -159,7 +161,7 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
         // `sb` is untyped, so `tsc` can never catch a too-narrow `.select()`:
         // dropping a column here would silently blank the byline, the panel
         // footer or the Follow pill with no type error. Pinned by a test.
-        sb.from("horse").select("id, display_name, trainer:trainer_id(id, name, stable_name, location)").in("id", horseIds),
+        sb.from("horse").select("id, display_name, photo_url, trainer:trainer_id(id, name, stable_name, location, photo_url)").in("id", horseIds),
         sb.from("reaction").select("post_id,emoji").in("post_id", ids),
         sb.from("bookmark").select("post_id").in("post_id", ids),
       ]);
@@ -167,6 +169,14 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
       const horseById = new Map(((horseRows ?? []) as HorseRow[]).map((h) => [h.id, h]));
       const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
       const mySet = new Set(((bookmarkRows ?? []) as BookmarkRow[]).map((b) => b.post_id));
+      // `photo_url` is a bare path in a PRIVATE bucket — sign it or the avatar
+      // renders as a broken relative URL. ONE batch call per bucket for the
+      // whole page, never per card (ENG-958).
+      const horseRowsList = (horseRows ?? []) as HorseRow[];
+      const [horsePhotos, trainerPhotos] = await Promise.all([
+        signPhotoMap(sb, HORSE_PHOTO_BUCKET, horseRowsList.map((h) => h.photo_url)),
+        signPhotoMap(sb, TRAINER_PHOTO_BUCKET, horseRowsList.map((h) => one(h.trainer)?.photo_url)),
+      ]);
       // Photos + their slide counts via ONE POST /api/posts/media; video posters
       // via playback?posterOnly=1. Absolute URLs pass through. A 402 surfaces the
       // AccessWall (guardrail 3). `slideCounts` rides in on the same batch, which
@@ -196,6 +206,8 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
           trainerId: trainer?.id ?? null,
           stableName: trainer?.stable_name ?? null,
           stableLocation: trainer?.location ?? null,
+          horsePhotoUrl: horse?.photo_url ? horsePhotos.get(horse.photo_url) ?? null : null,
+          trainerPhotoUrl: trainer?.photo_url ? trainerPhotos.get(trainer.photo_url) ?? null : null,
           bookmarked: mySet.has(r.id),
         };
       });
@@ -447,7 +459,7 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
                   return (
                     <article className="post-web" key={p.id}>
                       <div className="post-head-web">
-                        <div className="post-avatar-web" aria-hidden="true">{p.horseName[0]?.toUpperCase() ?? "?"}</div>
+                        <PostAvatar url={p.horsePhotoUrl} initial={p.horseName[0]?.toUpperCase() ?? "?"} />
                         <div className="post-meta-web">
                           <h3 className="post-horse">{p.horseName}</h3>
                           {/* title on a media card is withheld (client, 18 Aug 2026) — see post-card.tsx */}

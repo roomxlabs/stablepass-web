@@ -27,19 +27,33 @@
 
 /** One horse's trainer, as embedded by the profile read.
  *
- *  DELIBERATELY NOT WIDENED with `website_url` (ENG-959). This embed has TWO
- *  consumers, and the second one is easy to miss: `app/api/horses/[id]/route.ts`
- *  returns `trainer` VERBATIM into its response envelope, so any field added
- *  here is also published to every caller of that BFF route — a response-shape
- *  change made by editing a different file, with no test in front of it. The
- *  shares CTA needs the website on ONE screen, so that screen reads it itself
- *  (see the note in app/(member)/horses/[id]/page.tsx) rather than changing a
- *  contract shared with the API. */
+ *  This embed has TWO consumers, and the second one is easy to miss:
+ *  `app/api/horses/[id]/route.ts` returns `trainer` VERBATIM into its response
+ *  envelope, so any field added here is also published to every caller of that
+ *  BFF route — a response-shape change made by editing a DIFFERENT file.
+ *
+ *  DELIBERATELY NOT WIDENED with `website_url` (ENG-959). The shares CTA needs
+ *  the website on ONE screen, so that screen reads it itself (see the note in
+ *  app/(member)/horses/[id]/page.tsx) rather than changing a contract shared
+ *  with the API. That rule stands: default to reading a one-screen field on
+ *  that screen.
+ *
+ *  `photo_url` (ENG-958) is the ONE field that is widened here, and only
+ *  because the BFF route explicitly STRIPS it back out again: it is a bare
+ *  object path in the PRIVATE `trainer-photos` bucket, so the profile page
+ *  signs it itself (lib/storage/photos.ts) exactly as it already does for the
+ *  horse's own `photo_url` below, while the route STRIPS it — the transport
+ *  rule in lib/storage/photos.ts (a path may cross only to a NAMED signer)
+ *  says that envelope has none. Unlike when ENG-959 wrote this note, that strip is now
+ *  pinned by literal assertions — see the ENG-958 block in
+ *  test/horses-route.test.ts. Widening this embed again means doing the same
+ *  work: strip it in the route, or pay the response-shape change knowingly. */
 export type TrainerRow = {
   id: string;
   name: string;
   stable_name: string | null;
   location: string | null;
+  photo_url: string | null;
 };
 
 export type HorseProfileRow = {
@@ -80,12 +94,18 @@ export type HorseProfileRow = {
 // `shares_for_sale` (ENG-959) is safe to add HERE, unlike a trainer field: the
 // BFF route (app/api/horses/[id]/route.ts) picks the `horse` object's fields
 // one by one, so a new horse column changes no response shape — whereas it
-// returns the `trainer` embed verbatim (see TrainerRow above). It is also an
-// already-deployed column that other screens select directly (horses-grid.tsx
-// filters on it), so it cannot trip the 42703-blackout gotcha an undeployed
-// column would — a raise there notFound()s every horse silently.
+// returns the `trainer` embed verbatim (see TrainerRow above).
+//
+// `trainer.photo_url` (ENG-958) goes on the SAME embed rather than being a
+// second trainer read — and it is the exception that proves the rule above, so
+// the route strips it before responding and test/horses-route.test.ts pins that.
+//
+// Neither widening can trip the 42703-blackout gotcha: both are already-deployed
+// columns that other screens select directly (`shares_for_sale` in
+// horses-grid.tsx, `photo_url` off `trainer` in app/(member)/trainers/[id]/page.tsx).
+// A raise there notFound()s every horse silently.
 export const HORSE_PROFILE_COLUMNS =
-  "id, sire, dam, display_name, racing_name, sex, is_gelded, colour, foaling_year, horse_age, horse_description, training_status, starts, wins, places, prize_money_cents, story, photo_url, shares_for_sale, trainer:trainer_id(id, name, stable_name, location)";
+  "id, sire, dam, display_name, racing_name, sex, is_gelded, colour, foaling_year, horse_age, horse_description, training_status, starts, wins, places, prize_money_cents, story, photo_url, shares_for_sale, trainer:trainer_id(id, name, stable_name, location, photo_url)";
 
 /**
  * The profile pill — `"5yo · gelding"`. Both halves come from the database; this

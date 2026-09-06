@@ -69,7 +69,14 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import { GET } from "@/app/api/horses/[id]/route";
-import { HORSE_PROFILE_COLUMNS } from "@/lib/horse/profile";
+// A HAND-WRITTEN copy of the projection, deliberately NOT the imported
+// `HORSE_PROFILE_COLUMNS`. Comparing the constant against itself passes on any
+// value, so widening the shared embed used to change nothing here — the exact
+// anti-pattern the feed-mapper tests already avoid. Editing this string is the
+// point: `HORSE_PROFILE_COLUMNS` has two consumers and one of them
+// (app/api/horses/[id]/route.ts) returns the trainer embed VERBATIM.
+const EXPECTED_HORSE_PROFILE_PROJECTION =
+  "id, sire, dam, display_name, racing_name, sex, is_gelded, colour, foaling_year, horse_age, horse_description, training_status, starts, wins, places, prize_money_cents, story, photo_url, shares_for_sale, trainer:trainer_id(id, name, stable_name, location, photo_url)";
 import { GET as horseFeedGET } from "@/app/api/horses/[id]/feed/route";
 
 function params(id: string) {
@@ -552,7 +559,7 @@ describe("GET /api/horses/:id — age + description come from the database (ENG-
 
     await get();
 
-    expect(horseSelectMock).toHaveBeenCalledWith(HORSE_PROFILE_COLUMNS);
+    expect(horseSelectMock).toHaveBeenCalledWith(EXPECTED_HORSE_PROFILE_PROJECTION);
     const projection = horseSelectMock.mock.calls[0]![0] as string;
     for (const column of ["horse_age", "horse_description", "foaling_year", "sex", "is_gelded"]) {
       expect(projection).toContain(column);
@@ -604,5 +611,132 @@ describe("GET /api/horses/:id — age + description come from the database (ENG-
     expect(res.status).toBe(404);
     expect(body.error.code).toBe("not_found");
     expect(body.data).toBeUndefined();
+  });
+});
+
+// ENG-958 — the unsigned-path strip in app/api/horses/[id]/route.ts.
+//
+// This block exists because that strip was pinned by NOTHING: deleting it left
+// the suite green and `tsc` clean. The shared `HORSE_PROFILE_COLUMNS` embeds
+// `trainer.photo_url` for the PROFILE PAGE (which signs it), and this route is
+// the constant's other consumer — it returns the embedded trainer VERBATIM, so
+// without the strip a bare `trainer-photos` object path ships to browser JS.
+//
+// Every assertion here is a LITERAL. The pre-existing projection test compares
+// against the imported constant, so it passes on any value — widening the embed
+// changes nothing it can see. A literal makes widening this contract a
+// deliberate edit to this file, which is the whole point of the guard.
+describe("GET /api/horses/:id — the trainer embed never ships an unsigned path (ENG-958)", () => {
+  beforeEach(() => {
+    getUserMock.mockReset();
+    fromMock.mockClear();
+    storageFromMock.mockClear();
+    createSignedUrlMock.mockClear();
+    subSelectMock.mockClear();
+    horseSelectMock.mockClear();
+    for (const key of Object.keys(tableData)) delete tableData[key];
+  });
+
+  const TRAINER_PATH = "9f1c4e2a-trainer-face.jpg";
+
+  function entitled() {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+    tableData.race_horse = { data: [] };
+  }
+
+  function horseRowWithTrainer(trainer: unknown) {
+    return {
+      data: {
+        id: "h1", sire: null, dam: null, display_name: "Kuda Ilham", racing_name: null,
+        sex: null, is_gelded: false, colour: null, foaling_year: null,
+        horse_age: null, horse_description: null, training_status: "racing",
+        starts: 0, wins: 0, places: 0, prize_money_cents: 0, story: null,
+        photo_url: null, trainer,
+      },
+    };
+  }
+
+  async function get() {
+    const res = await GET(new Request("http://localhost/api/horses/h1"), params("h1"));
+    return { res, body: await res.json() };
+  }
+
+  it("GUARDRAIL: strips `photo_url` from the embedded trainer — the key is absent, not null", async () => {
+    entitled();
+    tableData.horse = horseRowWithTrainer({
+      id: "t1", name: "Chris Waller", stable_name: "Waller Racing", location: "Rosehill",
+      photo_url: TRAINER_PATH,
+    });
+
+    const { res, body } = await get();
+
+    expect(res.status).toBe(200);
+    // A LITERAL key set — not `Object.keys(TrainerRow)`, not the imported
+    // constant. Note what this does and does NOT catch: these keys come from
+    // the FIXTURE, so it pins that the route STRIPS what it is handed. The
+    // tripwire for someone widening the shared projection is the literal
+    // -projection test at the bottom of this block; the two work as a pair.
+    expect(Object.keys(body.data.trainer).sort()).toEqual(["id", "location", "name", "stable_name"]);
+    expect("photo_url" in body.data.trainer).toBe(false);
+    // The un-stripped fields still make it out — the strip is surgical.
+    expect(body.data.trainer.id).toBe("t1");
+    expect(body.data.trainer.name).toBe("Chris Waller");
+    expect(body.data.trainer.stable_name).toBe("Waller Racing");
+    expect(body.data.trainer.location).toBe("Rosehill");
+    // Belt and braces: the path must not appear ANYWHERE in the envelope —
+    // catches a re-add under a different key, or a nested copy.
+    expect(JSON.stringify(body)).not.toContain(TRAINER_PATH);
+  });
+
+  it("GUARDRAIL: strips it from the ARRAY embed form too — PostgREST returns either shape", async () => {
+    entitled();
+    tableData.horse = horseRowWithTrainer([
+      { id: "t1", name: "Chris Waller", stable_name: null, location: null, photo_url: TRAINER_PATH },
+    ]);
+
+    const { body } = await get();
+
+    expect(Object.keys(body.data.trainer).sort()).toEqual(["id", "location", "name", "stable_name"]);
+    expect(JSON.stringify(body)).not.toContain(TRAINER_PATH);
+  });
+
+  it("a trainerless horse still serialises `trainer: null`, never `{}` — the null branch is load-bearing", async () => {
+    entitled();
+    tableData.horse = horseRowWithTrainer(null);
+
+    const { res, body } = await get();
+
+    expect(res.status).toBe(200);
+    // `toBeNull` and not `toBeFalsy`: `{}` is truthy, but so is the bug where
+    // the strip destructures off a `?? {}` and emits an empty object. (The
+    // null comes from the ternary's else-branch in the route; `one()` supplies
+    // the `?? null` that makes an empty array embed reach it.)
+    expect(body.data.trainer).toBeNull();
+    expect(body.data.trainer).not.toEqual({});
+    // The key must still be PRESENT — an `undefined` vanishes from JSON and
+    // silently changes this envelope's shape for every trainerless horse.
+    expect("trainer" in body.data).toBe(true);
+  });
+
+  it("an empty ARRAY embed also serialises `trainer: null`", async () => {
+    entitled();
+    tableData.horse = horseRowWithTrainer([]);
+
+    const { body } = await get();
+
+    expect(body.data.trainer).toBeNull();
+  });
+
+  it("pins the projection as a LITERAL — the imported-constant assertion above passes on any value", async () => {
+    entitled();
+    tableData.horse = horseRowWithTrainer(null);
+
+    await get();
+
+    // If this string needs editing, you are changing what the horse profile
+    // read returns. `sb` is untyped, so this literal is the only thing that
+    // notices — and the trainer embed below is returned VERBATIM by this route.
+    expect(horseSelectMock).toHaveBeenCalledWith(EXPECTED_HORSE_PROFILE_PROJECTION);
   });
 });
