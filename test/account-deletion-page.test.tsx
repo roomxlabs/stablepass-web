@@ -113,6 +113,19 @@ describe("the email route is a mailto, not a form", () => {
   });
 
   /**
+   * The prose prints the address too, as every other policy document does. That
+   * is a second copy of a value whose own docblock records it already changing
+   * once (17 Aug -> 1 Sep 2026), and the failure mode is a page whose link and
+   * whose text name different mailboxes. One assertion closes it.
+   */
+  it("keeps the printed address and the linked address the same", () => {
+    expect(SOURCE).toContain(CONTACT_EMAIL);
+    const printed = SOURCE.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi) ?? [];
+    expect(printed.length).toBeGreaterThan(0);
+    for (const address of printed) expect(address).toBe(CONTACT_EMAIL);
+  });
+
+  /**
    * The guardrail that decided the form-vs-address question. A form on a public
    * unauthenticated page that accepted an email address would be one validation
    * message away from answering "does this address have an account?" — an

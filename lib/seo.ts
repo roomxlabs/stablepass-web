@@ -56,6 +56,16 @@ export const MARKETING_IS_INDEXABLE = false;
  *   2. `middleware.ts`                                  — suppresses the `X-Robots-Tag`
  *   3. `app/(marketing)/legal/delete-account/page.tsx`  — `robots: { index: true }`
  *
+ * TWO DIFFERENT MATCH SEMANTICS, on purpose — know which is which before you
+ * add an entry. `isAlwaysIndexablePath` is an EXACT match, so the header
+ * exemption applies to this path and nothing beneath it. But `Allow:` in
+ * robots.txt is a PREFIX rule, so the line this list generates also permits a
+ * crawler to FETCH `/legal/delete-account/anything`. That is harmless today —
+ * every such path 404s, and middleware still sends it `noindex` — but the day
+ * someone adds a real child route under this path, robots.txt already lets it
+ * be crawled and only the exact-match header is holding it out of the index.
+ * Add the child to this list deliberately, or give it its own rule.
+ *
  * MARKETING SPACE ONLY. The member space is `noindex` unconditionally and this
  * must never change that — `/legal/*` renders on the app host too, and the
  * canonical for every one of those pages is the apex, so the app host's copy
