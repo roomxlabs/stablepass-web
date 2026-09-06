@@ -59,12 +59,20 @@ import Why from "./why";
  */
 export type HomeSectionsProps = {
   trainers?: Trainer[];
+  /**
+   * The no-JS waitlist round-trip. ENG-726's native form POST answers 303 back
+   * to `/?joined=1`, so the page has to be able to render the result without
+   * scripting; these come from the page's searchParams and are passed to the
+   * two blocks that mount the form.
+   */
+  joined?: string | null;
+  reason?: string | null;
 };
 
-export default function HomeSections({ trainers }: HomeSectionsProps = {}) {
+export default function HomeSections({ trainers, joined, reason }: HomeSectionsProps = {}) {
   return (
     <main>
-      <Hero />
+      <Hero joined={joined} reason={reason} />
       <WhatIs />
       <HowItWorks />
       <TheApp />
@@ -72,7 +80,7 @@ export default function HomeSections({ trainers }: HomeSectionsProps = {}) {
       <Pricing />
       <Why />
       <TrainersStrip trainers={trainers} />
-      <CtaBand />
+      <CtaBand joined={joined} reason={reason} />
       <Faq />
       <ForTrainers />
       <ImportantNote />
