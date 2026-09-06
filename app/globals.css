@@ -169,6 +169,20 @@ a { color: inherit; text-decoration: none; }
 .input-row { display: flex; gap: 12px; }
 .input-row .input-group { flex: 1; }
 .field-error { color: var(--red); font-size: 12.5px; margin-top: 6px; }
+/* Informational counterpart to .form-error (ENG-961). The signed-out-elsewhere
+   notice is not a validation failure — rendering it in the error red made a
+   routine "you were signed in elsewhere" read as something had gone wrong.
+   Brand green + ink, same geometry so the two swap cleanly in the same slot. */
+.form-notice {
+  background: rgba(40, 93, 80, 0.06);
+  border-left: 3px solid var(--brand-green);
+  color: var(--ink);
+  padding: 12px 16px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 13.5px;
+  margin-bottom: 18px;
+}
+
 .form-error {
   background: rgba(200, 74, 62, 0.08);
   border-left: 3px solid var(--red);
