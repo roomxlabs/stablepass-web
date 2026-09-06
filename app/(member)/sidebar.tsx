@@ -14,7 +14,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { Wordmark, BrandMark } from "@/components/wordmark";
 import { formatUnreadBadge, UNREAD_CHANGED_EVENT } from "@/app/api/notifications/contract";
-import { apiFetch } from "@/lib/api/client";
+import { apiFetch, suppressEviction } from "@/lib/api/client";
 
 type IconName = "home" | "user" | "horseshoe" | "heart" | "tag" | "bookmark" | "bell" | "account";
 
@@ -151,6 +151,10 @@ export function Sidebar({ user }: { user: SidebarUser }) {
   }, [open]);
 
   async function signOut() {
+    // Deliberate sign-out: stop any in-flight member call that 401s on the way
+    // out from redirecting to "?reason=signed-out-elsewhere" and claiming the
+    // account was used on another device (ENG-961).
+    suppressEviction();
     await supabaseBrowser().auth.signOut();
     router.push("/signin");
     router.refresh();

@@ -6,14 +6,23 @@
 // them out, they can never reactivate.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const signOutMock = vi.fn(async () => ({ error: null }));
+const signOutMock = vi.fn(async (_opts?: { scope?: string }) => ({ error: null }));
 vi.mock("@/lib/supabase/client", () => ({
   supabaseBrowser: () => ({ auth: { signOut: signOutMock } }),
 }));
 
-import { apiFetch, isMemberApiRequest, resetEvictionLatch, SIGNED_OUT_REDIRECT } from "@/lib/api/client";
+import {
+  apiFetch,
+  isMemberApiRequest,
+  resetEvictionLatch,
+  suppressEviction,
+  SIGNED_OUT_REDIRECT,
+} from "@/lib/api/client";
 
 const assignMock = vi.fn();
+
+// The exact body `UNAUTH()` emits (lib/api/envelope.ts).
+const UNAUTH_BODY = { error: { code: "unauthorized", message: "Missing or invalid session." } };
 
 function respond(status: number, body: unknown = {}) {
   // 204/205 must not carry a body — the Response constructor rejects one.
@@ -49,7 +58,7 @@ function stubFetch(res: Response) {
 
 describe("apiFetch — what signs a member out", () => {
   it("signs out and redirects on a 401 from a member /api/* call", async () => {
-    stubFetch(respond(401, { error: { code: "unauthorized" } }));
+    stubFetch(respond(401, UNAUTH_BODY));
     const res = await apiFetch("/api/feed?limit=10");
     await settle();
 
@@ -66,14 +75,14 @@ describe("apiFetch — what signs a member out", () => {
       return { error: null };
     });
     assignMock.mockImplementationOnce(() => void order.push("assign"));
-    stubFetch(respond(401));
+    stubFetch(respond(401, UNAUTH_BODY));
     await apiFetch("/api/me");
     await settle();
     expect(order).toEqual(["signOut", "assign"]);
   });
 
   it("redirects only ONCE when several member calls 401 together", async () => {
-    stubFetch(respond(401));
+    stubFetch(respond(401, UNAUTH_BODY));
     await Promise.all([apiFetch("/api/feed"), apiFetch("/api/notifications"), apiFetch("/api/me")]);
     await settle();
     expect(signOutMock).toHaveBeenCalledTimes(1);
@@ -82,7 +91,7 @@ describe("apiFetch — what signs a member out", () => {
 
   it("still redirects when signOut itself throws", async () => {
     signOutMock.mockRejectedValueOnce(new Error("network"));
-    stubFetch(respond(401));
+    stubFetch(respond(401, UNAUTH_BODY));
     await apiFetch("/api/feed");
     await settle();
     expect(assignMock).toHaveBeenCalledWith(SIGNED_OUT_REDIRECT);
@@ -158,5 +167,77 @@ describe("isMemberApiRequest", () => {
     expect(isMemberApiRequest(new URL("http://localhost:3000/api/feed"))).toBe(true);
     expect(isMemberApiRequest(new Request("http://localhost:3000/api/feed"))).toBe(true);
     expect(isMemberApiRequest(new Request("https://api.stripe.com/api/feed"))).toBe(false);
+  });
+});
+
+describe("apiFetch — eviction is local, bounded, and suppressible", () => {
+  // The default auth-js scope is "global", which would revoke the member's
+  // session on EVERY device. We are reacting to an eviction, not causing one.
+  it("clears only THIS browser (scope: local), never every device", async () => {
+    stubFetch(respond(401, UNAUTH_BODY));
+    await apiFetch("/api/feed");
+    await settle();
+    expect(signOutMock).toHaveBeenCalledWith({ scope: "local" });
+  });
+
+  it("still redirects when signOut HANGS (never resolves)", async () => {
+    vi.useFakeTimers();
+    signOutMock.mockImplementationOnce(() => new Promise(() => {}) as Promise<{ error: null }>);
+    stubFetch(respond(401, UNAUTH_BODY));
+    void apiFetch("/api/feed");
+    await vi.advanceTimersByTimeAsync(5000);
+    vi.useRealTimers();
+    expect(assignMock).toHaveBeenCalledWith(SIGNED_OUT_REDIRECT);
+  });
+
+  // A deliberate "Sign out" click must never be reported to the member as
+  // "your account was signed in on another device".
+  it("does NOT evict once a deliberate sign-out is in progress", async () => {
+    suppressEviction();
+    stubFetch(respond(401, UNAUTH_BODY));
+    await apiFetch("/api/notifications/unread-count");
+    await settle();
+    expect(assignMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("apiFetch — a 401 must be OUR envelope", () => {
+  it.each([
+    ["a foreign JSON body", { message: "nope" }],
+    ["a different envelope code", { error: { code: "rate_limited" } }],
+    ["an empty object", {}],
+  ])("does NOT sign out on a 401 with %s", async (_label, body) => {
+    stubFetch(respond(401, body));
+    await apiFetch("/api/feed");
+    await settle();
+    expect(signOutMock).not.toHaveBeenCalled();
+    expect(assignMock).not.toHaveBeenCalled();
+  });
+
+  it("does NOT sign out on a 401 with a non-JSON body (fails closed)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>gateway</html>", { status: 401 })));
+    await apiFetch("/api/feed");
+    await settle();
+    expect(assignMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves the caller a readable body (the wrapper is invisible)", async () => {
+    stubFetch(respond(401, UNAUTH_BODY));
+    const res = await apiFetch("/api/feed");
+    await expect(res.json()).resolves.toEqual(UNAUTH_BODY);
+  });
+});
+
+describe("isMemberApiRequest — server-side", () => {
+  it("is false with no window, so the latch is never set on the server", () => {
+    const w = globalThis.window;
+    // @ts-expect-error - simulating the Node render path
+    delete globalThis.window;
+    try {
+      expect(isMemberApiRequest("https://evil.com/api/x")).toBe(false);
+      expect(isMemberApiRequest("/api/feed")).toBe(false);
+    } finally {
+      globalThis.window = w;
+    }
   });
 });
