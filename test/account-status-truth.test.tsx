@@ -1,34 +1,27 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 
 // ENG-585 — the Account screen must derive its status from ENTITLEMENT, not
 // from the raw `subscription.status` string.
 //
-// The bug this file exists to prevent: `statusPill` returned "Active" for
-// `status === "active"` without ever looking at `current_period_end`, so the
-// DRI's member — expired an hour earlier, and correctly locked out by the
-// server — opened the one screen that explains their account and was told
-// "Status: Active", "30-day pass — Access to 16 August 2026" and "Your access
-// runs to 16 August 2026", next to an "Extend access" button.
-//
-// ⚠️ THE `active` + `current_period_end: null` ROW IS ENTITLED. That is a member
-// who has just paid and whose Stripe webhook has not landed yet. ENG-566,
-// ENG-577 and ENG-582 each had to get this same null right one layer down;
-// rendering it as expired would lock the screen against a paying member.
-//
-// ENG-999 retired the free trial (there is no trial wording anywhere on this
-// screen any more) and ENG-1002 made `canceled` an ENTITLED status: a
-// cancelled member keeps the days they already paid for, so this file's
-// matrix now covers `canceled` alongside `active`/`lapsed` rather than a
-// third `trial` state.
+// ENG-1028 rewrites the card for a renewing membership: next charge, intro
+// change-over, manage-card, payment-failed. The entitlement ordering is
+// unchanged — do not regress it into reading `status` first.
 
 const DAY = 24 * 60 * 60 * 1000;
 const future = new Date(Date.now() + 10 * DAY).toISOString();
 const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
-type Sub = { status: string; trial_ends_at: string | null; current_period_end: string | null } | null;
+type Sub = {
+  status: string;
+  trial_ends_at: string | null;
+  current_period_end: string | null;
+  intro_months_used?: number | null;
+  stripe_customer_id?: string | null;
+  canceled_at?: string | null;
+} | null;
 
-const { fromMock, setSub } = vi.hoisted(() => {
+const { fromMock, setSub, pricesRetrieve, couponsRetrieve } = vi.hoisted(() => {
   let sub: unknown = null;
 
   const appUserChain = {
@@ -63,6 +56,8 @@ const { fromMock, setSub } = vi.hoisted(() => {
     setSub: (next: unknown) => {
       sub = next;
     },
+    pricesRetrieve: vi.fn(),
+    couponsRetrieve: vi.fn(),
   };
 });
 
@@ -79,170 +74,224 @@ vi.mock("@/lib/supabase/server", () => ({
   })),
 }));
 
+vi.mock("@/lib/stripe", () => ({
+  getStripe: vi.fn(() => ({
+    prices: { retrieve: pricesRetrieve },
+    coupons: { retrieve: couponsRetrieve },
+  })),
+}));
+
 import AccountPage from "@/app/(member)/account/page";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
+const ORIGINAL_ENV = process.env;
 
 async function renderAccount(sub: Sub) {
   setSub(sub);
   render(await AccountPage());
 }
 
-/** The Status row's value — the pill this ticket is about. */
 function statusValue(): string {
   const label = screen.getByText("Status");
   const value = label.parentElement?.querySelector(".value");
   return value?.textContent ?? "";
 }
 
-/** The inline colour React wrote onto the pill — asserted as a literal string. */
 function statusColour(): string {
   const label = screen.getByText("Status");
   const value = label.parentElement?.querySelector(".value") as HTMLElement | null;
   return value?.style.color ?? "";
 }
 
+function activeSub(overrides: Partial<Exclude<Sub, null>> = {}): Exclude<Sub, null> {
+  return {
+    status: "active",
+    trial_ends_at: null,
+    current_period_end: future,
+    intro_months_used: 1,
+    stripe_customer_id: "cus_1",
+    canceled_at: null,
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  process.env = {
+    ...ORIGINAL_ENV,
+    STRIPE_PRICE_ID_STANDARD: "price_standard",
+    STRIPE_SECRET_KEY: "sk_test_dummy",
+  };
+  pricesRetrieve.mockResolvedValue({ unit_amount: 1900, currency: "aud" });
+  couponsRetrieve.mockResolvedValue({ amount_off: 1000, currency: "aud" });
+});
+
+afterEach(() => {
+  process.env = ORIGINAL_ENV;
 });
 
 describe("Account status — the entitlement matrix", () => {
-  it("active + FUTURE period end → Active (unchanged)", async () => {
-    await renderAccount({ status: "active", trial_ends_at: null, current_period_end: future });
+  it("active + FUTURE period end → Active", async () => {
+    await renderAccount(activeSub());
     expect(statusValue()).toBe("Active");
-    expect(screen.getByText(/^Access to /)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Extend access" })).toBeInTheDocument();
+    expect(screen.getByText(/^Access until /)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Manage card" })).toBeInTheDocument();
   });
 
-  // THE REGRESSION. This case fails against the pre-ENG-585 code, which
-  // returned "Active" here.
   it("active + PAST period end → Ended, and no past date sold as current access", async () => {
-    await renderAccount({ status: "active", trial_ends_at: null, current_period_end: past });
+    await renderAccount(activeSub({ current_period_end: past }));
 
     expect(statusValue()).toBe("Ended");
     expect(statusValue()).not.toBe("Active");
-
-    // The card must agree with the pill.
-    expect(screen.getByText("No active pass")).toBeInTheDocument();
-    expect(screen.queryByText(/^Access to /)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Your access runs to/)).not.toBeInTheDocument();
-    // "Extend access" implies there is access to extend. There isn't.
-    expect(screen.queryByRole("link", { name: "Extend access" })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Buy 30 days" })).toBeInTheDocument();
+    expect(screen.getByText("No active subscription")).toBeInTheDocument();
+    expect(screen.queryByText(/^Access until /)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("next-charge")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Subscribe" })).toBeInTheDocument();
   });
 
-  // THE TRAP — ENG-566 / ENG-577 / ENG-582 all had to get this right.
   it("active + NULL period end → still entitled (webhook in flight), never expired", async () => {
-    await renderAccount({ status: "active", trial_ends_at: null, current_period_end: null });
+    await renderAccount(activeSub({ current_period_end: null }));
     expect(statusValue()).toBe("Active");
-    expect(screen.getByText("30-day pass")).toBeInTheDocument();
+    expect(screen.getByText("Monthly membership")).toBeInTheDocument();
     expect(screen.getByText("Access active")).toBeInTheDocument();
-    expect(screen.queryByText(/Ended/)).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Extend access" })).toBeInTheDocument();
+    expect(screen.queryByTestId("next-charge")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Manage card" })).toBeInTheDocument();
   });
 
-  // ENG-1002: `canceled` is now an ENTITLED status while inside its paid
-  // period. The pill must say so WITHOUT reading as "everything is fine" —
-  // hence a distinct label, still in the entitled (green) colour.
   it("canceled + FUTURE period end → 'Access ending' (still entitled, not the red Ended colour)", async () => {
-    await renderAccount({ status: "canceled", trial_ends_at: null, current_period_end: future });
+    await renderAccount(activeSub({ status: "canceled", canceled_at: "2026-09-01T00:00:00Z" }));
 
     expect(statusValue()).toBe("Access ending");
-    // The POSITIVE assertion, not just "not red": entitlement decides the
-    // colour, and both entitled wordings are green.
     expect(statusColour()).toBe("var(--brand-green)");
-    expect(screen.getByText("30-day pass")).toBeInTheDocument();
-    expect(document.body.textContent).toMatch(/continues to /);
-    expect(document.body.textContent).toMatch(/will not continue/);
+    expect(screen.getByText("Monthly membership")).toBeInTheDocument();
+    expect(document.body.textContent).toMatch(/continues until /);
+    expect(document.body.textContent).toMatch(/won't be charged again/);
+    expect(screen.queryByTestId("next-charge")).not.toBeInTheDocument();
   });
 
   it("canceled + PAST period end → Ended", async () => {
-    await renderAccount({ status: "canceled", trial_ends_at: null, current_period_end: past });
+    await renderAccount(
+      activeSub({
+        status: "canceled",
+        current_period_end: past,
+        canceled_at: "2026-08-01T00:00:00Z",
+      }),
+    );
     expect(statusValue()).toBe("Ended");
-    expect(screen.getByText("No active pass")).toBeInTheDocument();
+    expect(screen.getByText("No active subscription")).toBeInTheDocument();
   });
 
-  it("lapsed + past period end → Ended", async () => {
-    await renderAccount({ status: "lapsed", trial_ends_at: null, current_period_end: past });
+  it("lapsed + past period end + no customer → Ended, generic copy, not payment-failed", async () => {
+    await renderAccount(
+      activeSub({
+        status: "lapsed",
+        current_period_end: past,
+        stripe_customer_id: null,
+      }),
+    );
     expect(statusValue()).toBe("Ended");
-    expect(screen.queryByText(/^Access to /)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("payment-failed")).not.toBeInTheDocument();
+    expect(document.body.textContent).toMatch(/access has ended/i);
+    expect(screen.getByRole("link", { name: "Subscribe" })).toBeInTheDocument();
   });
 
   it("no subscription row at all → Ended, fails closed", async () => {
     await renderAccount(null);
     expect(statusValue()).toBe("Ended");
-    expect(screen.getByText("No active pass")).toBeInTheDocument();
+    expect(screen.getByText("No active subscription")).toBeInTheDocument();
   });
 });
 
-describe("Account card copy", () => {
-  it("never implies the pass renews", async () => {
-    await renderAccount({ status: "active", trial_ends_at: null, current_period_end: future });
-    expect(document.body.textContent).toMatch(/It does not renew/);
-    expect(document.body.textContent).not.toMatch(/auto-?renew/i);
+describe("Next charge + intro change-over", () => {
+  it("active member inside intro sees next charge amount/date and the A$19 change-over", async () => {
+    await renderAccount(activeSub({ intro_months_used: 1 }));
+
+    const next = screen.getByTestId("next-charge");
+    expect(next.textContent).toMatch(/A\$9\.00 on /);
+    const change = screen.getByTestId("change-over");
+    expect(change.textContent).toMatch(/A\$19\.00 from /);
+    expect(pricesRetrieve).toHaveBeenCalledWith("price_standard");
+    expect(couponsRetrieve).toHaveBeenCalledWith("intro_5");
   });
 
-  it("offers no payment-method or reactivate affordance in any state", async () => {
-    for (const sub of [
-      { status: "active", trial_ends_at: null, current_period_end: future },
-      { status: "active", trial_ends_at: null, current_period_end: past },
-      { status: "canceled", trial_ends_at: null, current_period_end: future },
-    ]) {
-      document.body.innerHTML = "";
-      await renderAccount(sub);
-      expect(document.body.textContent).not.toMatch(/payment method/i);
-      expect(document.body.textContent).not.toMatch(/reactivate/i);
-    }
+  it("active member past intro sees the standard next charge and no change-over line", async () => {
+    await renderAccount(activeSub({ intro_months_used: 6 }));
+
+    const next = screen.getByTestId("next-charge");
+    expect(next.textContent).toMatch(/A\$19\.00 on /);
+    expect(screen.queryByTestId("change-over")).not.toBeInTheDocument();
+    expect(couponsRetrieve).not.toHaveBeenCalled();
+  });
+
+  it("omits amounts rather than inventing them when Stripe is unreadable", async () => {
+    pricesRetrieve.mockRejectedValue(new Error("nope"));
+    await renderAccount(activeSub());
+
+    const next = screen.getByTestId("next-charge");
+    expect(next.textContent).not.toMatch(/A\$/);
+    expect(next.textContent).toMatch(/On /);
+    // Label is already "Then" — the value must not repeat it.
+    expect(screen.getByTestId("change-over").querySelector(".value")?.textContent).toBe(
+      "the standard monthly price",
+    );
+  });
+
+  it("webhook-in-flight (null period) with intro remaining falls back to 'then A$19.00 per month' without a date", async () => {
+    await renderAccount(activeSub({ current_period_end: null, intro_months_used: 2 }));
+    const change = screen.getByTestId("change-over");
+    expect(change.textContent).toMatch(/A\$19\.00 per month/);
+    expect(change.textContent).not.toMatch(/ from /);
   });
 });
 
-// ENG-1002: only a member with an active row and remaining entitlement is
-// offered the Cancel control. A lapsed member has nothing to cancel (the RPC
-// would just answer 409), and an already-cancelled member must not be shown
-// it again.
+describe("Payment-failed state", () => {
+  it("lapsed + stripe customer + no canceled_at → payment-failed copy and portal link, not 'access ended'", async () => {
+    await renderAccount(
+      activeSub({
+        status: "lapsed",
+        current_period_end: past,
+        stripe_customer_id: "cus_failed",
+        canceled_at: null,
+      }),
+    );
+
+    expect(statusValue()).toBe("Ended");
+    expect(screen.getByTestId("payment-failed")).toHaveTextContent(/payment didn't go through/i);
+    expect(screen.getByTestId("payment-failed").textContent).not.toMatch(/access ended/i);
+    expect(screen.getByRole("link", { name: "Update your card" })).toHaveAttribute(
+      "href",
+      "/api/subscription/portal",
+    );
+    expect(screen.getByRole("link", { name: "Subscribe" })).toHaveAttribute("href", "/checkout");
+    expect(screen.queryByTestId("next-charge")).not.toBeInTheDocument();
+  });
+});
+
 describe("Cancel control visibility", () => {
   it("present for active + FUTURE period end", async () => {
-    await renderAccount({ status: "active", trial_ends_at: null, current_period_end: future });
+    await renderAccount(activeSub());
     expect(screen.getByTestId("cancel-open")).toBeInTheDocument();
   });
 
-  // THE MISSING PIN. `canCancel` is `entitled && status === "active" && ...`,
-  // and `active` + a PAST period end is the ONLY state where `entitled` and the
-  // raw status disagree — so without this case the `entitled &&` clause is dead
-  // weight that no test would notice being deleted (proved by mutation). The
-  // state is reachable in production: an `active` row whose period has elapsed
-  // but which the nightly `subscription-expiry-sweep` has not reached yet.
-  // Showing Cancel there, beside "Ended" / "No active pass", would be a fresh
-  // instance of the ENG-585 bug this file exists to prevent.
   it("absent for active + PAST period end (entitlement decides, not the raw status)", async () => {
-    await renderAccount({ status: "active", trial_ends_at: null, current_period_end: past });
+    await renderAccount(activeSub({ current_period_end: past }));
     expect(screen.queryByTestId("cancel-open")).not.toBeInTheDocument();
   });
 
-  // ⚠️ ABSENT, not present, for the webhook-in-flight window. The member IS
-  // entitled here — but `cancel_own_subscription()` stamps
-  // `current_period_end = coalesce(current_period_end, now())`, so cancelling
-  // with a null period revokes access IMMEDIATELY (until the late webhook
-  // restores it). Offering the control would mean a button promising "you keep
-  // the days you've paid for" that lands the member on the access wall, which
-  // breaks this ticket's own acceptance criterion. The window is seconds long.
-  it("absent for active + NULL period end (webhook in flight — cancelling now would revoke access)", async () => {
-    await renderAccount({ status: "active", trial_ends_at: null, current_period_end: null });
+  it("absent for active + NULL period end (webhook in flight)", async () => {
+    await renderAccount(activeSub({ current_period_end: null }));
     expect(screen.queryByTestId("cancel-open")).not.toBeInTheDocument();
-    // …but the member is still ENTITLED, and the card must still say so.
     expect(statusValue()).toBe("Active");
   });
 
   it("absent for canceled + FUTURE period end", async () => {
-    await renderAccount({ status: "canceled", trial_ends_at: null, current_period_end: future });
-    expect(screen.queryByTestId("cancel-open")).not.toBeInTheDocument();
-  });
-
-  it("absent for canceled + PAST period end", async () => {
-    await renderAccount({ status: "canceled", trial_ends_at: null, current_period_end: past });
+    await renderAccount(activeSub({ status: "canceled" }));
     expect(screen.queryByTestId("cancel-open")).not.toBeInTheDocument();
   });
 
   it("absent for lapsed", async () => {
-    await renderAccount({ status: "lapsed", trial_ends_at: null, current_period_end: past });
+    await renderAccount(activeSub({ status: "lapsed", current_period_end: past }));
     expect(screen.queryByTestId("cancel-open")).not.toBeInTheDocument();
   });
 
@@ -252,21 +301,35 @@ describe("Cancel control visibility", () => {
   });
 });
 
-// ENG-999 retired the free trial outright — the branches were removed, not
-// left unreachable — so no state of this screen should print the word
-// "trial" anywhere any more.
-describe("No trial wording anywhere on this screen", () => {
+describe("Retired buy-days copy is gone", () => {
+  const retired = /Buy 30 days|Extend access|30-day pass|does not renew|doesn’t renew|buy another 30 days/i;
+
   it.each([
-    ["active + future", { status: "active", trial_ends_at: null, current_period_end: future }],
-    ["active + null", { status: "active", trial_ends_at: null, current_period_end: null }],
-    ["active + past", { status: "active", trial_ends_at: null, current_period_end: past }],
-    ["canceled + future", { status: "canceled", trial_ends_at: null, current_period_end: future }],
-    ["canceled + past", { status: "canceled", trial_ends_at: null, current_period_end: past }],
-    ["lapsed", { status: "lapsed", trial_ends_at: null, current_period_end: past }],
+    ["active + future", activeSub()],
+    ["active + null", activeSub({ current_period_end: null })],
+    ["active + past", activeSub({ current_period_end: past })],
+    ["canceled + future", activeSub({ status: "canceled" })],
+    ["canceled + past", activeSub({ status: "canceled", current_period_end: past })],
+    ["lapsed never-sub", activeSub({ status: "lapsed", current_period_end: past, stripe_customer_id: null })],
+    ["payment-failed", activeSub({ status: "lapsed", current_period_end: past, stripe_customer_id: "cus_x" })],
     ["null row", null],
   ] as const)("%s", async (_label, sub) => {
     document.body.innerHTML = "";
     await renderAccount(sub as Sub);
+    expect(document.body.textContent).not.toMatch(retired);
     expect(document.body.textContent).not.toMatch(/trial/i);
+  });
+
+  it("source of the card + cancel island does not contain the retired strings", () => {
+    const files = [
+      "app/(member)/account/page.tsx",
+      "app/(member)/account/cancel-card.tsx",
+      "app/(member)/account/billing.ts",
+    ];
+    for (const rel of files) {
+      const src = readFileSync(path.join(process.cwd(), rel), "utf8");
+      expect(src, rel).not.toMatch(/Buy 30 days|Extend access|30-day pass/);
+      expect(src, rel).not.toMatch(/does not renew|buy another 30 days/i);
+    }
   });
 });

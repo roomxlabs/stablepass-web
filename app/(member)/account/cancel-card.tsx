@@ -121,7 +121,7 @@ export function CancelCard({ endDate }: { endDate: string | null }) {
             */}
             {endDate
               ? `You'll keep full access until ${endDate}.`
-              : "Your access continues for the period you've already paid for."}
+              : "Your access continues to the end of this period."}
           </div>
         </div>
         <button
@@ -147,8 +147,8 @@ export function CancelCard({ endDate }: { endDate: string | null }) {
       </div>
       <p style={{ fontSize: 13.5, color: "var(--muted)", margin: "0 0 18px", lineHeight: 1.55 }}>
         {endDate
-          ? `Your access continues until ${endDate} and will not continue after that. Nothing is charged now, and nothing is refunded — you keep the days you've already paid for.`
-          : "Your access continues to the end of the period you've already paid for and will not continue after that. Nothing is charged now, and nothing is refunded."}
+          ? `Your access continues until ${endDate}. After that, your subscription ends and you won't be charged again.`
+          : "Your access continues to the end of this period. After that, your subscription ends and you won't be charged again."}
       </p>
 
       <div className="input-group">

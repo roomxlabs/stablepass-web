@@ -8,11 +8,33 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ERROR, which is exactly the ENG-582 checkout-route bug on this same table.
 // The `from` spy below exists so that guardrail is a machine-checked fact,
 // not a comment.
-const { getUserMock, rpcMock, fromMock } = vi.hoisted(() => ({
-  getUserMock: vi.fn(),
-  rpcMock: vi.fn(),
-  fromMock: vi.fn(),
-}));
+const { getUserMock, rpcMock, fromMock, updateMock, getStripeMock, subscriptionsUpdate, tableData } =
+  vi.hoisted(() => {
+    const tableData: Record<string, { data: unknown; error?: unknown }> = {};
+    const updateMock = vi.fn();
+    function makeChain(table: string) {
+      const result = () => tableData[table] ?? { data: null, error: null };
+      const chain = {
+        select: vi.fn(() => chain),
+        eq: vi.fn(() => chain),
+        update: vi.fn((patch: unknown) => {
+          updateMock(table, patch);
+          return chain;
+        }),
+        maybeSingle: vi.fn(async () => result()),
+      };
+      return chain;
+    }
+    return {
+      getUserMock: vi.fn(),
+      rpcMock: vi.fn(),
+      fromMock: vi.fn((table: string) => makeChain(table)),
+      updateMock,
+      getStripeMock: vi.fn(),
+      subscriptionsUpdate: vi.fn(),
+      tableData,
+    };
+  });
 
 vi.mock("@/lib/supabase/server", () => ({
   supabaseServer: vi.fn(async () => ({
@@ -20,6 +42,10 @@ vi.mock("@/lib/supabase/server", () => ({
     rpc: rpcMock,
     from: fromMock,
   })),
+}));
+
+vi.mock("@/lib/stripe", () => ({
+  getStripe: getStripeMock,
 }));
 
 import { POST } from "@/app/api/subscription/cancel/route";
@@ -46,7 +72,13 @@ describe("POST /api/subscription/cancel", () => {
     getUserMock.mockReset();
     rpcMock.mockReset();
     fromMock.mockClear();
+    updateMock.mockClear();
+    subscriptionsUpdate.mockReset();
+    for (const key of Object.keys(tableData)) delete tableData[key];
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    getStripeMock.mockReturnValue({ subscriptions: { update: subscriptionsUpdate } });
+    subscriptionsUpdate.mockResolvedValue({ cancel_at_period_end: true });
+    tableData.subscription = { data: { stripe_subscription_id: "sub_1" } };
   });
 
   it("happy path — 200 with only status/canceledAt/currentPeriodEnd, never the untrusted/internal fields", async () => {
@@ -69,19 +101,18 @@ describe("POST /api/subscription/cancel", () => {
     expect(bodyText).not.toContain("promo_passes_used");
   });
 
-  // GUARDRAIL (ENG-582 on this same table): the route calls the RPC and never
-  // a table update. A direct `.from("subscription").update()` under RLS
-  // matches zero rows and returns no error — it would look like success while
-  // writing nothing. Also pins that no user id crosses into the call: the
-  // definer function self-scopes with `auth.uid()`, and a definer function
-  // that accepted an id parameter would let any member cancel anyone's row.
-  it("GUARDRAIL — calls only the RPC (never .from().update()), and passes no user id", async () => {
+  // GUARDRAIL (ENG-582 on this same table): the route may SELECT the Stripe
+  // id but MUST NEVER `.from("subscription").update()`. A direct update under
+  // RLS matches zero rows and returns no error — it would look like success
+  // while writing nothing. Also pins that no user id crosses into the RPC:
+  // the definer function self-scopes with `auth.uid()`.
+  it("GUARDRAIL — writes only via the RPC (never .from().update()), and passes no user id", async () => {
     rpcMock.mockResolvedValue({ data: HAPPY_RPC_ROW, error: null });
 
     await POST(req({ reason: "too pricey" }));
 
     expect(rpcMock).toHaveBeenCalledWith("cancel_own_subscription", { p_reason: "too pricey" });
-    expect(fromMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
     const [, args] = rpcMock.mock.calls[0]!;
     expect(Object.keys(args as Record<string, unknown>)).toEqual(["p_reason"]);
   });
@@ -95,6 +126,7 @@ describe("POST /api/subscription/cancel", () => {
     expect(res.status).toBe(401);
     expect(body.error.code).toBe("unauthorized");
     expect(rpcMock).not.toHaveBeenCalled();
+    expect(subscriptionsUpdate).not.toHaveBeenCalled();
   });
 
   // Covers BOTH an already-cancelled row and a lapsed one — the RPC raises
@@ -187,5 +219,104 @@ describe("POST /api/subscription/cancel", () => {
     expect(body.error.code).toBe("cancel_failed");
     expect(bodyText).not.toContain("offending row");
     expect(bodyText).not.toContain("cancel_reason violates");
+  });
+
+  it("calls Stripe cancel_at_period_end:true BEFORE the RPC", async () => {
+    const order: string[] = [];
+    subscriptionsUpdate.mockImplementation(async () => {
+      order.push("stripe");
+      return { cancel_at_period_end: true };
+    });
+    rpcMock.mockImplementation(async () => {
+      order.push("rpc");
+      return { data: HAPPY_RPC_ROW, error: null };
+    });
+
+    const res = await POST(req({}));
+
+    expect(res.status).toBe(200);
+    expect(order).toEqual(["stripe", "rpc"]);
+    expect(subscriptionsUpdate).toHaveBeenCalledWith("sub_1", { cancel_at_period_end: true });
+  });
+
+  it("502 stripe_error when Stripe refuses — RPC is never called, row untouched", async () => {
+    subscriptionsUpdate.mockRejectedValue(new Error("stripe_outage"));
+    rpcMock.mockResolvedValue({ data: HAPPY_RPC_ROW, error: null });
+
+    const res = await POST(req({ reason: "too pricey" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(502);
+    expect(body.error.code).toBe("stripe_error");
+    expect(rpcMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("502 stripe_error when the key is missing and a Stripe id exists — RPC is never called", async () => {
+    getStripeMock.mockReturnValue(null);
+    rpcMock.mockResolvedValue({ data: HAPPY_RPC_ROW, error: null });
+
+    const res = await POST(req({}));
+    const body = await res.json();
+
+    expect(res.status).toBe(502);
+    expect(body.error.code).toBe("stripe_error");
+    expect(rpcMock).not.toHaveBeenCalled();
+    expect(subscriptionsUpdate).not.toHaveBeenCalled();
+
+    // A reused module-scope Response is unreadable on the second call.
+    const again = await POST(req({}));
+    expect(again.status).toBe(502);
+    expect((await again.json()).error.code).toBe("stripe_error");
+  });
+
+  it("no stripe_subscription_id → skip Stripe and still run the RPC", async () => {
+    tableData.subscription = { data: { stripe_subscription_id: null } };
+    rpcMock.mockResolvedValue({ data: HAPPY_RPC_ROW, error: null });
+
+    const res = await POST(req({}));
+
+    expect(res.status).toBe(200);
+    expect(subscriptionsUpdate).not.toHaveBeenCalled();
+    expect(rpcMock).toHaveBeenCalledWith("cancel_own_subscription", { p_reason: null });
+  });
+
+  it("a failed subscription read is 500 and touches neither Stripe nor the RPC", async () => {
+    tableData.subscription = {
+      data: null,
+      error: { code: "42703", message: "column subscription.stripe_subscription_id does not exist" },
+    };
+
+    const res = await POST(req({}));
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.error.code).toBe("cancel_failed");
+    expect(subscriptionsUpdate).not.toHaveBeenCalled();
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("no subscription row → skip Stripe and still run the RPC (409 is the RPC's to report)", async () => {
+    tableData.subscription = { data: null };
+    rpcMock.mockResolvedValue({
+      data: null,
+      error: { code: "42501", message: "no_active_subscription" },
+    });
+
+    const res = await POST(req({}));
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.error.code).toBe("no_active_subscription");
+    expect(subscriptionsUpdate).not.toHaveBeenCalled();
+    expect(rpcMock).toHaveBeenCalled();
+  });
+
+  it("an over-long reason is 400 before Stripe OR the RPC is touched", async () => {
+    const res = await POST(req({ reason: "a".repeat(501) }));
+
+    expect(res.status).toBe(400);
+    expect(subscriptionsUpdate).not.toHaveBeenCalled();
+    expect(rpcMock).not.toHaveBeenCalled();
   });
 });

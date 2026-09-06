@@ -7,15 +7,33 @@
 // Sign out are the interactive AccountForms island; the Cancel control at the
 // foot of the Subscription card is the CancelCard island (ENG-1002).
 //
+// ENG-1028 rewrites the Subscription card for an auto-renewing membership:
+// next charge, intro → standard change-over, manage-card (Billing Portal),
+// cancel. The mockup has none of those three controls — compose from
+// `.settings-card` / `.settings-card-head` / `.settings-row` / `.plan-row` /
+// `.btn` already on this screen. No new colours, no new component family.
+//
 // ENG-999 retired the free trial, so there is no trial wording anywhere on this
-// screen any more — not as a pill, not as a plan name, not as a day count. The
-// branches were removed rather than left unreachable.
+// screen any more — not as a pill, not as a plan name, not as a day count.
+import { getStripe } from "@/lib/stripe";
 import { supabaseServer } from "@/lib/supabase/server";
-import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
+import { hasAccess, type AccessRow } from "@/lib/api/access";
 import { AccountForms, type AccountPrefs, type AccountSubscriber } from "./account-forms";
 import { CancelCard } from "./cancel-card";
+import {
+  ACCOUNT_SUB_COLUMNS,
+  addCalendarMonthsSydney,
+  formatMoney,
+  isFailedRenewal,
+  nextChargeAmount,
+  remainingIntroMonths,
+  type AccountSubRow,
+  type StripePricing,
+} from "./billing";
 
 export const metadata = { title: "Account · StablePass" };
+
+const HEAD_BTN = { padding: "9px 18px", fontSize: 13.5 } as const;
 
 type SubscriberRow = {
   // `first_name`/`last_name` are the source of truth as of ENG-566; `name`
@@ -34,14 +52,10 @@ type PrefsRow = {
   pref_race_result: boolean;
   pref_milestone: boolean;
 };
-// The subscription row is typed as `AccessRow` — the type that travels WITH
-// `ACCESS_COLUMNS` — rather than a local restatement of the same three columns.
-// A local copy is how a select and its reader drift, and `sb` is untyped so
-// nothing would catch it. `trial_ends_at` is still in both because
-// `app/(member)/layout.tsx` still reads it; this screen does not.
 
-// "14 September 2026". Used only in prose about when access ends — never for a
-// countdown, which stays on the shared Math.ceil day convention above.
+// "14 September 2026". Used only in prose about when access ends / the next
+// charge lands — never for a countdown, which stays on the shared Math.ceil
+// day convention above.
 //
 // The timezone is PINNED, not left to the host. This renders on the server, so
 // without it the date is formatted in whatever zone the container runs in: a
@@ -89,7 +103,7 @@ function hasPassed(iso: string | null, now: number = Date.now()): boolean {
 // It used to read the raw `status` string, and the `active` branch returned
 // "Active" without ever looking at `current_period_end` — so a member whose
 // pass expired an hour ago opened the one screen that explains their account
-// and was told everything was fine, next to an "Extend access" button, under a
+// and was told everything was fine, next to a buy-days button, under a
 // line promising access to a date that had already passed. The server was
 // denying them correctly the whole time; only this screen lied.
 //
@@ -128,6 +142,33 @@ function statusPill(sub: AccessRow | null, entitled: boolean): { label: string; 
   return { label: "Ended", colour: "var(--red)" };
 }
 
+async function readStripePricing(remaining: number): Promise<StripePricing | null> {
+  const stripe = getStripe();
+  const priceId = process.env.STRIPE_PRICE_ID_STANDARD;
+  if (!stripe || !priceId) return null;
+  try {
+    const price = await stripe.prices.retrieve(priceId);
+    if (price.unit_amount == null) return null;
+    let discountAmount = 0;
+    if (remaining > 0) {
+      const coupon = await stripe.coupons.retrieve(`intro_${remaining}`);
+      if (typeof coupon.amount_off !== "number") return null;
+      discountAmount = coupon.amount_off;
+    }
+    return {
+      unitAmount: price.unit_amount,
+      discountAmount,
+      currency: price.currency ?? "aud",
+    };
+  } catch (err) {
+    console.error(
+      "[account] Stripe price/coupon retrieve failed — omitting amounts rather than guessing: %s",
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
+}
+
 export default async function AccountPage() {
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
@@ -137,15 +178,15 @@ export default async function AccountPage() {
     sb.from("app_user")
       .select("first_name,last_name,email,phone,pref_new_post,pref_race_day,pref_race_result,pref_milestone")
       .eq("id", userId).maybeSingle(),
-    // ACCESS_COLUMNS, not a hand-written list: this row is fed to `hasAccess()`
-    // below, and a select that drifts from what that helper reads is invisible
-    // to `tsc` (`sb` is untyped) — it just fails CLOSED at runtime. Same
-    // structural fix the (member) layout already uses.
-    sb.from("subscription").select(ACCESS_COLUMNS).eq("user_id", userId).maybeSingle(),
+    // ACCOUNT_SUB_COLUMNS, not a hand-written list: this row is fed to
+    // `hasAccess()` plus the intro / portal / payment-failed branches, and a
+    // select that drifts from what those helpers read is invisible to `tsc`
+    // (`sb` is untyped) — it just fails CLOSED at runtime.
+    sb.from("subscription").select(ACCOUNT_SUB_COLUMNS).eq("user_id", userId).maybeSingle(),
   ]);
 
   const row = subscriberRow as (SubscriberRow & PrefsRow) | null;
-  const sub = subscriptionRow as AccessRow | null;
+  const sub = subscriptionRow as AccountSubRow | null;
 
   // ENG-566's backfill has already populated first/last for every legacy
   // `name`-only member, so these render populated. If both really are empty the
@@ -161,111 +202,125 @@ export default async function AccountPage() {
     : { newPost: true, raceDay: true, raceResult: true, milestone: true };
 
   // ENG-585: every line below hangs off `entitled`, not off the status string.
-  // The old code asked `status === "active"` and then printed "Access to <past
-  // date>" and "Your access runs to <past date>" from a `current_period_end`
-  // nobody had compared to the clock.
   const entitled = hasAccess(sub);
   const { label: pillLabel, colour: pillColour } = statusPill(sub, entitled);
   const endDate = formatEndDate(sub?.current_period_end ?? null);
 
-  // Two screens now, not three: you have access, or you do not. Within "you
-  // have access" the only remaining question is whether it is winding down.
   const canceled = sub?.status === "canceled";
   const endedInPast = hasPassed(sub?.current_period_end ?? null);
+  const paymentFailed = !entitled && isFailedRenewal(sub);
+  const remaining = remainingIntroMonths(sub?.intro_months_used);
+  const hasCustomer = (sub?.stripe_customer_id ?? null) !== null;
 
   // Who is offered the Cancel control (ENG-1002). All three clauses are
   // load-bearing:
   //   * `entitled` — a lapsed member has nothing to cancel, and the RPC would
   //     answer 409 anyway. Offering it would be a button that only ever fails.
-  //     It also covers the `active`-but-EXPIRED row (the nightly expiry sweep
-  //     has not reached it yet): that member reads "Ended" everywhere else on
-  //     this card, and a Cancel button beside it would be a fresh instance of
-  //     the ENG-585 raw-status-contradicts-entitlement bug.
   //   * `status === "active"` — an already-cancelled member must not be shown
   //     it. This is the ONE place the raw status is read for a decision rather
   //     than for wording, legitimately: the question is "is there an active row
   //     for the RPC to cancel", which IS the status.
-  //   * `current_period_end !== null` — ⚠️ THE SUBTLE ONE. A null period means
-  //     the member has JUST PAID and the Stripe webhook is still in flight.
+  //   * `current_period_end !== null` — a null period means the member has
+  //     JUST PAID and the Stripe webhook is still in flight.
   //     `cancel_own_subscription()` stamps `current_period_end =
-  //     coalesce(current_period_end, now())` — deliberately, so a canceled row
-  //     can always expire (a canceled row with a null period would grant access
-  //     forever and the expiry sweep could never reach it). The consequence up
-  //     here is that cancelling in that window revokes access IMMEDIATELY, until
-  //     the late webhook advances the period and restores it. So the member
-  //     would click a control promising "you keep the days you've paid for" and
-  //     land on "Ended" plus the access wall — breaking this ticket's own
-  //     acceptance criterion that a cancelling member keeps content up to
-  //     `current_period_end`. The window is seconds long and nobody needs to
-  //     cancel inside it, so the control simply waits for the period to land.
-  //     Do not "simplify" this clause away.
+  //     coalesce(current_period_end, now())`. Cancelling in that window
+  //     revokes access IMMEDIATELY. The window is seconds long; the control
+  //     waits for the period to land.
   const canCancel = entitled && sub?.status === "active" && sub.current_period_end !== null;
 
-  // The pass does NOT auto-renew, so the card is still written as "buy days",
-  // never as "manage a plan" — even for a cancelled member, whose next purchase
-  // is a fresh pass rather than a resumed plan. Cancelling (ENG-1002) stops the
-  // NEXT pass, it does not end this one, so it does not change the CTA either:
-  // buying more days stays open to a cancelled member for as long as anyone.
-  //
-  // "Extend access" is only honest while there is access to extend. Once it has
-  // ended the CTA is the wall's CTA — the same "Buy 30 days" the member sees on
-  // every other screen and on mobile.
-  const ctaLabel = entitled ? "Extend access" : "Buy 30 days";
+  // Amounts come from Stripe (standard price + intro coupon) or we omit them.
+  // Never a literal that can disagree with what Stripe will charge.
+  const pricing = entitled && !canceled ? await readStripePricing(remaining) : null;
+  const standardLabel = pricing ? formatMoney(pricing.unitAmount, pricing.currency) : null;
+  const nextLabel = pricing ? formatMoney(nextChargeAmount(pricing, remaining), pricing.currency) : null;
+  const changeOverDate = sub?.current_period_end
+    ? addCalendarMonthsSydney(sub.current_period_end, remaining)
+    : null;
 
-  const planName = entitled ? "30-day pass" : "No active pass";
+  const showNextCharge = entitled && !canceled && !!endDate;
+  const showChangeOver = entitled && !canceled && remaining > 0;
+
+  const planName = entitled
+    ? "Monthly membership"
+    : paymentFailed
+      ? "Payment failed"
+      : "No active subscription";
   const planMeta = entitled
-    ? endDate
-      ? `Access to ${endDate}`
-      : // `current_period_end` is null and the member IS entitled: they have
-        // just paid and the webhook has not landed. Not expired — do not
-        // print a date we do not have yet.
-        "Access active"
-    : endedInPast
-      ? // Past tense, and only ever for a date that IS in the past — see
-        // `endedInPast`. This is the one honest use of the date: "Ended 16
-        // August 2026" tells the member what happened, where "Access to 16
-        // August 2026" told them it was still running.
-        `Ended ${endDate}`
-      : "Access ended";
-
-  // No price anywhere on this card. The amount is whatever the Stripe price
-  // says at checkout (A$1.00 in sandbox, A$19.00 in production) — a literal
-  // here would make the screen claim one number while Stripe charges another,
-  // and "AU$19/month" additionally implied a monthly plan that does not exist.
-  //
-  // The cancelled-but-entitled sentence is the new one (ENG-1002) and it has to
-  // say BOTH halves: access continues to <date>, and it will not continue after
-  // that. Saying only the first reads like nothing happened; saying only the
-  // second reads like they have been cut off today.
-  const planCopy = entitled
     ? canceled
       ? endDate
-        ? `You've cancelled. Your access continues to ${endDate} and will not continue after that. The days you've already paid for are yours to keep — you can buy another 30 days whenever you like.`
-        : "You've cancelled. Your access continues to the end of the period you've paid for and will not continue after that. You can buy another 30 days whenever you like."
+        ? `Access until ${endDate}`
+        : "Access until the end of this period"
       : endDate
-        ? `Your access runs to ${endDate}. It does not renew — buy another 30 days whenever you like, and any days you've already paid for are kept.`
-        : "Your access is active. It does not renew — buy another 30 days whenever you like, and any days you've already paid for are kept."
-    : "Your access has ended. Buy 30 days to pick up where you left off.";
+        ? `Access until ${endDate}`
+        : "Access active"
+    : paymentFailed
+      ? "Update your card to continue"
+      : endedInPast && endDate
+        ? `Ended ${endDate}`
+        : "Access ended";
+
+  let planCopy: string;
+  if (entitled && canceled) {
+    planCopy = endDate
+      ? `You've cancelled. Your access continues until ${endDate}. You won't be charged again.`
+      : "You've cancelled. Your access continues to the end of this period. You won't be charged again.";
+  } else if (entitled) {
+    planCopy = endDate
+      ? `Your membership renews on ${endDate}. Cancel any time — you'll keep access until then.`
+      : "Your membership is active. Cancel any time — you'll keep access to the end of the period you've paid for.";
+  } else if (paymentFailed) {
+    planCopy = "Your payment didn't go through. Update your card to keep your membership.";
+  } else {
+    planCopy = "Your access has ended. Subscribe to pick up where you left off.";
+  }
+
+  const headCta = paymentFailed || !entitled
+    ? { href: "/checkout", label: "Subscribe" }
+    : hasCustomer
+      ? { href: "/api/subscription/portal", label: "Manage card" }
+      : null;
 
   return (
     <div className="settings-page">
       <h1 className="settings-h">Account</h1>
       <p className="settings-sub">Manage your profile, subscription, and notifications.</p>
 
-      <div className="settings-card">
+      <div className="settings-card" data-testid="subscription-card">
         <div className="settings-card-head">
           <div>
             <h3>Subscription</h3>
             <div className="sub">Your access and billing</div>
           </div>
-          <a href="/checkout" className="btn btn-primary" style={{ padding: "9px 18px", fontSize: 13.5 }}>
-            {ctaLabel}
-          </a>
+          {headCta && (
+            <a href={headCta.href} className="btn btn-primary" style={HEAD_BTN}>
+              {headCta.label}
+            </a>
+          )}
         </div>
         <div className="settings-row">
           <span className="label">Status</span>
           <span className="value" style={{ color: pillColour }}>{pillLabel}</span>
         </div>
+        {showNextCharge && (
+          <div className="settings-row" data-testid="next-charge">
+            <span className="label">Next charge</span>
+            <span className="value">
+              {nextLabel ? `${nextLabel} on ${endDate}` : `On ${endDate}`}
+            </span>
+          </div>
+        )}
+        {showChangeOver && (
+          <div className="settings-row" data-testid="change-over">
+            <span className="label">Then</span>
+            <span className="value">
+              {standardLabel && changeOverDate
+                ? `${standardLabel} from ${changeOverDate}`
+                : standardLabel
+                  ? `${standardLabel} per month`
+                  : "the standard monthly price"}
+            </span>
+          </div>
+        )}
         <div className="plan-card-inner">
           <div className="plan-row">
             <div>
@@ -273,16 +328,28 @@ export default async function AccountPage() {
               <div className="plan-meta">{planMeta}</div>
             </div>
           </div>
-          <p style={{ fontSize: 13.5, color: "var(--muted)", margin: 0, lineHeight: 1.55 }}>{planCopy}</p>
+          <p
+            style={{ fontSize: 13.5, color: "var(--muted)", margin: 0, lineHeight: 1.55 }}
+            data-testid={paymentFailed ? "payment-failed" : undefined}
+          >
+            {planCopy}
+            {paymentFailed && (
+              <>
+                {" "}
+                <a href="/api/subscription/portal" style={{ color: "var(--brand-green)", fontWeight: 500 }}>
+                  Update your card
+                </a>
+              </>
+            )}
+          </p>
         </div>
         {/*
           ENG-1002. Rendered INSIDE the Subscription card, at its foot, because
-          the sentence it needs the member to have read — "access continues to
-          <date>" — is the one directly above it. It is a client island only for
-          the confirm step's local state; the card around it stays a server
-          component, and the island is handed a FORMATTED STRING, never the row.
-          Absent entirely for a cancelled or lapsed member, so there is no
-          disabled control and nothing to explain away.
+          the sentence it needs the member to have read — "access continues
+          until <date>" — is the one directly above it. It is a client island
+          only for the confirm step's local state; the card around it stays a
+          server component, and the island is handed a FORMATTED STRING, never
+          the row. Absent entirely for a cancelled or lapsed member.
         */}
         {canCancel && <CancelCard endDate={endDate} />}
       </div>

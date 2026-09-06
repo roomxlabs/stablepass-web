@@ -1603,3 +1603,28 @@ this is why the stale wall string ENG-1002 deliberately pinned in eng-585 never 
 up as a red run. **Before trusting "this e2e spec would have caught it", run it on the
 base branch.** A repo-wide sweep of the remaining six files wants its own ticket.
 
+## A module-scope `NextResponse` can only be read once (ENG-1028, 6 Sep 2026)
+`fail()` returns a `NextResponse`. Caching one 502 at module scope and returning
+it from two requests works for the first caller and **500s the second** —
+`Response` body/headers are single-consume. Symptom: the first Stripe-down cancel
+is a clean 502, the next is an un-enveloped 500.
+- **Do this:** a helper that calls `fail(...)` each time, never a reused Response.
+
+## Worktree `next start` e2e: lockfile parent + `NEXT_PUBLIC_*` at build (ENG-1028, 6 Sep 2026)
+A worktree under `.claude/worktrees/` has its own `package-lock.json` *and* a
+parent one. Next 16 then infers the workspace root as the parent checkout, so
+`next dev` can blow the OS file-watch limit, and `lsof` cwd on `next start` may
+not equal the worktree — official `playwright.config.ts` then refuses to reuse
+that server (ENG-597). Separately, `NEXT_PUBLIC_SUPABASE_*` is inlined at
+**build**: a `next start` built without them hangs sign-in even if the process
+env is correct.
+- **Do this:** `NEXT_PUBLIC_SUPABASE_URL` + `ANON_KEY` on `npm run build`, then
+  `next start --port <free>`; drive Playwright with `baseURL` only (no
+  `webServer`) if ownership check fails. Do not reuse `:3000`.
+
+## Portal tests must not pin the live `bpc_…` id (ENG-1028, 6 Sep 2026)
+ENG-1023 records the sandbox Billing Portal configuration id on the Linear
+ticket. Putting that id in a unit test is a real object id in git.
+- **Do this:** assert pin-through with a fake (`bpc_test_pin`). Names only in
+  the repo (`.env.example` already).
+
