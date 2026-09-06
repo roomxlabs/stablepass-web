@@ -32,7 +32,7 @@ import {
   normaliseHost,
   spaceForHost,
 } from "@/lib/hosts";
-import { MARKETING_IS_INDEXABLE } from "@/lib/seo";
+import { MARKETING_IS_INDEXABLE, isAlwaysIndexablePath } from "@/lib/seo";
 
 /**
  * Both codes preserve the method (301/302 may turn a POST into a GET). The only
@@ -142,9 +142,15 @@ export function isExcludedPath(pathname: string): boolean {
  * is the third of the three noindex surfaces (robots.txt and the `<meta>` tag
  * are the other two), and the only one that covers non-HTML responses.
  */
-function serve(space: UrlSpace): NextResponse {
+function serve(space: UrlSpace, pathname: string): NextResponse {
   const response = NextResponse.next();
-  if (space === "app" || !MARKETING_IS_INDEXABLE) {
+  // ENG-1041: a short allowlist stays crawlable on the MARKETING host even
+  // while the flag is false, so the account-deletion page Google Play requires
+  // can actually be found. The app-space clause is deliberately checked first
+  // and is not exempted: `/legal/*` renders on both hosts, the canonical is
+  // always the apex, and the member space is noindex unconditionally.
+  const exempt = space === "marketing" && isAlwaysIndexablePath(pathname);
+  if ((space === "app" || !MARKETING_IS_INDEXABLE) && !exempt) {
     response.headers.set("X-Robots-Tag", "noindex, nofollow");
   }
   return response;
@@ -193,7 +199,7 @@ function redirectHost(
   // `NEXT_PUBLIC_APP_HOST` and `NEXT_PUBLIC_MARKETING_HOST` are set by hand in
   // the Vercel dashboard (ENG-593), so one paste error would otherwise take
   // every member route on the apex down forever. Serve instead of looping.
-  if (from === to) return serve(spaceForHost(to));
+  if (from === to) return serve(spaceForHost(to), request.nextUrl.pathname);
 
   return NextResponse.redirect(publicUrl(request, to), status);
 }
@@ -209,7 +215,7 @@ export function middleware(request: NextRequest): NextResponse {
   // `/explore` is the member app. Gating dev behind an /etc/hosts edit would
   // break every existing workflow and the Playwright harness. Nothing local is
   // reachable by a crawler, but it is tagged noindex anyway.
-  if (isLocalHost(host)) return serve("app");
+  if (isLocalHost(host)) return serve("app", pathname);
 
   // ── `www.` is not a second site ───────────────────────────────────────────
   // Path and query are preserved, so a shared `www` link still lands correctly.
@@ -221,7 +227,7 @@ export function middleware(request: NextRequest): NextResponse {
 
   // `/legal/*` is the one URL space both hosts share. Checked before anything
   // else so neither host's rules can bounce it.
-  if (isSharedPath(pathname)) return serve(space);
+  if (isSharedPath(pathname)) return serve(space, pathname);
 
   if (space === "marketing") {
     // The BFF belongs to the app host. Serving it from the marketing origin
@@ -230,7 +236,7 @@ export function middleware(request: NextRequest): NextResponse {
     // cross-origin just fails later and more confusingly.
     if (isApiPath(pathname)) return new NextResponse(null, { status: 404 });
 
-    if (pathname === "/") return serve(space);
+    if (pathname === "/") return serve(space, pathname);
 
     // Anything else on the apex is presumed a member route: same path, app
     // host. TEMPORARY on purpose — an unknown apex path is a member route today
@@ -255,11 +261,11 @@ export function middleware(request: NextRequest): NextResponse {
   // for every other path, which is what decision 3 is protecting; they just
   // serve `/` the way localhost does.
   if (pathname === "/") {
-    if (host !== APP_HOST) return serve("marketing");
+    if (host !== APP_HOST) return serve("marketing", pathname);
     return redirectRoot(request, host, hasAuthCookie(request) ? "/explore" : "/signin");
   }
 
-  return serve(space);
+  return serve(space, pathname);
 }
 
 export const config = {

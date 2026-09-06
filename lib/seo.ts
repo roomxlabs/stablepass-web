@@ -36,6 +36,39 @@ export const CANONICAL_ORIGIN = `https://${MARKETING_HOST}`;
 export const MARKETING_IS_INDEXABLE = false;
 
 /**
+ * Public paths that stay crawlable even while `MARKETING_IS_INDEXABLE` is false.
+ *
+ * ENG-1041. Google Play's Data Safety form demands a publicly reachable URL for
+ * requesting account and data deletion, and the listing cannot be completed
+ * without one. `noindex` does not stop a reviewer opening a link, but it does
+ * stop the person this page exists for — someone who has already uninstalled
+ * the app and is searching for how to delete their data — from ever finding it.
+ * So this one path is exempted.
+ *
+ * The exemption is safe precisely BECAUSE it is a path allowlist rather than a
+ * flip of the flag above: the reason the marketing space is `noindex` is the 19
+ * real trainers photographed beside placeholder biography, and none of them
+ * appear on a deletion policy page. Widening this list to anything carrying a
+ * trainer's name or photograph reintroduces exactly the harm the flag prevents.
+ *
+ * Read by the same three surfaces as the flag, and by the page's own metadata:
+ *   1. `app/robots.ts`                                  — an `Allow:` beside the blanket `Disallow: /`
+ *   2. `middleware.ts`                                  — suppresses the `X-Robots-Tag`
+ *   3. `app/(marketing)/legal/delete-account/page.tsx`  — `robots: { index: true }`
+ *
+ * MARKETING SPACE ONLY. The member space is `noindex` unconditionally and this
+ * must never change that — `/legal/*` renders on the app host too, and the
+ * canonical for every one of those pages is the apex, so the app host's copy
+ * has nothing to gain from being indexed and would only compete with it.
+ */
+export const ALWAYS_INDEXABLE_PATHS: readonly string[] = ["/legal/delete-account"];
+
+/** Is this path exempt from the marketing-wide `noindex`? Exact match only. */
+export function isAlwaysIndexablePath(pathname: string): boolean {
+  return ALWAYS_INDEXABLE_PATHS.includes(pathname);
+}
+
+/**
  * Absolute canonical URL for a public path, always on the marketing apex.
  *
  * `/legal/*` serves on BOTH hosts, so a legal page reached at

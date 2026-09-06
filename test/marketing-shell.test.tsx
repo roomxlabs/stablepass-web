@@ -171,6 +171,9 @@ describe("marketing footer", () => {
       "Terms & Conditions",
       "Cancellation & Refund Policy",
       "Acceptable Use Policy",
+      // ENG-1041 — the account-deletion page Google Play's Data Safety form
+      // requires. Not in the mockup, which predates the store submissions.
+      "Delete Your Account",
     ]);
 
     // Nothing left that needs a script to do its job.

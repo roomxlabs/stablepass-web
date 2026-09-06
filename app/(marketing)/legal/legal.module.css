@@ -125,3 +125,47 @@
     font-size: 1.7rem;
   }
 }
+
+/* ====================================================================
+   The account-deletion request action (ENG-1041)
+
+   A fourth deliberate deviation from the mockup, which has no policy
+   page carrying an action: Google Play's Data Safety form requires a
+   public URL where deletion can be REQUESTED, so this one page needs a
+   live `mailto:` rather than prose alone. It is a quiet bordered
+   callout, not a button — deliberately not `.btn`, which app/globals.css
+   and marketing.css both define and which reads as a call to action.
+   Nothing on this page may look like it is selling something.
+
+   Tokens only, inherited from `.marketing` exactly as the rules above.
+   ==================================================================== */
+.doc .action {
+  margin: 22px 0 4px;
+  padding: 20px 22px;
+  border: 1.5px solid color-mix(in srgb, var(--ink) 14%, transparent);
+  border-radius: 10px;
+}
+
+.doc .action .actionLabel {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mut);
+  display: block;
+  margin-bottom: 8px;
+}
+
+.doc .action a {
+  font-family: var(--serif);
+  font-size: 1.15rem;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.doc .action .actionNote {
+  color: var(--mut);
+  font-size: 14.5px;
+  margin: 8px 0 0;
+}
