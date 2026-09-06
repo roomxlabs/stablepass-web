@@ -1739,3 +1739,39 @@ tells you when to stop:
 ENG-993 fixed the *mechanism* behind the second shape in `supabase-fake` (8 query methods that
 silently no-opped). Nothing prevents any of these from being **claimed** without being run — which
 is what this entry exists to prevent.
+## Client `/api/*` calls go through `apiFetch`, not bare `fetch` (ENG-961)
+`lib/api/client.ts` wraps `fetch` and centrally handles a 401 from a member BFF
+call (single-device eviction → clear session → `/signin?reason=signed-out-elsewhere`).
+Any NEW client-side `/api/*` call should use `apiFetch` or it silently opts out of
+eviction handling. Two call sites deliberately stay on bare `fetch`:
+`app/start/trial-start-form.tsx` and `app/forgot-password/forgot-password-form.tsx`
+— they are the SIGNED-OUT flows, and `/api/auth/*` is excluded by the wrapper too.
+
+**Do not widen the trigger to 402.** `GATED()` is a lapsed *subscription*, not a dead
+session (guardrail 3); signing those members out strands them with no way to reactivate.
+Every 401 under `app/api/*` is `UNAUTH()` behind an `if (!user)` guard — there is no
+route that 401s for a non-session reason, which is what makes the status a safe signal.
+
+## A `fetch` wrapper must forward the ORIGINAL argument shape
+`apiFetch(input, init)` calling `fetch(input, init)` with `init === undefined` passes a
+SECOND argument, and `fetch.mock.calls` then records `[url, undefined]`. That broke
+`test/post-media-client.test.ts`, which asserts `toHaveBeenCalledWith(url)` exactly.
+Branch on `init === undefined` and call `fetch(input)` — a drop-in wrapper has to be
+indistinguishable from `fetch` at the call site.
+
+## FIVE screens hold their own `bookmarked`, not four
+`explore-feed`, `following-screen`, `saved-feed`, `trainers/[id]/trainer-posts` and
+`horses/[id]/horse-posts`. Tickets citing "the four feed screens" predate the horse
+profile feed. They now all subscribe to `lib/feed/bookmark-store.ts`; emit ONLY after a
+confirmed write (each screen rolls its own optimistic state back on failure, so an
+optimistic emit would desync every other screen with no rollback). Saved is the odd one
+out: list MEMBERSHIP changes there, so it drops a card on an unsave and refetches page 1
+on a save made elsewhere.
+
+## The web onboarding mockup is horses-only "Step 1 of 2" — there is no trainer step
+`06-stage1-design/mockups/web/screens/05-onboarding.html` has ONE step (pick horses,
+"2 minimum to continue") and no trainer picker; `_archive/` has no onboarding variant.
+Mobile onboarding is trainers → horses → notifications, so any "web onboarding parity"
+ticket that asks for a trainer step has **no backing design** and is `needs-spec` per the
+guardrail, not `ready`. Note also that the "Step 1 of 2" copy in `horse-picker.tsx` is
+aspirational — no step 2 screen or step routing exists in code.

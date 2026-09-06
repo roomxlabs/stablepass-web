@@ -11,6 +11,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
+import { apiFetch } from "@/lib/api/client";
 
 export interface AccountSubscriber {
   // First/last are the source of truth (ENG-566). `name` is deliberately NOT
@@ -38,7 +39,7 @@ const NOTIF_TOGGLES: { key: keyof AccountPrefs; title: string; sub: string }[] =
 ];
 
 async function patchMe(body: unknown) {
-  return fetch("/api/me", {
+  return apiFetch("/api/me", {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),

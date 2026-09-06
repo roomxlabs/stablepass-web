@@ -25,6 +25,7 @@ import { useRouter } from "next/navigation";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
 import { Wordmark } from "@/components/wordmark";
+import { apiFetch } from "@/lib/api/client";
 
 type CheckoutMode = "purchase" | "renewal";
 
@@ -280,7 +281,7 @@ export function CheckoutForm({ trialDaysLeft }: { trialDaysLeft: number }) {
     (async () => {
       let res: Response;
       try {
-        res = await fetch("/api/subscription/checkout", { method: "POST" });
+        res = await apiFetch("/api/subscription/checkout", { method: "POST" });
       } catch (err) {
         // A network failure must land on the placeholder, not leave the screen
         // stuck on "loading" forever with an unhandled rejection. It is an
