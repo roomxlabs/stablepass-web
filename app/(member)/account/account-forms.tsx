@@ -11,7 +11,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { apiFetch } from "@/lib/api/client";
+import { apiFetch, suppressEviction } from "@/lib/api/client";
 
 export interface AccountSubscriber {
   // First/last are the source of truth (ENG-566). `name` is deliberately NOT
@@ -93,6 +93,10 @@ export function AccountForms({
   }
 
   async function signOut() {
+    // Deliberate sign-out: stop any in-flight member call that 401s on the way
+    // out from redirecting to "?reason=signed-out-elsewhere" and claiming the
+    // account was used on another device (ENG-961).
+    suppressEviction();
     await supabaseBrowser().auth.signOut();
     router.push("/signin");
     router.refresh();
