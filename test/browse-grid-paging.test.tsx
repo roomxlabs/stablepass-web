@@ -234,6 +234,24 @@ describe("ENG-960 browse paging — the cap bounds the read, the pager keeps eve
     expect(horseChainFollowing.range).toHaveBeenCalledWith(0, BROWSE_PAGE_SIZE);
   });
 
+  it("INVARIANT: the pager can never outlive its roster — no rows, no Show more", async () => {
+    // This is what actually guarantees the pill switch cannot page into a stale
+    // offset, and it is why the two `setHasMore(false)` resets are belt-and-
+    // braces rather than load-bearing: the button is nested inside
+    // `!loading && horses.length > 0`, so a leftover `hasMore` from the previous
+    // pill has nothing to render into. Hoist the button out of that gate and
+    // this test reds.
+    const horseChain = pagedChain([]);
+    fromMock.mockImplementation((table: string) => {
+      if (table === "subscription") return chainable(ENTITLED_SUB);
+      if (table === "horse") return horseChain;
+      return chainable({ data: null, error: null });
+    });
+    render(<HorsesGrid viewerId={VIEWER_ID} everSubscribed={false} />);
+    await waitFor(() => expect(screen.getByText(/No horses yet/)).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+  });
+
   it("the empty-follows short-circuit offers no pager (it returns before the roster query)", async () => {
     const horseChainAll = pagedChain(horseRows(239));
     let horseReads = 0;

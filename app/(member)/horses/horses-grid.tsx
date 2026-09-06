@@ -55,8 +55,11 @@ export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; eve
     const live = () => runRef.current === run;
 
       // Every fetch at offset 0 is a FRESH roster (first paint, or a pill
-      // switch): reset the paging state with it, or Following would inherit
-      // All's `hasMore` and page into a stale offset.
+      // switch): reset the paging state with it, so Following can never inherit
+      // All's `hasMore` and page into a stale offset. Belt-and-braces — the
+      // render gates below make a stale pager structurally unreachable too (the
+      // button lives inside `!loading && horses.length > 0`), which is the
+      // invariant `browse-grid-paging.test.tsx` actually pins.
       if (offset === 0) {
         setLoading(true);
         setError(false);
@@ -113,11 +116,14 @@ export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; eve
         // Short-circuit: `.in("id", [])` is a wasted round trip whose answer we
         // already know, and it is the common case for a member who follows
         // nobody (mobile's `browseReadHitsNetwork` makes the same call).
-        // Paging state is reset here too, not just at offset 0: this branch
-        // RETURNS before the roster query, so leaving `hasMore` set would offer
-        // a Show-more button for a roster we never fetched.
+        // This branch RETURNS before the roster query, so it never reaches the
+        // `setHasMore(more)` below. It does not need its own `setHasMore(false)`
+        // — it is only reachable at offset 0 (a member who follows nothing has
+        // an empty roster, so no Show-more button exists to press), and the
+        // offset-0 reset above has already cleared the pager. A duplicate reset
+        // here would be a line no mutation can red; see the PR body.
         if (followedIds.length === 0) {
-          setFollowsNothing(true); setHorses([]); setHasMore(false);
+          setFollowsNothing(true); setHorses([]);
           setLoading(false); setLoadingMore(false); return;
         }
       }
