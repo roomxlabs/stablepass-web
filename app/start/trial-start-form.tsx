@@ -1,22 +1,27 @@
 "use client";
 
-// Trial-start form (client) — first name, last name, email, phone, postcode,
-// password. Layout follows mockups/web/screens/03-trial-start.html (ENG-571):
-// the name pair and the phone/postcode pair are laid out with the existing
-// `.input-row` (flex, gap 12, children flex:1); email and password run full
-// width. No new design-system classes.
+// Account-creation form (client) — first name, last name, email, phone,
+// postcode, password. Layout follows mockups/web/screens/03-trial-start.html
+// (ENG-571): the name pair and the phone/postcode pair are laid out with the
+// existing `.input-row` (flex, gap 12, children flex:1); email and password run
+// full width. No new design-system classes.
 //
-// Deviations from that mockup, both on client instruction (17 Aug 2026), so do
-// not reinstate either as a fidelity fix:
-//   - the `.trial-banner-web` "30 days, on us" block above the fields is gone;
-//     the h1 and sub-heading already say it.
+// Deviations from that mockup, so do not reinstate either as a fidelity fix:
+//   - the `.trial-banner-web` block above the fields is gone. It was dropped on
+//     client instruction (17 Aug 2026) because the h1 and sub-heading already
+//     said it; ENG-1003 makes it doubly wrong, because what it said was the
+//     free-trial offer. Nothing replaces it here: the figure the member is
+//     actually charged is quoted at /checkout, formatted from Stripe's
+//     `unitAmount`, and this screen must not hardcode a second one.
 //   - the phone field formats to '+61 400 000 000' as you type and is validated
 //     as a real AU number, where the mockup had a plain free-text field.
 //
 // Posts to the /api/auth/signup BFF route, which does the anon signUp
-// server-side and returns the trial envelope; on success the session cookie is
-// set and we go to onboarding. The password is only ever sent to our route over
-// POST — never logged, never rendered, never put in a query string.
+// server-side; on success the session cookie is set and we go to /checkout. The
+// account exists at that point but holds NO access — ENG-999 makes a new
+// subscription row `lapsed` — so payment is the next step, not onboarding. The
+// password is only ever sent to our route over POST — never logged, never
+// rendered, never put in a query string.
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -211,35 +216,22 @@ export function TrialStartForm() {
       body: JSON.stringify(payload),
     });
     if (res.status === 201) {
-      router.push("/onboarding");
+      // /checkout, not /onboarding and not the feed. ENG-999 provisions the new
+      // subscription as `lapsed`, so the member holds zero access until they
+      // pay; sending them anywhere else lands them on a 402.
+      router.push("/checkout");
       router.refresh();
       return;
     }
     const body = await res.json().catch(() => null);
-    // Branch on the CODE, not the bare 409. The route answers 409 with
-    // `trial_already_used` for both a repeat phone and a repeat email, and the
-    // wall is the whole point of the response; a status-only test would also
-    // swallow any future 409 that means something else entirely.
-    //
-    // NAVIGATE rather than swapping the wall in locally. The screen's left-hand
-    // panel — which pitches the free trial — lives in app/start/page.tsx,
-    // OUTSIDE this component, so a local swap would leave the trial pitch sitting
-    // beside a message saying the trial is used up. Going to the URL re-renders
-    // the whole screen from the server, which also means the JS-blocked path and
-    // this one render the exact same markup and cannot drift. `replace`, not
-    // `push`: a dead end does not deserve a history entry, and Back should
-    // return where the member came from. Left busy-locked on purpose so the
-    // button cannot be double-submitted while the navigation is in flight.
-    if (body?.error?.code === "trial_already_used") {
-      router.replace("/start?trial=used");
-      return;
-    }
-    // No status-409 branch any more. The route's ONLY 409 is
-    // `trial_already_used`, handled above, and the copy that used to live here
-    // ("That email is already registered") named the credential that matched —
-    // exactly what the wall is required not to reveal. Any unexpected 409 now
-    // falls through to the generic message rather than to a stale, off-message
-    // one that contradicts the ticket.
+    // No wall and no navigation on failure any more (ENG-1003). The trial is
+    // retired, so a duplicate email is no longer a dead end — it is a plain
+    // "you already have an account, sign in" that belongs inline next to the
+    // field the member can fix, with the "Already a member? Sign in" link
+    // already at the foot of this form. The route's 409 `account_exists`
+    // message is rendered as-is by the fallthrough below; there is deliberately
+    // no code branch here, because a second code path that restates the route's
+    // copy is exactly how the two drift apart.
     if (res.status === 429) setError("Too many attempts — please wait a moment and try again.");
     else setError(body?.error?.message ?? "Please check your details and try again.");
     setBusy(false);
@@ -247,8 +239,8 @@ export function TrialStartForm() {
 
   return (
     <form className="auth-card" onSubmit={onSubmit} noValidate>
-      <h1>Start your 30 days free.</h1>
-      <p className="auth-sub">A few details to get going. No credit card needed.</p>
+      <h1>Create your account.</h1>
+      <p className="auth-sub">A few details to get going.</p>
 
       {error && <div className="form-error" role="alert">{error}</div>}
 
@@ -298,7 +290,7 @@ export function TrialStartForm() {
       </div>
 
       <button type="submit" className="btn btn-primary btn-block btn-large" style={{ marginTop: 12 }} disabled={busy}>
-        {busy ? "Starting your trial…" : "Start free trial"}
+        {busy ? "Creating your account…" : "Create account"}
       </button>
 
       <div className="legal-mini">

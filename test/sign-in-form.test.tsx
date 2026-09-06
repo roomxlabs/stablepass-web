@@ -44,9 +44,12 @@ describe("sign-in bottom CTA", () => {
     expect(text).toMatch(/account/i);
   });
 
-  it("keeps the 30-days-free value proposition", () => {
+  // ENG-1003 retired the trial: the CTA now says only "Create an account",
+  // with no offer attached — the price the member pays is quoted at /checkout,
+  // from Stripe, not advertised here.
+  it("no longer carries a trial or free-days value proposition", () => {
     const { container } = render(<SignInForm />);
-    expect(foot(container).textContent ?? "").toMatch(/30 days free/i);
+    expect(foot(container).textContent ?? "").not.toMatch(/trial|30 days|free/i);
   });
 
   it("names the account creation in the LINK itself, not just the text around it", () => {

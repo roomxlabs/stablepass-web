@@ -35,7 +35,7 @@ function fill(overrides: Partial<Record<keyof typeof VALID, string>> = {}) {
 }
 
 function submit() {
-  fireEvent.click(screen.getByRole("button", { name: "Start free trial" }));
+  fireEvent.click(screen.getByRole("button", { name: "Create account" }));
 }
 
 function mockFetch(status: number, body: unknown = {}) {
@@ -181,7 +181,7 @@ describe("TrialStartForm", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("posts the six-field payload to /api/auth/signup and routes to onboarding on 201", async () => {
+  it("posts the six-field payload to /api/auth/signup and routes to checkout on 201", async () => {
     const fetchMock = mockFetch(201, { data: {} });
     render(<TrialStartForm />);
 
@@ -202,7 +202,9 @@ describe("TrialStartForm", () => {
       password: "password123",
     });
 
-    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/onboarding"));
+    // ENG-1003: the account holds no access until Stripe says otherwise, so a
+    // fresh signup goes to /checkout now, never /onboarding.
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/checkout"));
   });
 
   // '  3000  ' is what a real member types; it fails the app_user_postcode_au
@@ -236,72 +238,35 @@ describe("TrialStartForm", () => {
     expect(typeof body.postcode).toBe("string");
   });
 
-  // ---- the repeat-signup wall (ENG-763) -------------------------------------
-  // The 409 that used to be `email_taken` is now `trial_already_used`, and both
-  // the phone hit and the email hit send the member to the SAME wall.
-  //
-  // The wall's own markup is covered by test/trial-used-wall.test.tsx. What this
-  // form owes is the routing decision: the wall is a server-rendered URL, not a
-  // local swap, because the screen's left-hand trial pitch lives outside this
-  // component and a local swap would leave it contradicting the wall.
-  describe("repeat-signup wall", () => {
-    const WALLED = {
+  // ---- the duplicate-email response (ENG-1003) ------------------------------
+  // The trial is retired, so a repeat signup is no longer a dead end that walls
+  // the member off to a separate URL — it falls straight through to the
+  // generic `setError` path and renders the route's own message inline, right
+  // next to the "Already a member? Sign in" link already at the foot of the
+  // form. There is deliberately no dedicated code branch for `account_exists`.
+  describe("duplicate account (409 account_exists)", () => {
+    const ACCOUNT_EXISTS = {
       error: {
-        code: "trial_already_used",
-        message: "Looks like you've already had your free trial. Sign in to join stablepass.",
+        code: "account_exists",
+        message: "You already have an account with that email — sign in to continue.",
       },
     };
 
-    async function submitWalled() {
-      const fetchMock = mockFetch(409, WALLED);
+    it("renders the route's message inline in .form-error and does not navigate", async () => {
+      const fetchMock = mockFetch(409, ACCOUNT_EXISTS);
       render(<TrialStartForm />);
+
       fill();
       submit();
+
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    }
 
-    it("sends the member to the wall URL on 409 trial_already_used", async () => {
-      await submitWalled();
-
-      await waitFor(() => expect(replaceMock).toHaveBeenCalledWith("/start?trial=used"));
-      // `replace`, not `push`: a dead end does not deserve a history entry.
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(
+        "You already have an account with that email — sign in to continue.",
+      );
       expect(pushMock).not.toHaveBeenCalled();
-    });
-
-    it("shows no error banner — the wall is the message, not a red box", async () => {
-      await submitWalled();
-
-      await waitFor(() => expect(replaceMock).toHaveBeenCalled());
-      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    });
-
-    it("stays busy-locked so the form cannot be resubmitted mid-navigation", async () => {
-      await submitWalled();
-
-      await waitFor(() => expect(replaceMock).toHaveBeenCalled());
-      expect(screen.getByRole("button", { name: "Starting your trial…" })).toBeDisabled();
-    });
-
-    it("does NOT wall on a 409 that is not trial_already_used", async () => {
-      // Branching on the status alone would swallow any future 409 whole. Such
-      // a 409 now falls through to the route's own message rather than to the
-      // old hardcoded "That email is already registered", which named the
-      // credential the wall must never name.
-      mockFetch(409, { error: { code: "something_else", message: "Nope." } });
-      render(<TrialStartForm />);
-
-      fill();
-      submit();
-
-      expect(await screen.findByRole("alert")).toHaveTextContent("Nope.");
       expect(replaceMock).not.toHaveBeenCalled();
-    });
-
-    it("no longer ships the copy that named which credential matched", async () => {
-      await submitWalled();
-      await waitFor(() => expect(replaceMock).toHaveBeenCalled());
-
-      expect(document.body.textContent ?? "").not.toContain("already registered");
     });
   });
 
@@ -323,7 +288,7 @@ describe("TrialStartForm", () => {
     fill();
     submit();
 
-    const busy = await screen.findByRole("button", { name: "Starting your trial…" });
+    const busy = await screen.findByRole("button", { name: "Creating your account…" });
     expect(busy).toBeDisabled();
   });
 
@@ -362,17 +327,23 @@ describe("TrialStartForm", () => {
     expect(otherValues).not.toContain("password123");
   });
 
-  // Dropped on client instruction 17 Aug 2026. Pinned because the mockup still
-  // shows it, so a future fidelity pass would otherwise put it back.
-  it("does not render the '30 days, on us' trial banner", () => {
+  // The `.trial-banner-web` block above the fields was dropped on client
+  // instruction (17 Aug 2026), before the trial itself was retired (ENG-1003).
+  // Both reasons now hold, so this pins the class's absence permanently.
+  it("does not render the trial banner", () => {
     const { container } = render(<TrialStartForm />);
 
     expect(container.querySelector(".trial-banner-web")).toBeNull();
-    expect(container.textContent).not.toContain("30 days, on us");
-    expect(container.textContent).not.toContain("never renews on its own");
+  });
 
-    // Positive control: the trial is still communicated, just by the heading.
-    expect(container.textContent).toContain("Start your 30 days free.");
+  // ENG-1003 retired the trial from this screen entirely: no pitch, no
+  // duration, nothing left to advertise here — the price is quoted at
+  // /checkout, from Stripe.
+  it("carries no trial or '30 days' copy anywhere in the form", () => {
+    const { container } = render(<TrialStartForm />);
+
+    expect(container.textContent ?? "").not.toMatch(/trial/i);
+    expect(container.textContent ?? "").not.toMatch(/30 days/i);
   });
 
   // The placeholders used to read 'Justin' / 'Alpar' — the client's own name.
