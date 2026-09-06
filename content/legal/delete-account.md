@@ -1,6 +1,6 @@
 ---
 title: Delete Your Account
-lastUpdated: 2026-09-06
+lastUpdated: 2026-09-07
 ---
 
 This page explains how to ask Stablepass to delete your account and the personal information held against it, what deletion removes, and what Stablepass must keep. Anyone can use it. You do not need to be signed in, and you do not need the app installed — if you have already uninstalled it, this page is the right place to be.
@@ -45,8 +45,8 @@ Deletion cannot be undone. Stablepass cannot restore a deleted account, and crea
 
 A small amount of information survives deletion because Stablepass is required to keep it or because deleting it would let the deletion itself be abused.
 
-- Records of payments already made, including invoices, are retained by Stablepass and its payment provider to meet tax, accounting and financial record-keeping obligations. These records are detached from your account and are no longer linked to your profile.
-- A record that a deletion happened, with the date, is retained so Stablepass can demonstrate the request was honoured.
+- Records of payments already made, including invoices, are retained by Stablepass and its payment provider to meet tax, accounting and financial record-keeping obligations. As part of deletion Stablepass asks its payment provider to unlink those records from your account, so that they are no longer connected to your profile.
+- A record that a deletion happened, with the date and an internal identifier for the deleted account, is retained so Stablepass can demonstrate the request was honoured. That identifier is not linked to any remaining profile and is not used to contact you.
 - A one-way, irreversible form of the phone number used to claim a free trial is retained, so that deleting an account cannot be used to claim the trial repeatedly. It cannot be read back or used to contact you.
 
 The email address on the deleted account is released, and may be used to register again.

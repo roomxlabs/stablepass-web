@@ -76,6 +76,28 @@ describe("the page a signed-out visitor gets", () => {
     // the disclosure Play's Data Safety form is actually asking about.
     expect(text).toMatch(/invoice/i);
     expect(text).toMatch(/tax|accounting|record-keeping/i);
+
+    // The phone number used to claim a free trial is retained as a one-way hash,
+    // so that deleting an account cannot be used to re-claim the trial. It is the
+    // most surprising disclosure on the page and the one Play's Data Safety form
+    // is most likely to be checked against, yet nothing pinned it: the whole
+    // bullet could be deleted from content/legal/delete-account.md and this file
+    // stayed green.
+    //
+    // Scope the match to the retained section. `/phone/i` against the whole page
+    // is vacuous — §3 already lists "phone number" among what is *deleted*, so it
+    // passes with this bullet gone (confirmed by mutation). Both halves are
+    // pinned separately: that a phone number is retained at all, and that the
+    // retained form is irreversible.
+    const retainedStart = text.indexOf("What is retained");
+    const retainedEnd = text.indexOf("Access ends immediately");
+    expect(retainedStart, "the retained section should be present").toBeGreaterThan(-1);
+    expect(retainedEnd, "the section after it should be present, to bound the slice").toBeGreaterThan(
+      retainedStart,
+    );
+    const retained = text.slice(retainedStart, retainedEnd);
+    expect(retained, "the retained phone hash should be disclosed").toMatch(/phone/i);
+    expect(retained, "and disclosed as irreversible").toMatch(/one-way|irreversible/i);
   });
 
   it("states that access ends immediately and is not refunded", () => {
