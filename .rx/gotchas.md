@@ -24,12 +24,51 @@ is an **early renewal** (a one-off PaymentIntent), not a `409 already_active` �
 `/checkout` therefore no longer redirects active members away. `docs/specs/*`
 still describes the old cancel/payment-method endpoints; those docs are stale.
 
-## `.rx/mockups.md` points at a DEAD path — the real mockups are outside the repo
-The manifest says `../docs/dev-handover/mockups/web/`. That directory does not exist.
-The real HTML mockups live at `<workspace>/dev-handover/StablePass-mockups/mockups/web/screens/`
-(e.g. `04-checkout.html`). `ls` the path before building a screen; don't trust the
-manifest until the fix lands. Same for the `docs/dev-handover/mockups/web/*` claim in
-`CLAUDE.md` § Design source.
+## Mockups live OUTSIDE the repo — `.rx/mockups.md` is now right, `CLAUDE.md` is not
+**Corrected 5 Sep 2026 (ENG-991).** This entry used to send people to
+`<workspace>/dev-handover/StablePass-mockups/mockups/web/screens/`. That path has never
+existed — `ls` fails on it. `.rx/mockups.md` was fixed by ENG-612 and is now the source
+of truth: the real mockups are at `<workspace>/06-stage1-design/mockups/web/screens/`
+(verified 5 Sep 2026), and the marketing mockup at
+`<workspace>/10-marketing-site/deploy/src/mockup.html`.
+
+`CLAUDE.md` § Design source still claims `docs/dev-handover/mockups/web/*` — **that one
+is still stale.** Trust `.rx/mockups.md`, and `ls` before building.
+
+## Resolving anything OUTSIDE the repo: walk from the git common dir, never just cwd
+`process.cwd()` is the worktree, and rx workers run in one — often `~/.claude/jobs/<id>/`,
+entirely outside the repo tree, where walking up never reaches the workspace. Use:
+
+```ts
+execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd })
+// -> "<main checkout>/.git"; path.dirname() -> the real repo root, from ANY worktree
+```
+
+`test/support/mockup.ts` is the shared implementation — import it rather than writing a
+fourth copy. (`--path-format` needs git >= 2.31; wrap in try/catch and fall back to the
+cwd walk.)
+
+## A test guard that SKIPS when its fixture is missing will report a false green
+ENG-991: the marketing fidelity guards resolved their mockup by walking up from cwd, so
+from `~/.claude/jobs/` they vanished — `marketing-shell.test.tsx` went from "36 tests,
+1 failed" to **"29 tests, all green"**, and `marketing-home.test.tsx` from "1 FAILED" to
+"PASSED". A real red disappeared and the run reported success. Rules:
+
+- **Never `describe.skipIf` / `it.skipIf` on fixture availability.** Call a
+  `mockupOrThrow()`-style helper INSIDE the test body so the test still registers and
+  goes red with a diagnostic.
+- **Pin the guard from outside the block it guards** — a meta-assertion living inside
+  the block vanishes with it.
+- **Pin execution, not just registration.** vitest runs a *skipped* describe's callback
+  at collection time, so `describe.skipIf` still registers every test while running
+  none. A registration count alone passes that. `marketing-shell.test.tsx` has both pins.
+- Note a `skipIf` keeps the test COUNT identical, so "same count from both locations" is
+  not sufficient evidence — compare the pass/fail SET.
+
+## This repo has no test workflow in CI
+The only checks on a PR are Vercel builds; `npm test` never runs on CI. The suite is
+whatever the author ran locally — which is exactly why a guard that silently no-ops in a
+worktree went unnoticed. State the suite result explicitly in the PR body.
 
 ## Screenshotting a screen whose data needs an unconfigured third party
 With no `STRIPE_*` keys the checkout BFF 502s before it can resolve a price or a mode,

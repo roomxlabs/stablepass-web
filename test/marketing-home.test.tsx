@@ -5,6 +5,8 @@ import path from "node:path";
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { mockupOrThrow } from "./support/mockup";
+
 import HomeSections from "@/app/(marketing)/sections";
 import { TRAINERS } from "@/app/(marketing)/sections/trainers.data";
 
@@ -57,24 +59,6 @@ function revealFiles() {
   ];
 }
 
-/**
- * The mockup lives in a sibling design tree outside this repo, and its depth above
- * the repo root differs between a normal checkout and the loop's worktree. Absent
- * (CI, a fresh clone) → the mockup-derived tests skip rather than fail, exactly as
- * ENG-587's suite does.
- */
-const MOCKUP_SUFFIX = "10-marketing-site/deploy/src/mockup.html";
-function findMockup(): string | null {
-  let dir = REPO;
-  for (;;) {
-    const candidate = path.join(dir, MOCKUP_SUFFIX);
-    if (existsSync(candidate)) return candidate;
-    const parent = path.dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
-}
-const MOCKUP = findMockup();
 
 /**
  * The mockup inlines every image as a base64 data URI. W1 extracted each one to
@@ -86,7 +70,7 @@ const MOCKUP = findMockup();
 const MIME_EXT: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
 
 function mockupDocument(): Document {
-  const html = readFileSync(MOCKUP!, "utf8").replace(
+  const html = readFileSync(mockupOrThrow(), "utf8").replace(
     /data:(image\/[a-z.+-]+);base64,([A-Za-z0-9+/=\s]+)/g,
     (_match, mime: string, b64: string) => {
       const bytes = Buffer.from(b64.replace(/\s+/g, ""), "base64");
@@ -418,15 +402,24 @@ describe("marketing home — copy matches the frozen fixture", () => {
 });
 
 /**
- * COPY FIDELITY — LAYER 2, only where the design tree is reachable.
+ * COPY FIDELITY — LAYER 2.
  *
  * Proves the committed fixture is still a faithful distillation of the mockup. On
  * its own layer 1 would happily freeze a typo forever; this is what stops that.
- * It skips cleanly when the mockup is absent — and note the reads sit inside the
- * `it` bodies, not the describe callback, which is the ENG-596 trap.
+ *
+ * ENG-991: this used to be `describe.skipIf(!MOCKUP)` and it did NOT skip "cleanly" —
+ * from an rx worktree outside the repo tree the mockup was unresolvable, so this whole
+ * layer skipped and the file reported PASSED while `matches the mockup block for block`
+ * was genuinely failing in the real checkout. It no longer skips: the read goes through
+ * `mockupOrThrow()` inside the `it` body (the reads must stay in the body, not the
+ * describe callback — that is the ENG-596 trap), so an unreachable mockup is a loud red.
+ * `executedGuardTest` below pins that this layer actually ran.
  */
-describe.skipIf(!MOCKUP)("marketing home — the frozen fixture still matches the mockup", () => {
+const executedGuardTest: string[] = [];
+
+describe("marketing home — the frozen fixture still matches the mockup", () => {
   it("matches the mockup block for block", () => {
+    executedGuardTest.push("matches the mockup block for block");
     const fixture = JSON.parse(
       readFileSync(path.join(REPO, "test", "fixtures", "marketing-copy.json"), "utf8"),
     ) as { blocks: { signature: string; runs: string[]; images: (string | null)[] }[] };
@@ -454,5 +447,16 @@ describe.skipIf(!MOCKUP)("marketing home — the frozen fixture still matches th
     }
 
     expect(live).toEqual(fixture.blocks);
+  });
+});
+
+/**
+ * ENG-991 execution pin, mirroring `test/marketing-shell.test.tsx`. Declared last so
+ * the guard above has already run. Stops a future `describe.skipIf` from quietly
+ * returning this file to the state where it reported green while hiding a real red.
+ */
+describe("ENG-991 — the copy fidelity guard never silently skips", () => {
+  it("executes the mockup copy fidelity test", () => {
+    expect(executedGuardTest).toEqual(["matches the mockup block for block"]);
   });
 });
