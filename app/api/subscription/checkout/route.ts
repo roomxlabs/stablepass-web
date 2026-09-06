@@ -4,28 +4,34 @@ import { getStripe } from "@/lib/stripe";
 import { supabaseServer } from "@/lib/supabase/server";
 import { ok, UNAUTH, fail } from "@/lib/api/envelope";
 
-// POST /api/subscription/checkout — the non-renewing 30-day pass.
+// POST /api/subscription/checkout — auto-renewing monthly subscribe (ENG-1027).
 //
-// Two branches, one screen:
-//  - Branch A (status !== "active"): first purchase / lapsed return. Creates a
-//    Stripe Subscription with `cancel_at_period_end: true` SET AT CREATION —
-//    that pre-armed cancel is the whole point: nothing auto-renews. Stripe still
-//    needs a recurring price to make a Subscription; the cancel stops period 2.
-//  - Branch B (status === "active"): early renewal. A one-off PaymentIntent.
-//    Previously this returned 409 already_active; that rule is gone.
+// One branch: first purchase / lapsed return. Creates a Stripe Subscription
+// that RENEWS (`cancel_at_period_end: false`) and saves the card as the default
+// payment method so the first off-session renewal has something to charge.
 //
-// PRICE SELECTION (ENG-1001) — there are now TWO prices: a promotional one for
-// a member's first `PROMO_PASS_ALLOWANCE` passes and a standard one after that.
-// Which one applies is decided HERE, on the server, from the member's own
-// `subscription.promo_passes_used` counter. The request body plays no part: this
-// handler takes no `Request` argument at all, so there is no parameter, header
-// or query string that can influence the price. A member can never ask for the
-// cheaper one.
+// An already-active member has nothing to buy — 409 `already_active`. The
+// /checkout page redirects them to /account (where R4 manages a live sub).
+// Early renewal (Branch B: one-off PaymentIntent, `mode: "renewal"`,
+// `THIRTY_DAYS_MS`, `metadata.kind`) is gone.
 //
-// The amount is still NEVER hardcoded — the chosen price id is the single source
-// of truth for both amount and currency, retrieved on every request and echoed
-// to the FE as `unitAmount`/`currency` so the screen and the charge can never
-// disagree. No amount literal appears in this file.
+// PRICE + COUPON (ENG-1027) — always `STRIPE_PRICE_ID_STANDARD` (A$19). The
+// introductory A$9 is a repeating coupon `intro_${remaining}` chosen HERE, on
+// the server, from the member's own `subscription.intro_months_used`. The
+// request body plays no part: this handler takes no `Request` argument at all,
+// so there is no parameter, header or query string that can influence the
+// coupon. A member can never ask for `intro_6`.
+//
+// `?? 0` / a non-numeric read fails TOWARD the discount — a null counter
+// charges less, never more, and the webhook corrects the state. Inverting that
+// default would silently overcharge someone.
+//
+// `STRIPE_PRICE_ID_PROMO` is no longer read. R0 leaves the env var set.
+//
+// The list price is NEVER hardcoded — `STRIPE_PRICE_ID_STANDARD` is retrieved
+// on every request and echoed as `unitAmount`/`currency`. The discount is
+// reported separately (`discountAmount` / `amountDueNow`) so the screen can
+// honestly say both "A$9.00 today" and "A$19.00 from March".
 //
 // The card never touches our server (.rx/guardrails.md #4): we only create
 // Stripe objects here and hand back a clientSecret for the FE to confirm inline.
@@ -38,27 +44,20 @@ import { ok, UNAUTH, fail } from "@/lib/api/envelope";
 //    degradation (.rx/guardrails.md), and the ONLY code that may produce a
 //    "payments are not configured" message on the screen.
 //  - `stripe_error`       — the key works but Stripe failed (outage, bad price
-//    id, rejected request). Reporting these as `stripe_unavailable` is what sent
-//    a human hunting a misconfiguration that did not exist.
-//  - `subscription_unavailable` (ENG-1001) — the member's `subscription` row could
-//    not be READ, so we refuse to price a pass. Stripe was never called. It is a
-//    third code for the same reason the two above are two: a DB failure reported
-//    as a Stripe failure sends the next person debugging in the wrong direction.
-//    The screen needs no change — anything that is not `stripe_unavailable`
-//    already renders the generic "nothing has been charged" error state.
+//    id, missing coupon, rejected request). Reporting these as
+//    `stripe_unavailable` is what sent a human hunting a misconfiguration
+//    that did not exist.
+//  - `subscription_unavailable` (ENG-1001) — the member's `subscription` row
+//    could not be READ, so we refuse to price a subscribe. Stripe was never
+//    called. A third code for the same reason the two above are two.
+//  - `already_active` (409) — they already have a live subscription.
 
-const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
-
-// How many passes are sold at the promotional price before a member moves to
-// the standard one. `promo_passes_used` counts EVERY paid pass (the be
-// migration's wording), so the comparison is a simple `<`.
-const PROMO_PASS_ALLOWANCE = 6;
+const INTRO_MONTHS = 6;
 
 type SubscriptionRow = {
   status: string | null;
   stripe_customer_id: string | null;
-  current_period_end: string | null;
-  promo_passes_used: number | null;
+  intro_months_used: number | null;
 };
 
 // first_name / last_name / postcode are the identity split ENG-566 adds to
@@ -99,29 +98,13 @@ function newestFirst<T extends { id: string; created: number }>(rows: readonly T
 //
 // `customers.search` is NOT safe as the primary path. It is backed by an
 // eventually-consistent index that measured a **36 second** lag on this account.
-// The five duplicate Customers this ticket exists to stop were created 24s, 36s,
-// 30s and ~38min apart — three of those gaps sit INSIDE that window, so a
-// search-only fix would still have re-created the Customer.
-//
 // Search is therefore the FALLBACK, and it runs whenever the email lookup cannot
-// answer: no email on the auth record, or an email that has since changed (the
-// Customer is then still findable by metadata). Note that means it also runs — and
-// harmlessly returns [] — on a brand-new member's first visit, which costs one
-// extra Stripe round-trip on that one request. That is the deliberate trade: a
-// stale index is still strictly better than no lookup, and it is never the only
-// thing standing between us and a duplicate.
+// answer: no email on the auth record, or an email that has since changed.
 //
-// Members who visited /checkout before this fix shipped already have several
+// Members who visited /checkout before ENG-582 shipped already have several
 // Customers under one `app_user_id`; that is pre-existing production data, not an
 // edge case. We pick the NEWEST deterministically and never delete or merge the
-// others — destroying payment records is not this route's job:
-//   * the newest is the one whose name/postcode the pre-fix route refreshed last;
-//   * it carries the freshest `incomplete` Subscription (Stripe expires those
-//     after ~23h, so the oldest Customer's pending Subscription is the one most
-//     likely to be gone, forcing yet another create);
-//   * it is what the webhook will ultimately record, since it is the Customer the
-//     member is about to pay against;
-//   * and once reuse engages we stop creating, so "newest" stops moving.
+// others — destroying payment records is not this route's job.
 async function findExistingCustomer(
   stripe: Stripe,
   appUserId: string,
@@ -143,10 +126,7 @@ async function findExistingCustomer(
   });
   // Re-check the metadata locally instead of trusting the query string to have
   // scoped the result. `appUserId` is a server-derived Supabase UUID and is never
-  // request-controlled, so this is defence in depth rather than a live hole — but
-  // it makes "this customer belongs to this member" a property of OUR code rather
-  // than of Stripe's query parser, and it sidesteps the fact that Stripe's
-  // metadata matching is case-insensitive.
+  // request-controlled, so this is defence in depth rather than a live hole.
   return newestFirst(found.data.filter((c) => c.metadata?.app_user_id === appUserId))[0] ?? null;
 }
 
@@ -157,32 +137,40 @@ async function findExistingCustomer(
 //
 // The request body is digested INTO the key on purpose. Stripe rejects a reused
 // key whose parameters differ (`idempotency_error`, confirmed live), and a
-// member's name or postcode can legitimately change between visits — digesting
-// gives each distinct body its own key, so a profile edit can never turn into a
-// hard 502. Genuinely concurrent requests read the same identity row and so
-// produce the same digest, which is exactly the case being collapsed.
-// Stripe replays a key for 24h. That is far longer than the race being closed
-// (milliseconds) and long enough to do harm, so the key is bucketed to 10 minutes:
-//   * if anyone deletes a duplicate Customer — the obvious cleanup after this
-//     ticket — a 24h key would replay the cached create and hand back the id of a
-//     DELETED customer, 502ing that member until the key aged out;
-//   * Stripe expires an untouched `incomplete` Subscription at ~23h, so a 24h key
-//     has a window where the list correctly misses the expired subscription, the
-//     create replays, and we return an EXPIRED secret — reintroducing ENG-581's
-//     dead Pay button from a new direction.
-// Ten minutes is comfortably longer than a double-click or a StrictMode double
-// effect (the only races that need collapsing) and far shorter than either hazard.
-//
-// Do NOT "simplify" the body digest away (ENG-1001). `subCreateParams` now carries
-// the CHOSEN `priceId`, so a member who crosses the promo threshold between two
-// visits inside the same 10-minute bucket automatically gets a fresh key — without
-// the digest, Stripe would replay the promo-priced Subscription and undercharge them.
+// member's name, postcode, or remaining intro months can legitimately change
+// between visits — digesting gives each distinct body its own key. Genuinely
+// concurrent requests read the same identity row and so produce the same digest.
+// Stripe replays a key for 24h. The key is bucketed to 10 minutes so a deleted
+// Customer or an expired `incomplete` Subscription cannot be replayed as a dead
+// id / expired secret (ENG-581 from a new direction).
 const IDEMPOTENCY_BUCKET_MS = 10 * 60 * 1000;
 
 function idempotencyKey(scope: string, appUserId: string, body: unknown): string {
   const digest = createHash("sha256").update(JSON.stringify(body)).digest("hex").slice(0, 16);
   const bucket = Math.floor(Date.now() / IDEMPOTENCY_BUCKET_MS);
   return `eng582-${scope}-${appUserId}-${bucket}-${digest}`;
+}
+
+// "March 2027" — the first month the member is charged the list price, in
+// Australia/Sydney. Remaining intro months are calendar months from now.
+export function introPriceChangeLabel(remaining: number, nowMs: number): string | null {
+  if (remaining <= 0) return null;
+  const parts = new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Sydney",
+    year: "numeric",
+    month: "numeric",
+  }).formatToParts(new Date(nowMs));
+  const year = Number(parts.find((p) => p.type === "year")?.value);
+  const month = Number(parts.find((p) => p.type === "month")?.value);
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return null;
+  const idx = month - 1 + remaining;
+  const y = year + Math.floor(idx / 12);
+  const m = ((idx % 12) + 12) % 12;
+  return new Intl.DateTimeFormat("en-AU", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(y, m, 1)));
 }
 
 export async function POST() {
@@ -197,23 +185,18 @@ export async function POST() {
   if (!stripe) return fail("stripe_unavailable", "Payment provider not configured.", 502);
 
   // The `error` is captured, NOT discarded. This projection names
-  // `promo_passes_used`, a column the be ENG-999 migration adds — and an explicit
-  // PostgREST projection REJECTS THE WHOLE QUERY with `42703` if any named column
-  // is not deployed (`.rx/gotchas.md`, ENG-617). Dropping the error puts that
-  // failure in the same branch as "this member has no row yet", and the
-  // consequences are far worse than a mispriced pass:
-  //   * `sub` is null, so `sub?.status === "active"` is false and BRANCH B NEVER
-  //     FIRES. An active member early-renewing would be sent down Branch A, get a
-  //     new recurring Subscription with no `metadata.kind="renewal"` and no
-  //     `metadata.new_period_end`, and the be webhook would then stamp
-  //     `current_period_end = now + 30d` — DESTROYING the unexpired days they had
-  //     already paid for.
+  // `intro_months_used`, a column the be ENG-1025 migration renames — and an
+  // explicit PostgREST projection REJECTS THE WHOLE QUERY with `42703` if any
+  // named column is not deployed (.rx/gotchas.md, ENG-617). Dropping the error
+  // puts that failure in the same branch as "this member has no row yet":
+  //   * `sub` is null, so `sub?.status === "active"` is false and an already-
+  //     paying member would be sent down the subscribe path and charged again;
   //   * and none of it would be logged.
   // So this fails CLOSED. Nothing has been charged at this point, so a 502 is
   // strictly safer than proceeding on a row we know we failed to read.
   const { data: subData, error: subError } = await sb
     .from("subscription")
-    .select("status,stripe_customer_id,current_period_end,promo_passes_used")
+    .select("status,stripe_customer_id,intro_months_used")
     .eq("user_id", user.id)
     .single();
   // PGRST116 is `.single()`'s "no rows" — a legitimate state for a member who has
@@ -221,7 +204,7 @@ export async function POST() {
   // defensively. Only a DIFFERENT code means the read itself failed.
   if (subError && subError.code !== "PGRST116") {
     console.error(
-      "[checkout] subscription read failed (%s) — refusing to price a pass from a row we could not read: %s",
+      "[checkout] subscription read failed (%s) — refusing to price a subscribe from a row we could not read: %s",
       subError.code ?? "no code",
       subError.message ?? String(subError),
     );
@@ -235,28 +218,25 @@ export async function POST() {
   }
   const sub = subData as SubscriptionRow | null;
 
-  // The price is chosen from the member's OWN row, server-side (.rx/guardrails.md
-  // — "the price is chosen server-side from the database and is never
-  // client-influenced"). The default deliberately fails TOWARD the discount: if
-  // there is no row yet the member is charged less, never more. The counter is
-  // authoritative and the be `stripe-webhook` corrects the state after the
-  // payment lands. Inverting this default would silently overcharge someone.
+  if (sub?.status === "active") {
+    return fail("already_active", "You already have an active subscription.", 409);
+  }
+
+  // The coupon is chosen from the member's OWN row, server-side. The default
+  // deliberately fails TOWARD the discount: if there is no row yet the member
+  // is charged less, never more. The counter is authoritative and the be
+  // `stripe-webhook` corrects the state after the payment lands.
   //
-  // The guard is `Number.isFinite`, not `?? 0`: `?? 0` only catches null, and a
-  // non-numeric value would make `promoUsed < PROMO_PASS_ALLOWANCE` false and
-  // charge the STANDARD price — the exact opposite of the stated invariant. The
-  // column is `int not null` with a 0..1000 CHECK so this is not reachable today;
-  // it is written this way so the guarantee holds by construction rather than by
-  // the schema happening to agree.
-  const rawPromoUsed = sub?.promo_passes_used;
-  const promoUsed = typeof rawPromoUsed === "number" && Number.isFinite(rawPromoUsed) ? rawPromoUsed : 0;
-  const usePromo = promoUsed < PROMO_PASS_ALLOWANCE;
-  const priceId = usePromo
-    ? process.env.STRIPE_PRICE_ID_PROMO!
-    : process.env.STRIPE_PRICE_ID_STANDARD!;
-  // Clamped at 0 because the counter keeps counting past the allowance — a
-  // member on their tenth pass must read "0 left", not a negative number.
-  const promoRemaining = Math.max(0, PROMO_PASS_ALLOWANCE - promoUsed);
+  // The guard is `Number.isFinite`, not bare `?? 0`: `?? 0` only catches null,
+  // and a non-numeric value would make `remaining` 0 and skip the coupon —
+  // the exact opposite of the stated invariant. The column is `int not null`
+  // with a 0..1000 CHECK so this is not reachable today; it is written this
+  // way so the guarantee holds by construction rather than by the schema
+  // happening to agree.
+  const rawUsed = sub?.intro_months_used;
+  const used = typeof rawUsed === "number" && Number.isFinite(rawUsed) ? rawUsed : 0;
+  const remaining = Math.max(0, INTRO_MONTHS - used);
+  const coupon = remaining > 0 ? `intro_${remaining}` : undefined;
 
   const { data: identityData } = await sb
     .from("app_user")
@@ -266,8 +246,9 @@ export async function POST() {
   const identity = identityData as IdentityRow | null;
 
   try {
-    // Resolve the price FIRST, in both branches. A failed retrieve or a null
-    // unit_amount is a hard 502 — we never guess or fall back to a literal.
+    const priceId = process.env.STRIPE_PRICE_ID_STANDARD!;
+    // Resolve the price FIRST. A failed retrieve or a null unit_amount is a
+    // hard 502 — we never guess or fall back to a literal.
     const price = await stripe.prices.retrieve(priceId);
     if (price?.unit_amount == null) {
       // NOT `stripe_unavailable` — the key is present and Stripe answered; the
@@ -277,6 +258,20 @@ export async function POST() {
     }
     const unitAmount = price.unit_amount;
     const currency = price.currency;
+
+    // Discount comes from the Stripe coupon object, never a hardcoded 1000.
+    // A missing / non-amount_off coupon is a Stripe failure, not a silent
+    // full-price charge (that would overcharge someone we promised A$9).
+    let discountAmount = 0;
+    if (coupon) {
+      const couponObj = await stripe.coupons.retrieve(coupon);
+      if (typeof couponObj.amount_off !== "number") {
+        console.error("[checkout] coupon %s has no amount_off", coupon);
+        return fail("stripe_error", "Payment provider unavailable.", 502);
+      }
+      discountAmount = couponObj.amount_off;
+    }
+    const amountDueNow = Math.max(0, unitAmount - discountAmount);
 
     // The Stripe Customer carries identity: full name, AU postcode, and the
     // app_user_id the be webhook resolves the member by.
@@ -333,134 +328,6 @@ export async function POST() {
       })).id;
     }
 
-    if (sub?.status === "active") {
-      // ---- Branch B: early renewal -------------------------------------
-      // Extend from the EXISTING end, never from today, so days already paid
-      // for are never lost. The absolute value is stamped on the intent; the
-      // be webhook applies it verbatim, which makes a redelivered event a
-      // no-op. Do not let the webhook recompute it.
-      const currentEndMs = Date.parse(sub.current_period_end ?? "");
-      const base = Math.max(Number.isNaN(currentEndMs) ? Date.now() : currentEndMs, Date.now());
-      const newPeriodEnd = Math.floor((base + THIRTY_DAYS_MS) / 1000);
-
-      // Branch A has two defences against creating a duplicate — the
-      // `subscriptions.list` reuse lookup for the SEQUENTIAL race and an
-      // `idempotencyKey` for the CONCURRENT one. Branch B had NEITHER: two tabs, or
-      // a StrictMode double-effect, produced two full-price PaymentIntents carrying
-      // the same absolute `new_period_end`, so confirming both was two charges for
-      // one 30-day extension. The Pay button disables on first click
-      // (checkout-form.tsx) but that only ever covered a single tab.
-      //
-      // ENG-1007 closes the CONCURRENT race with the key — the same defence Branch
-      // A relies on for that case. It is deliberately NOT full parity: Branch A also
-      // has the `subscriptions.list` reuse lookup for the SEQUENTIAL race, and
-      // Branch B still has no equivalent, so the key is the only thing standing
-      // here. A `paymentIntents.list`-and-adopt is the real second defence and is
-      // left to a follow-up: adopting someone's existing intent safely needs the
-      // same rigour Branch A's adopt path carries below (five separate
-      // re-assertions — price, quantity, metadata, cancel_at_period_end), which is
-      // a bigger design change than this bug's remit.
-      //
-      // The params are hoisted into a named const so the digest is taken over the
-      // EXACT object sent to Stripe. That matters: Stripe rejects a reused key whose
-      // parameters differ (`idempotency_error`), so a digest that drifted from the
-      // payload would turn this fix into a 502. Digesting them also gives each
-      // distinct charge its own key, which is what makes the collapse safe:
-      //  * `amount`/`currency` — a member who crosses the promo threshold between
-      //    two visits inside one bucket gets a fresh key rather than a replayed
-      //    promo-priced intent (the Branch A note above, applied here);
-      //  * `customer` — never collides across members (the key is user-scoped too);
-      //  * `metadata.new_period_end` — the absolute extension. Two tabs on the same
-      //    unchanged row derive the same value, so they collapse; once the first
-      //    payment has landed and the webhook has advanced `current_period_end`, a
-      //    genuine SECOND top-up derives a different value and is correctly allowed
-      //    through rather than swallowed.
-      //
-      // The scope is `"renewal"` — distinct from Branch A's `"subscription"` and
-      // from `"customer"` — so the branches can never hand Stripe the same key for
-      // the same member in the same bucket.
-      //
-      // TWO RESIDUAL GAPS, both deliberately left open (ENG-1007). Naming them in
-      // full because a partial list of known holes is worse than none — a later
-      // reader will otherwise take this as the complete set.
-      //
-      // (1) The stale-period-end window. The collapse relies on `new_period_end`
-      // being stable between two tabs, which holds whenever it is anchored to the
-      // stored `current_period_end`. It does NOT hold when an `active` row carries a
-      // null / unparseable / already-past one: the `Date.now()` fallback above then
-      // advances, so two requests landing in different SECONDS (the value is floored
-      // to 1s) derive different params and different keys, and both intents are
-      // created. A StrictMode double-effect still collapses; two hand-opened tabs
-      // may not.
-      //   Do NOT read that as "corrupt data only". `lib/api/access.ts` treats
-      //   `active` with a past `current_period_end` as a ROUTINE state — status is
-      //   flipped when the be webhook lands, not at expiry, and ENG-585 shipped a
-      //   user-visible bug in exactly that window. So the uncovered population is
-      //   expired-active members mid-webhook — plausibly the most motivated Branch B
-      //   visitors of all, since they are the ones clicking "pay again".
-      //   It is still left open, because every cheap close is worse: quantising the
-      //   fallback onto the bucket grid was tried and REVERTED (it moves a
-      //   money-bearing date by up to 10 minutes and breaks the separately-tested
-      //   guarantee that the fallback extends from NOW, never from a stale date),
-      //   and quantising only the DIGEST while sending the true params is worse
-      //   still — same key, different params is the one thing Stripe hard-rejects
-      //   (`idempotency_error`), turning a rare double charge into a deterministic
-      //   502 for members already in a bad state. The other option — refusing Branch
-      //   B outright on a stale row — is a product decision, not a bug fix.
-      //
-      // (2) The bucket boundary. Two requests milliseconds apart can still straddle
-      // a 10-minute bucket edge, get different keys, and both charge. Inherited from
-      // the shared helper above; Branch A survives it because `subscriptions.list`
-      // catches the sequential case, and Branch B has no such lookup (see above).
-      //
-      // Both are strictly narrower than what shipped before this change, which had
-      // NO protection for ANY member. Neither is closed here rather than smuggling a
-      // charge-semantics change into a bug fix — the same discipline ENG-1001 used
-      // when it found this very gap and documented it instead.
-      const intentCreateParams: Stripe.PaymentIntentCreateParams = {
-        amount: unitAmount,
-        currency,
-        customer: customerId,
-        automatic_payment_methods: { enabled: true },
-        // REQUIRED — the be `stripe-webhook` fn resolves the subscriber by
-        // app_user_id, and applies new_period_end as an absolute value.
-        metadata: {
-          app_user_id: user.id,
-          kind: "renewal",
-          new_period_end: String(newPeriodEnd),
-        },
-      };
-      const intent = await stripe.paymentIntents.create(intentCreateParams, {
-        idempotencyKey: idempotencyKey("renewal", user.id, intentCreateParams),
-      });
-
-      // DO NOT re-add a `sb.from("subscription").update(...)` here. It was
-      // removed in ENG-582 because it never worked and never could: `sb` is the
-      // MEMBER's RLS-scoped client, and `public.subscription` exposes only
-      // SELECT policies to `authenticated`. The update matched zero rows,
-      // returned no error, and its result was unchecked — a silent no-op that
-      // made this route look idempotent while it stacked a Customer per visit.
-      // Persisting `stripe_customer_id` / `stripe_subscription_id` is the be
-      // `stripe-webhook`'s job (it runs as service role). Giving the BFF a write
-      // path here would break the service-role-only guardrail.
-
-      return ok({
-        clientSecret: intent.client_secret ?? null,
-        publishableKey: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
-        mode: "renewal",
-        unitAmount,
-        currency,
-        // Display only. The screen may SHOW this; it may never SEND it — the
-        // route re-derives it from the DB on every request and ignores any body.
-        promoRemaining,
-        // Echoed so the screen renders the AUTHORITATIVE dates rather than
-        // recomputing (and potentially disagreeing with) them client-side.
-        currentPeriodEnd: sub.current_period_end ?? null,
-        newPeriodEnd: new Date(newPeriodEnd * 1000).toISOString(),
-      });
-    }
-
-    // ---- Branch A: first purchase / lapsed return ----------------------
     // Reuse the member's already-pending Subscription instead of stacking
     // another one (ENG-582). `subscriptions.list` is STRONGLY consistent —
     // verified live: a Subscription created at t+0 comes back from the very next
@@ -485,33 +352,27 @@ export async function POST() {
       expand: ["data.latest_invoice.confirmation_secret", "data.latest_invoice.payment_intent"],
     });
     // A member can legitimately hold several pending Subscriptions (anyone who
-    // loaded /checkout before this fix shipped does). Pick deterministically —
+    // loaded /checkout before ENG-582 shipped does). Pick deterministically —
     // newest first, id as tie-break — so two loads in a row resolve to the SAME
     // Subscription instead of alternating between them.
     //
     // Adopting a Stripe object into the billing flow means re-asserting every
     // property the create path guarantees, not just the price. A subscription
     // made under this Customer by the Stripe dashboard, a support action, or a
-    // future flow would otherwise be reused with:
+    // leftover from the pass era would otherwise be reused with:
     //  - no `metadata.app_user_id` → the member pays, the be `stripe-webhook`
     //    cannot resolve the subscriber, and they are charged but never activated
     //    (silent, and the worst outcome in this file);
-    //  - `cancel_at_period_end: false` → we would silently hand them an
-    //    AUTO-RENEWING pass, breaking the one rule the product is built on.
+    //  - `cancel_at_period_end: true` → a pass-era leftover that NEVER renews.
+    //    The create path now sets `false`; only `false` is reusable.
     //
-    // The price match is against `priceId` — the price chosen for THIS request —
-    // not against a single ambient env var (ENG-1001). With two prices in play a
-    // fixed comparison is wrong in both directions: a member who has exhausted
-    // the promo allowance would have their old promo-priced pending Subscription
-    // adopted and be UNDERCHARGED, and a pending Subscription at the other price
-    // would fail the filter and quietly stack a second one (ENG-582 again).
+    // The price match is against `priceId` — always STANDARD after ENG-1027.
     // `quantity` is checked alongside the price because the price alone does not
-    // determine the CHARGE: a dashboard- or support-created pending Subscription
-    // at the right price with `quantity: 3` would be adopted, and we would report
+    // determine the CHARGE: a dashboard-created pending Subscription at the
+    // right price with `quantity: 3` would be adopted, and we would report
     // `unitAmount` while Stripe charged three times it. The create path below
     // never sets a quantity (Stripe defaults it to 1), so `== null || === 1` is
-    // exactly "what our own create path guarantees" — the same standard the
-    // metadata and cancel_at_period_end checks are held to.
+    // exactly "what our own create path guarantees".
     const reusable =
       newestFirst(
         pending.data.filter(
@@ -520,7 +381,7 @@ export async function POST() {
               (item) => item.price?.id === priceId && (item.quantity == null || item.quantity === 1),
             ) &&
             s.metadata?.app_user_id === user.id &&
-            s.cancel_at_period_end === true,
+            s.cancel_at_period_end === false,
         ),
       )[0] ?? null;
 
@@ -528,8 +389,11 @@ export async function POST() {
       customer: customerId,
       items: [{ price: priceId }],
       payment_behavior: "default_incomplete",
-      // The whole point — armed at creation so the pass never renews itself.
-      cancel_at_period_end: true,
+      // The epic — the subscription renews. The card must also be saved as
+      // the default, or the first off-session renewal has nothing to charge
+      // and every member lapses in a month.
+      cancel_at_period_end: false,
+      payment_settings: { save_default_payment_method: "on_subscription" },
       // Stripe MOVED the first-purchase client secret. At this account's API
       // version (2026-06-24.dahlia) `Invoice.payment_intent` no longer exists —
       // it reads back absent, so the old single-path expand yielded a null
@@ -550,8 +414,10 @@ export async function POST() {
       // loudly and returns `stripe_error`, so that would be visible, not silent.
       expand: ["latest_invoice.confirmation_secret", "latest_invoice.payment_intent"],
       // REQUIRED — the be `stripe-webhook` fn resolves the subscriber by this
-      // metadata key. Do not rename/remove it.
+      // metadata key. Do not rename/remove it. Do not add `kind` — that was
+      // the deleted early-renewal branch.
       metadata: { app_user_id: user.id },
+      ...(coupon ? { discounts: [{ coupon }] } : {}),
     };
 
     // The list above closes the SEQUENTIAL race; this key closes the CONCURRENT
@@ -559,10 +425,6 @@ export async function POST() {
     // double-invoking the checkout screen's on-mount effect (which does not abort
     // its in-flight request) — both find nothing pending and both create. Same
     // key => Stripe returns the SAME Subscription to both.
-    //
-    // Without this, the Customer was collapsed by its own key while the
-    // Subscription was not, so concurrent loads still stacked Subscriptions —
-    // i.e. exactly the bug this ticket exists to kill, just harder to see.
     const subscription =
       reusable ??
       (await stripe.subscriptions.create(subCreateParams, {
@@ -600,25 +462,22 @@ export async function POST() {
       );
     }
 
-    // DO NOT re-add a `sb.from("subscription").update(...)` here — see the note
-    // in Branch B. RLS denies it silently (0 rows, no error), which is exactly
-    // why `stripe_customer_id` stayed null and this route stacked a Customer and
-    // a Subscription on every visit. The be `stripe-webhook` writes both ids as
-    // service role once a payment lands; that is the only supported write path.
-    //
-    // A side effect worth naming (ENG-582): because the route now hands back the
-    // SAME pending Subscription on every load, two open tabs can no longer pay
-    // against different Subscriptions — so the webhook can no longer record a
-    // `stripe_subscription_id` that differs from the one actually paid.
+    // DO NOT re-add a `sb.from("subscription").update(...)` here. RLS denies it
+    // silently (0 rows, no error), which is exactly why `stripe_customer_id`
+    // stayed null and this route stacked a Customer and a Subscription on every
+    // visit (ENG-582). The be `stripe-webhook` writes both ids as service role
+    // once a payment lands; that is the only supported write path.
 
     return ok({
       clientSecret,
       publishableKey: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
-      mode: "purchase",
+      mode: "subscribe",
       unitAmount,
+      discountAmount,
+      amountDueNow,
       currency,
-      // Display only — see the note on the renewal payload above.
-      promoRemaining,
+      introMonthsRemaining: remaining,
+      priceChangesOn: introPriceChangeLabel(remaining, Date.now()),
       subscriptionId: subscription.id,
     });
   } catch (err) {

@@ -1,30 +1,37 @@
 // Checkout screen (04-checkout.html) — embedded Stripe Elements, no hosted
 // redirect (.rx/guardrails.md #4).
 //
-// There is no free trial any more (ENG-999 retired it; `subscription.trial_ends_at`
-// survives only as a nullable vestige that nothing sets). This page therefore no
-// longer reads it and no longer passes a `trialDaysLeft` down — the old sub-copy
-// would have rendered "your 30-day trial ends in 0 days" to every member forever.
+// There is no free trial any more (ENG-999 retired it). This page therefore
+// does not read `trial_ends_at` and does not pass a `trialDaysLeft` down.
 //
-// Nothing else about the member's row is read here: the price, and the remaining
-// promotional allowance the screen displays, are decided SERVER-SIDE by
-// /api/subscription/checkout from `subscription.promo_passes_used` and arrive with
-// the clientSecret. Reading the counter here too would just create a second,
-// drift-prone source of truth for a number that decides what someone is charged.
+// An already-active member has nothing to buy: the pass now auto-renews, so
+// early renewal is gone. Redirect to /account (R4 owns managing a live sub).
+// Only `status` is read here — the coupon, the list price and the remaining
+// intro months are decided SERVER-SIDE by /api/subscription/checkout from
+// `subscription.intro_months_used` and arrive with the clientSecret. Reading
+// the counter here too would just create a second, drift-prone source of truth
+// for a number that decides what someone is charged.
 //
-// An `active` member is deliberately NOT redirected away any more. The pass does
-// not auto-renew, so paying again BEFORE expiry (early renewal) is a first-class
-// flow, not an error — the route returns a renewal PaymentIntent and the screen
-// switches to the extend copy. The old `status === "active" → /account` redirect
-// (and the route's matching 409 already_active) were what made that impossible.
-//
-// The actual Stripe Customer/Subscription/PaymentIntent creation + Elements
-// mount happens client-side in CheckoutForm (POSTs /api/subscription/checkout on
-// mount) — this page never talks to Stripe directly.
+// Do not import `lib/api/access.ts` or `readSubscriptionState` — those are
+// R5 / shared entitlement, not this slice. A bare `status === "active"` is
+// the redirect rule; a failed or missing row is treated as "not active" and
+// the route fails closed if the same read later fails.
+import { redirect } from "next/navigation";
+import { supabaseServer } from "@/lib/supabase/server";
 import { CheckoutForm } from "./checkout-form";
 
 export const metadata = { title: "Checkout · StablePass" };
 
-export default function CheckoutPage() {
+export default async function CheckoutPage() {
+  const sb = await supabaseServer();
+  const { data: { user } } = await sb.auth.getUser();
+  if (user) {
+    const { data } = await sb
+      .from("subscription")
+      .select("status")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (data?.status === "active") redirect("/account");
+  }
   return <CheckoutForm />;
 }
