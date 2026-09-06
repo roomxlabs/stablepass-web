@@ -8,20 +8,34 @@ import { AccessWall, WALL_COPY, accessWallCopy } from "@/components/access-wall"
 // ENG-585. The wall used to be eight hardcoded copies of "Your trial has ended.
 // Reactivate your subscription to …", shown to everyone — including a member
 // who had converted to a paid pass and PAID for it.
+//
+// ENG-1008 then fixed the OTHER half of the same sentence. ENG-999 retired the
+// free trial, so the never-paid branch was telling a brand-new account that
+// something it had never been offered had run out. Both branches are asserted
+// here, in both directions: each must say its own thing AND must not say the
+// other's.
 
 describe("AccessWall — the copy branches on whether the member ever paid", () => {
-  it("a member who has NEVER paid is told their TRIAL ended", () => {
+  it("a member who has NEVER paid is told they do not have a pass yet", () => {
     render(<AccessWall everSubscribed={false} />);
-    expect(screen.getByText("Your free trial has ended")).toBeInTheDocument();
+    expect(screen.getByText("You don't have a pass yet")).toBeInTheDocument();
+    expect(
+      screen.getByText("Buy a pass for 30 days of full access — it never renews on its own."),
+    ).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Get full access" })).toHaveAttribute("href", "/checkout");
+    // ENG-1008: they never had one, so nothing of theirs can have ended.
+    expect(screen.queryByText(/trial/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Your access has paused")).not.toBeInTheDocument();
   });
 
-  it("a member who HAS paid is never told their trial ended", () => {
+  it("a member who HAS paid is told their access paused, not that they are new", () => {
     render(<AccessWall everSubscribed />);
     expect(screen.getByText("Your access has paused")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Buy 30 days" })).toHaveAttribute("href", "/checkout");
-    // The actual regression: this is the sentence the DRI's paying member saw.
-    expect(screen.queryByText(/trial has ended/i)).not.toBeInTheDocument();
+    // The original regression: this is the sentence the DRI's paying member saw.
+    expect(screen.queryByText(/trial/i)).not.toBeInTheDocument();
+    // …and the new one: a returning member is not a first-time buyer.
+    expect(screen.queryByText("You don't have a pass yet")).not.toBeInTheDocument();
   });
 
   it("renders the onboarding hero skin without changing the words", () => {
@@ -30,9 +44,20 @@ describe("AccessWall — the copy branches on whether the member ever paid", () 
     expect(screen.getByRole("link", { name: "Buy 30 days" })).toBeInTheDocument();
   });
 
+  it("the hero skin carries the never-subscribed words too", () => {
+    render(<AccessWall everSubscribed={false} variant="hero" />);
+    expect(screen.getByRole("heading", { name: "You don't have a pass yet" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Get full access" })).toHaveAttribute("href", "/checkout");
+  });
+
   it("accessWallCopy is the single branch both variants read", () => {
     expect(accessWallCopy(true)).toBe(WALL_COPY.paused);
-    expect(accessWallCopy(false)).toBe(WALL_COPY.trialEnded);
+    expect(accessWallCopy(false)).toBe(WALL_COPY.neverSubscribed);
+  });
+
+  it("the two branches are never the same words", () => {
+    expect(WALL_COPY.neverSubscribed.title).not.toBe(WALL_COPY.paused.title);
+    expect(WALL_COPY.neverSubscribed.body).not.toBe(WALL_COPY.paused.body);
   });
 });
 
@@ -42,10 +67,21 @@ describe("AccessWall — the copy branches on whether the member ever paid", () 
 // their phone who then opens the laptop must read the SAME sentence. If someone
 // reworks this copy, they have to rework mobile in the same breath — that is
 // what this test is for.
-describe("web wall copy matches mobile (ENG-573)", () => {
+//
+// ENG-1008 moved the never-subscribed title ahead of mobile deliberately: the
+// web sentence was factually false for every reader, and ENG-1004 is the mobile
+// slice of the same retirement. What must NOT cross over is the /checkout CTA
+// target — the iOS app carries no pointer to an external purchase (App Store
+// 3.1.3(a)) — so any parity is on WORDS, never on the link.
+//
+// The block is therefore no longer named for that parity. It never verified it
+// anyway: pinning a literal in THIS repo cannot observe the other one, so this
+// is a change-detector on our own copy — which is worth having, but it should
+// not claim to be a cross-repo guarantee. ENG-1004 owns the mobile wording.
+describe("wall copy — the pinned strings", () => {
   it("pins the titles and CTAs verbatim", () => {
-    expect(WALL_COPY.trialEnded.title).toBe("Your free trial has ended");
-    expect(WALL_COPY.trialEnded.cta).toBe("Get full access");
+    expect(WALL_COPY.neverSubscribed.title).toBe("You don't have a pass yet");
+    expect(WALL_COPY.neverSubscribed.cta).toBe("Get full access");
     expect(WALL_COPY.paused.title).toBe("Your access has paused");
     expect(WALL_COPY.paused.cta).toBe("Buy 30 days");
   });
@@ -57,6 +93,34 @@ describe("web wall copy matches mobile (ENG-573)", () => {
       expect(text).not.toMatch(/auto-?renew/i);
       expect(text).not.toMatch(/subscription will continue/i);
     }
+  });
+
+  // ENG-1008 guardrail. A pass has two prices and which one a member is offered
+  // is decided server-side from their promo counter (ENG-1001), so ANY amount
+  // written into this static table is wrong for a large share of the audience.
+  // "30 days" is a duration and stays; a currency amount may never appear.
+  it("quotes no price", () => {
+    for (const copy of Object.values(WALL_COPY)) {
+      const text = `${copy.title} ${copy.body} ${copy.cta}`;
+      expect(text).not.toMatch(/\$/);
+      expect(text).not.toMatch(/\b(?:AUD|aud)\b/);
+      expect(text).not.toMatch(/\b\d+(?:\.\d{2})?\s*(?:dollars?|bucks)\b/i);
+      expect(text).not.toMatch(/\bper (?:month|week|year)\b/i);
+    }
+  });
+
+  // The never-subscribed branch must describe NOT HAVING BOUGHT, which is a
+  // different claim from "your thing expired". Pin the shape, not just the
+  // string, so a future reword cannot quietly reintroduce an expiry story to
+  // someone who has no history to expire.
+  it("tells a never-subscribed member about buying, not about expiry", () => {
+    const { title, body } = WALL_COPY.neverSubscribed;
+    const text = `${title} ${body}`;
+    expect(text).toMatch(/\bpass\b/i);
+    expect(text).toMatch(/\bbuy\b/i);
+    // Over the WHOLE sentence, not just the title: "Buy a pass — your access
+    // ended" would otherwise sail through a title-only check.
+    expect(text).not.toMatch(/\b(?:ended|expired|run out|ran out)\b/i);
   });
 });
 
