@@ -1822,3 +1822,77 @@ Mobile onboarding is trainers → horses → notifications, so any "web onboardi
 ticket that asks for a trainer step has **no backing design** and is `needs-spec` per the
 guardrail, not `ready`. Note also that the "Step 1 of 2" copy in `horse-picker.tsx` is
 aspirational — no step 2 screen or step routing exists in code.
+## A "remove one `.eq()`" ticket is usually THREE coupled sites, not one line
+ENG-960 (R8 shares reversal) named three files, each as a single line. Two were
+one line; `app/(member)/trainers/trainers-grid.tsx` was **four coupled sites**:
+the `TrainerRow` type, the explanatory comment, `shares_for_sale` inside the
+embedded `horses:horse!trainer_id(...)` projection, AND the client-side
+`horseCount` filter. Deleting only the projection column leaves the card
+reading **"0 horses"** for a for-sale-only stable while the roster one click
+away (fixed in `trainers/[id]/page.tsx`) lists three — the list looks fixed and
+the count silently still lies. Grep the whole file for the flag, not the one
+line the ticket cites, and pin the rendered COUNT in a test, not just the query.
+
+## Reversal tickets have a SECOND lock: the source-grep guard test
+`test/shares-segregation-guard.test.ts` asserts the exclusions **exist in
+source**. Removing them turns it red in a file no ticket lists in its surface.
+Any ticket reversing a documented rule must budget for inverting its guard.
+Two traps when you do:
+- The guard greps raw source, and your new code explains the removal in a
+  COMMENT that names the flag — so `expect(src).not.toMatch(/shares_for_sale/)`
+  fails on your own prose. Strip comments before matching (the file already has
+  a `strip()` helper for exactly this).
+- Invert it with a **positive anchor** (`.from("horse")`, `.eq("status",
+  "active")`) beside every negative one, or a file that failed to load passes
+  every `not.toMatch` vacuously — the false-green class this file already records.
+
+## `.rx/review/` PNGs: check the ticket's own e2e spec exists before assuming no harness
+The harness needs NO `.env.playwright` — `playwright.config.ts` passes the
+well-known local Supabase demo keys itself. It DOES need local Supabase already
+up (`curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:54321/rest/v1/`
+returns 200 when it is). That one curl is the whole pre-flight.
+
+## Web browse grids read UNBOUNDED until ENG-960
+`horses-grid.tsx` / `trainers-grid.tsx` had no `.limit()` at all, while mobile
+has capped every browse read at `BROWSE_PAGE_SIZE = 100` since ENG-424 and
+ENG-956's `shares-list.tsx` had already mirrored it as `SHARES_PAGE_SIZE = 100`.
+ENG-960 added `lib/browse.ts` (`BROWSE_PAGE_SIZE = 100`) for the two grids.
+The 60-item "Show more" PAGER originated in web PR #81 (`perf/query-batch`),
+which targets `main`, not `feature/launch-v1`. **That is no longer the state of
+this branch.** An earlier revision of ENG-960 shipped the cap with no pager,
+making row 101 unreachable; Naufal rejected it (6 Sep 2026) — nothing may be
+truncated — and ENG-960 then lifted the mechanism into `lib/browse.ts` for both
+grids. So on `feature/launch-v1` **every row is reachable via "Show more"**:
+neither grid carries a `.limit()`; both page with `.range()`. (Stated that way
+deliberately — reading only the merged branch you will find no `.limit()`
+anywhere, so "replaces `.limit()`" describes a moment, not the tree.)
+
+Two things to carry rather than re-derive. `splitBrowsePage()` over-fetches ONE
+probe row (`BROWSE_FETCH_LIMIT = BROWSE_PAGE_SIZE + 1`) and answers
+`hasMore: rows.length > BROWSE_PAGE_SIZE` — **not** `=== BROWSE_PAGE_SIZE`, which
+is the off-by-one PR #81 still carries and which offers "Show more" with nothing
+behind it when the total is an exact multiple of the page size. And the next
+offset is the RENDERED count, not the fetched count, so the probe row leaves no
+gap. Reuse `lib/browse.ts`; do not write a third copy of this.
+
+## A test can "pin" an invariant it never touches — check the fixture, not the title
+ENG-960 shipped a test titled *"INVARIANT: the pager can never outlive its
+roster"* whose comment said hoisting the Show-more button out of the
+`horses.length > 0` render gate would red it. It did not: the fixture supplied
+ZERO rows, so `splitBrowsePage` returned `hasMore: false` and the inner
+`{hasMore && (<button>)}` satisfied "no Show more" on its own, whatever the
+outer gate said. Deleting `horses.length > 0` left the whole 1367-test suite
+green. Renaming the test moved the false claim; it did not repair it.
+
+The shape to watch for: **an assertion satisfied by an inner guard tells you
+nothing about the outer one.** A negative assertion ("X is absent") is
+especially prone to this — absence is over-determined, so any one of several
+guards can produce it while the test appears to name a specific one. Fixing it
+meant asserting the gate's OWN effect (with no rows the `.onboarding-grid-web`
+container does not render at all), which is not reachable via `hasMore`.
+
+Corollary, learned the same day on the same file: **union protects the append;
+it does not keep the content true.** `.rx/gotchas.md` is `merge=union`, so a
+paragraph that was true when written lands verbatim on the launch branch long
+after it went stale. When you touch this file, re-read the paragraphs AROUND
+your edit and check they are still true of the merged tree — do not only append.
