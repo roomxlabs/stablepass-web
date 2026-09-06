@@ -1598,3 +1598,12 @@ a { color: inherit; text-decoration: none; }
   font-weight: 600;
 }
 .browse-pill:focus-visible { outline: 2px solid var(--brand-green); outline-offset: 2px; }
+
+/* ENG-960 — the browse grids' "Show more" pager button. Appended at EOF, like
+   the browse pills above, so it cannot collide with PR #100's hunks earlier in
+   this file. Spacing comes from the existing scale rather than an inline
+   style; the skin is `.btn-light`'s, which this sits beside in the same grid. */
+.btn-showmore {
+  display: block;
+  margin: 24px auto 0;
+}

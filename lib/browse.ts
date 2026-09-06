@@ -32,6 +32,19 @@ export const BROWSE_PAGE_SIZE = 100;
 export const BROWSE_FETCH_LIMIT = BROWSE_PAGE_SIZE + 1;
 
 /**
+ * The inclusive `.range()` bounds for the page starting at `offset`.
+ *
+ * Shared for a specific reason: `splitBrowsePage` below assumes the query asked
+ * for BROWSE_FETCH_LIMIT rows. When the two grids each wrote their own
+ * `.range(offset, offset + BROWSE_PAGE_SIZE)` by hand, that assumption lived in
+ * three places and only one of them was `splitBrowsePage` — change a grid's
+ * bound and the split silently mis-slices. Now the pair moves together.
+ */
+export function browseRange(offset: number): [number, number] {
+  return [offset, offset + BROWSE_FETCH_LIMIT - 1];
+}
+
+/**
  * Split a raw `.range(offset, offset + BROWSE_PAGE_SIZE)` result into the page
  * we render and the answer to "is there more?". Shared so the two grids cannot
  * drift apart on the off-by-one.

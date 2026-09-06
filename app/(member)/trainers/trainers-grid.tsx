@@ -10,7 +10,7 @@ import { useRouter } from "next/navigation";
 import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
 import { AccessWall } from "@/components/access-wall";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { BROWSE_PAGE_SIZE, splitBrowsePage } from "@/lib/browse";
+import { browseRange, splitBrowsePage } from "@/lib/browse";
 
 type TrainerRow = {
   id: string;
@@ -39,7 +39,18 @@ export function TrainersGrid({ viewerId, everSubscribed }: { viewerId: string; e
   // Paging — same shape as HorsesGrid; see lib/browse.ts for the off-by-one.
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  // See HorsesGrid: a failed page 2+ must not unmount the roster. This grid has
+  // no pills, so a destructive `error` here is UNRECOVERABLE without a full
+  // page reload — nothing else ever re-runs offset 0 for the life of the mount.
+  const [pageError, setPageError] = useState(false);
   const runRef = useRef(0);
+
+  const failPage = useCallback((offset: number) => {
+    if (offset === 0) setError(true);
+    else setPageError(true);
+    setLoading(false);
+    setLoadingMore(false);
+  }, []);
 
   const fetchPage = useCallback(async (offset: number) => {
     const run = ++runRef.current;
@@ -50,7 +61,10 @@ export function TrainersGrid({ viewerId, everSubscribed }: { viewerId: string; e
         setError(false);
         setGated(false);
         setHasMore(false);
+        setPageError(false);
+        setLoadingMore(false);
       } else {
+        setPageError(false);
         setLoadingMore(true);
       }
       const sb = supabaseBrowser();
@@ -104,10 +118,10 @@ export function TrainersGrid({ viewerId, everSubscribed }: { viewerId: string; e
         // more than we render; see BROWSE_FETCH_LIMIT in lib/browse.ts.
         .order("name")
         .order("id")
-        .range(offset, offset + BROWSE_PAGE_SIZE);
+        .range(...browseRange(offset));
 
       if (!live()) return;
-      if (fetchError) { setError(true); setLoading(false); setLoadingMore(false); return; }
+      if (fetchError) { failPage(offset); return; }
 
       const { page, hasMore: more } = splitBrowsePage((data ?? []) as TrainerRow[]);
       const mapped: TrainerCardVM[] = page.map((t) => ({
@@ -120,7 +134,7 @@ export function TrainersGrid({ viewerId, everSubscribed }: { viewerId: string; e
       setHasMore(more);
       setLoading(false);
       setLoadingMore(false);
-  }, [viewerId]);
+  }, [viewerId, failPage]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial data fetch, not derived state
@@ -140,29 +154,33 @@ export function TrainersGrid({ viewerId, everSubscribed }: { viewerId: string; e
         <p style={{ color: "var(--muted)", padding: "24px 0" }}>No trainers yet — check back soon.</p>
       )}
 
-      {!gated && !error && trainers.length > 0 && (
+      {!gated && !error && !loading && trainers.length > 0 && (
         <>
           <div className="onboarding-grid-web">
-          {trainers.map((t) => (
-            <button key={t.id} type="button" className="trainer-card-web" onClick={() => router.push(`/trainers/${t.id}`)}>
-              <div className="trainer-thumb" aria-hidden="true">{initials(t.title)}</div>
-              <div>
-                <p className="trainer-name">{t.title}</p>
-                {t.subtitle && <p className="trainer-sub">{t.subtitle}</p>}
-              </div>
-              <div className="trainer-meta">{t.horseCount} {t.horseCount === 1 ? "horse" : "horses"}</div>
-            </button>
-          ))}
+            {trainers.map((t) => (
+              <button key={t.id} type="button" className="trainer-card-web" onClick={() => router.push(`/trainers/${t.id}`)}>
+                <div className="trainer-thumb" aria-hidden="true">{initials(t.title)}</div>
+                <div>
+                  <p className="trainer-name">{t.title}</p>
+                  {t.subtitle && <p className="trainer-sub">{t.subtitle}</p>}
+                </div>
+                <div className="trainer-meta">{t.horseCount} {t.horseCount === 1 ? "horse" : "horses"}</div>
+              </button>
+            ))}
           </div>
+          {pageError && (
+            <p role="alert" style={{ color: "var(--muted)", textAlign: "center", padding: "16px 0 0" }}>
+              Couldn&rsquo;t load more trainers.
+            </p>
+          )}
           {hasMore && (
             <button
               type="button"
-              className="btn btn-light"
-              style={{ margin: "24px auto 0", display: "block" }}
+              className="btn-showmore"
               disabled={loadingMore}
               onClick={() => fetchPage(trainers.length)}
             >
-              {loadingMore ? "Loading…" : "Show more"}
+              {loadingMore ? "Loading…" : pageError ? "Try again" : "Show more"}
             </button>
           )}
         </>

@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HorsesGrid } from "@/app/(member)/horses/horses-grid";
 import { TrainersGrid } from "@/app/(member)/trainers/trainers-grid";
-import { BROWSE_PAGE_SIZE, BROWSE_FETCH_LIMIT, splitBrowsePage } from "@/lib/browse";
+import { BROWSE_PAGE_SIZE, BROWSE_FETCH_LIMIT, browseRange, splitBrowsePage } from "@/lib/browse";
 
 // ENG-960 — the "Show more" pager. The ticket said "web perf PR #81 pages at 60
 // with Show more; KEEP THAT MECHANISM", and an earlier revision of this PR
@@ -83,6 +83,13 @@ describe("ENG-960 browse paging — the cap bounds the read, the pager keeps eve
   it("splitBrowsePage renders a page and answers hasMore EXACTLY at the boundary", () => {
     // The off-by-one #81 has and this does not: at an exact multiple of the
     // page size, `rows.length === PAGE_SIZE` claims another page that is empty.
+    // The bound the grids actually send, and the split that consumes it, must
+    // agree: `browseRange` has to ask for exactly one row more than we render,
+    // or `splitBrowsePage` mis-slices. Asserting the RELATIONSHIP rather than
+    // restating BROWSE_FETCH_LIMIT's definition.
+    const [from, to] = browseRange(0);
+    expect(to - from + 1).toBe(BROWSE_PAGE_SIZE + 1);
+    expect(browseRange(BROWSE_PAGE_SIZE)[0]).toBe(BROWSE_PAGE_SIZE); // page 2 starts where page 1 ended
     expect(BROWSE_FETCH_LIMIT).toBe(BROWSE_PAGE_SIZE + 1);
 
     const exact = splitBrowsePage(Array.from({ length: BROWSE_PAGE_SIZE }, (_, i) => i));
@@ -276,4 +283,165 @@ describe("ENG-960 browse paging — the cap bounds the read, the pager keeps eve
     // ...and the short-circuit really did skip the roster round trip.
     expect(horseReads).toBe(1);
   });
+
+  it("F1: a FAILED Show more keeps the roster and offers a retry — it must not wipe the page", async () => {
+    // Regression guard. `setError(true)` unmounts the whole grid, which is
+    // right for the first page and catastrophic for page 2+: it threw away the
+    // 100 rows already on screen, and on Trainers (no pills to force a
+    // refetch) that was unrecoverable without a full page reload.
+    const all = horseRows(239);
+    let call = 0;
+    const horseChain: Record<string, unknown> = {};
+    let window: [number, number] | null = null;
+    for (const m of ["select", "eq", "in", "not", "order", "limit", "maybeSingle", "single"]) {
+      horseChain[m] = vi.fn(() => horseChain);
+    }
+    horseChain.range = vi.fn((from: number, to: number) => { window = [from, to]; return horseChain; });
+    horseChain.then = (ok: (v: unknown) => unknown, err?: (e: unknown) => unknown) => {
+      call += 1;
+      // Page 1 succeeds, page 2 fails, the retry of page 2 succeeds.
+      if (call === 2) return Promise.resolve({ data: null, error: { message: "boom" } }).then(ok, err);
+      const data = window ? all.slice(window[0], window[1] + 1) : all;
+      return Promise.resolve({ data, error: null }).then(ok, err);
+    };
+
+    fromMock.mockImplementation((table: string) => {
+      if (table === "subscription") return chainable(ENTITLED_SUB);
+      if (table === "horse") return horseChain;
+      return chainable({ data: null, error: null });
+    });
+
+    render(<HorsesGrid viewerId={VIEWER_ID} everSubscribed={false} />);
+    await waitFor(() => expect(screen.getByText("Horse 001")).toBeInTheDocument());
+
+    const user = userEvent.setup({ delay: null });
+    await user.click(screen.getByRole("button", { name: "Show more" }));
+
+    // The failure is reported...
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/Couldn.t load more horses/));
+    // ...and the 100 rows already loaded are STILL THERE.
+    expect(screen.getByText("Horse 001")).toBeInTheDocument();
+    expect(screen.getByText("Horse 100")).toBeInTheDocument();
+    // The whole-screen error state did NOT fire.
+    expect(screen.queryByText(/Couldn.t load horses\./)).not.toBeInTheDocument();
+
+    // And the retry is one click, re-requesting the SAME offset (nothing was
+    // appended, so the offset is still correct).
+    const retry = screen.getByRole("button", { name: "Try again" });
+    await user.click(retry);
+    await waitFor(() => expect(screen.getByText("Horse 101")).toBeInTheDocument());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(horseChain.range).toHaveBeenCalledWith(BROWSE_PAGE_SIZE, BROWSE_PAGE_SIZE * 2);
+  }, 30000);
+
+  it("F2: a load-more still in flight when the pill switches cannot append to the new roster", async () => {
+    // Pins the `runRef` guard the fetch was restructured around. Every other
+    // test resolves synchronously, so without this the guard could be deleted
+    // and the suite would stay green.
+    const all = horseRows(239);
+    const followedIds = ["h-005", "h-006"];
+    // Held in an object: TS narrows a plain `let` to `null` at the call site,
+    // because the assignment happens inside a closure it cannot see run.
+    const release: { fn: (() => void) | null } = { fn: null };
+    let horseCall = 0;
+
+    const makeChain = () => {
+      const obj: Record<string, unknown> = {};
+      let window: [number, number] | null = null;
+      for (const m of ["select", "eq", "in", "not", "order", "limit", "maybeSingle", "single"]) {
+        obj[m] = vi.fn(() => obj);
+      }
+      obj.range = vi.fn((from: number, to: number) => { window = [from, to]; return obj; });
+      obj.then = (ok: (v: unknown) => unknown, err?: (e: unknown) => unknown) => {
+        horseCall += 1;
+        const slice = (rows: typeof all) => (window ? rows.slice(window[0], window[1] + 1) : rows);
+        if (horseCall === 2) {
+          // Page 2 of "All" — held open until after the pill switch.
+          return new Promise<{ data: unknown; error: unknown }>((resolve) => {
+            release.fn = () => resolve({ data: slice(all), error: null });
+          }).then(ok, err);
+        }
+        if (horseCall >= 3) {
+          return Promise.resolve({ data: slice(all.filter((h) => followedIds.includes(h.id))), error: null }).then(ok, err);
+        }
+        return Promise.resolve({ data: slice(all), error: null }).then(ok, err);
+      };
+      return obj;
+    };
+    const horseChain = makeChain();
+
+    fromMock.mockImplementation((table: string) => {
+      if (table === "subscription") return chainable(ENTITLED_SUB);
+      if (table === "follow") return chainable({ data: followedIds.map((id) => ({ horse_id: id })), error: null });
+      if (table === "horse") return horseChain;
+      return chainable({ data: null, error: null });
+    });
+
+    render(<HorsesGrid viewerId={VIEWER_ID} everSubscribed={false} />);
+    await waitFor(() => expect(screen.getByText("Horse 001")).toBeInTheDocument());
+
+    const user = userEvent.setup({ delay: null });
+    await user.click(screen.getByRole("button", { name: "Show more" })); // page 2 now hangs
+    await user.click(screen.getByTestId("browse-filter-following"));
+    await waitFor(() => expect(screen.getByText("Horse 005")).toBeInTheDocument());
+
+    // Now let the abandoned All page land.
+    release.fn?.();
+    await waitFor(() => expect(screen.getByText("Horse 006")).toBeInTheDocument());
+
+    // It must NOT have appended into the Following roster.
+    expect(screen.queryByText("Horse 101")).not.toBeInTheDocument();
+    expect(screen.queryByText("Horse 001")).not.toBeInTheDocument();
+    expect(screen.getAllByText(/^Horse \d{3}$/)).toHaveLength(2);
+  }, 30000);
+
+  it("F7: the no-rows-no-pager invariant holds for the TRAINERS grid too", async () => {
+    const trainerChain = pagedChain([]);
+    fromMock.mockImplementation((table: string) => {
+      if (table === "subscription") return chainable(ENTITLED_SUB);
+      if (table === "trainer") return trainerChain;
+      return chainable({ data: null, error: null });
+    });
+    render(<TrainersGrid viewerId={VIEWER_ID} everSubscribed={false} />);
+    await waitFor(() => expect(screen.getByText(/No trainers yet/)).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+  });
+
+  it("F1 (trainers): a failed Show more keeps the roster — this grid has no pills, so wiping it is UNRECOVERABLE", async () => {
+    const all = trainerRows(241);
+    let call = 0;
+    const trainerChain: Record<string, unknown> = {};
+    let window: [number, number] | null = null;
+    for (const m of ["select", "eq", "in", "not", "order", "limit", "maybeSingle", "single"]) {
+      trainerChain[m] = vi.fn(() => trainerChain);
+    }
+    trainerChain.range = vi.fn((from: number, to: number) => { window = [from, to]; return trainerChain; });
+    trainerChain.then = (ok: (v: unknown) => unknown, err?: (e: unknown) => unknown) => {
+      call += 1;
+      if (call === 2) return Promise.resolve({ data: null, error: { message: "boom" } }).then(ok, err);
+      const data = window ? all.slice(window[0], window[1] + 1) : all;
+      return Promise.resolve({ data, error: null }).then(ok, err);
+    };
+
+    fromMock.mockImplementation((table: string) => {
+      if (table === "subscription") return chainable(ENTITLED_SUB);
+      if (table === "trainer") return trainerChain;
+      return chainable({ data: null, error: null });
+    });
+
+    render(<TrainersGrid viewerId={VIEWER_ID} everSubscribed={false} />);
+    await waitFor(() => expect(screen.getByText("Trainer 001")).toBeInTheDocument());
+
+    const user = userEvent.setup({ delay: null });
+    await user.click(screen.getByRole("button", { name: "Show more" }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/Couldn.t load more trainers/));
+    expect(screen.getByText("Trainer 001")).toBeInTheDocument();
+    expect(screen.getByText("Trainer 100")).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn.t load trainers\./)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(screen.getByText("Trainer 101")).toBeInTheDocument());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  }, 30000);
 });

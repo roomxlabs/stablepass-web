@@ -14,7 +14,7 @@ import { supabaseBrowser } from "@/lib/supabase/client";
 import type { HorseSummary } from "@/components/types";
 import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 import { BrowseFilter, type BrowseFilterValue } from "@/components/browse-filter";
-import { BROWSE_PAGE_SIZE, splitBrowsePage } from "@/lib/browse";
+import { browseRange, splitBrowsePage } from "@/lib/browse";
 
 type Trainer = { name: string };
 type HorseRow = { id: string; display_name: string; racing_name: string | null; trainer: Trainer | Trainer[] | null };
@@ -43,12 +43,28 @@ export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; eve
   // twice and append it twice.
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  // A FAILED "Show more" is not a failed screen. `error` unmounts the whole
+  // grid, which is right for the first page (there is nothing to keep) and
+  // catastrophic for page 2+ — it would throw away the 100 rows already on
+  // screen. `pageError` keeps the roster and the button mounted so the member
+  // can simply press it again.
+  const [pageError, setPageError] = useState(false);
   // Bumped on every new run (and on unmount), so a page that lands LATE cannot
   // setState on a dead tree or append its rows under a different pill. The old
   // `cancelled` closure flag only covered unmount/filter-change; with a
   // Show-more button in play, a load-more in flight when the member switches
   // All -> Following would otherwise append stale rows to the new roster.
   const runRef = useRef(0);
+
+  // Which failure state a dead request lands in depends ONLY on whether there
+  // is a roster worth keeping. `hasMore` is deliberately left alone on a failed
+  // page so the Show-more button survives and the retry is one click.
+  const failPage = useCallback((offset: number) => {
+    if (offset === 0) setError(true);
+    else setPageError(true);
+    setLoading(false);
+    setLoadingMore(false);
+  }, []);
 
   const fetchPage = useCallback(async (offset: number) => {
     const run = ++runRef.current;
@@ -66,7 +82,12 @@ export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; eve
         setGated(false);
         setFollowsNothing(false);
         setHasMore(false);
+        // Cleared here as well as on success: a first page that succeeds after
+        // a failed load-more must not keep showing the retry line.
+        setPageError(false);
+        setLoadingMore(false);
       } else {
+        setPageError(false);
         setLoadingMore(true);
       }
       const sb = supabaseBrowser();
@@ -105,7 +126,7 @@ export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; eve
           .eq("user_id", viewerId)
           .not("horse_id", "is", null);
         if (!live()) return;
-        if (followError) { setError(true); setLoading(false); setLoadingMore(false); return; }
+        if (followError) { failPage(offset); return; }
         followedIds = [
           ...new Set(
             ((followRows ?? []) as { horse_id: string | null }[])
@@ -154,10 +175,10 @@ export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; eve
       const { data, error: fetchError } = await query
         .order("display_name")
         .order("id")
-        .range(offset, offset + BROWSE_PAGE_SIZE);
+        .range(...browseRange(offset));
 
       if (!live()) return;
-      if (fetchError) { setError(true); setLoading(false); setLoadingMore(false); return; }
+      if (fetchError) { failPage(offset); return; }
 
       const { page, hasMore: more } = splitBrowsePage((data ?? []) as HorseRow[]);
       const mapped: HorseSummary[] = page.map((h) => {
@@ -170,7 +191,7 @@ export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; eve
       setHasMore(more);
       setLoading(false);
       setLoadingMore(false);
-  }, [viewerId, filter]);
+  }, [viewerId, filter, failPage]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial data fetch, not derived state
@@ -225,15 +246,22 @@ export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; eve
               reaches everything past it. `horses.length` is the next offset —
               it is exactly the number of rows already rendered, and the extra
               probe row is dropped rather than shown, so offsets stay aligned. */}
+          {/* The roster STAYS when a page fails — only this line appears, and
+              the button remains pressable. Retrying re-requests the same
+              offset, which is still correct: nothing was appended. */}
+          {pageError && (
+            <p role="alert" style={{ color: "var(--muted)", textAlign: "center", padding: "16px 0 0" }}>
+              Couldn&rsquo;t load more horses.
+            </p>
+          )}
           {hasMore && (
             <button
               type="button"
-              className="btn btn-light"
-              style={{ margin: "24px auto 0", display: "block" }}
+              className="btn-showmore"
               disabled={loadingMore}
               onClick={() => fetchPage(horses.length)}
             >
-              {loadingMore ? "Loading…" : "Show more"}
+              {loadingMore ? "Loading…" : pageError ? "Try again" : "Show more"}
             </button>
           )}
         </>
