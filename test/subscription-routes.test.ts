@@ -1324,7 +1324,12 @@ describe("ENG-582 — Branch B (early renewal) still resolves an existing Custom
 
     expect(res.status).toBe(200);
     expect(body.data.mode).toBe("renewal");
-    expect(stripeMocks.paymentIntentsCreate).toHaveBeenCalledWith(expect.objectContaining({ customer: "cus_x" }));
+    expect(stripeMocks.paymentIntentsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ customer: "cus_x" }),
+      // ENG-1007 added a 2nd arg (a deterministic idempotencyKey option) — see
+      // that ticket's describe block below for full coverage of the key itself.
+      expect.objectContaining({ idempotencyKey: expect.stringContaining("-renewal-") }),
+    );
     expect(stripeMocks.subscriptionsCreate).not.toHaveBeenCalled();
     expect(stripeMocks.subscriptionsList).not.toHaveBeenCalled();
   });
@@ -1876,5 +1881,272 @@ describe("ENG-1001 — the reuse filter re-asserts QUANTITY, not just the price"
 
     expect(stripeMocks.subscriptionsCreate).not.toHaveBeenCalled();
     expect(body.data.subscriptionId).toBe("sub_single");
+  });
+});
+
+// ENG-1007 — Branch B's PaymentIntent create now carries an idempotencyKey,
+// closing the concurrent-race window Branch A already had via
+// `subscriptions.create`'s key. The key is derived from the exact
+// `intentCreateParams` object sent to Stripe (see route.ts), so two calls
+// with equal params get equal keys. The suite here mocks the Stripe SDK, so
+// it proves WHICH KEY IS PASSED for a given request — it does not, and
+// cannot, demonstrate Stripe's own idempotent-replay behaviour (that two
+// `paymentIntents.create` calls carrying the same key return the same
+// PaymentIntent object); these tests assume that documented Stripe behaviour
+// rather than exercising it.
+//
+// A quantised ("bucket-anchored") fallback for the degenerate null/past
+// `current_period_end` case was tried and REVERTED in route.ts: it silently
+// moved a money-bearing date by up to 10 minutes and broke the separately
+// tested guarantee that the fallback extends from NOW ("renewal: a PAST
+// current_period_end falls back to now — never extends from a stale date").
+// That degenerate case is a named RESIDUAL GAP in route.ts (gap 1), and is
+// pinned below as deliberate, tested behaviour rather than an unverified
+// comment.
+//
+// These assertions are relationship-based (equal / not-equal / contains the
+// scope), never a literal key string, so they survive a digest change.
+describe("ENG-1007 — Branch B idempotency key: what key is passed to Stripe", () => {
+  beforeEach(resetAll);
+  afterEach(() => {
+    process.env = ORIGINAL_ENV;
+    vi.useRealTimers();
+  });
+
+  it("same-bucket collapse: two Branch B POSTs SECONDS APART still send the SAME idempotencyKey and IDENTICAL create params (the key is anchored to current_period_end, not to the clock)", async () => {
+    vi.useFakeTimers();
+    // Deliberately mid-bucket, not on a 10-minute boundary — starting exactly
+    // on a boundary would let a 5s advance risk straddling it, which is not
+    // the scenario under test (that is the SEPARATE bucket-boundary gap).
+    vi.setSystemTime(new Date("2026-09-06T00:03:00Z"));
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    const futureEnd = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+    tableData.subscription = {
+      data: {
+        status: "active",
+        stripe_customer_id: "cus_existing",
+        current_period_end: futureEnd,
+        promo_passes_used: 0,
+      },
+    };
+    stripeMocks.paymentIntentsCreate.mockResolvedValue({ client_secret: "pi_renew_secret" });
+
+    await checkoutPOST();
+    // Two tabs, seconds apart — the actual reported bug. With a frozen clock
+    // and no advance, a deliberately broken implementation that digests
+    // `Date.now()` straight into the key would still pass; advancing the
+    // clock here is what makes this test able to fail against that bug.
+    vi.advanceTimersByTime(5_000);
+    await checkoutPOST();
+
+    expect(stripeMocks.paymentIntentsCreate).toHaveBeenCalledTimes(2);
+    const [params1, opts1] = stripeMocks.paymentIntentsCreate.mock.calls[0];
+    const [params2, opts2] = stripeMocks.paymentIntentsCreate.mock.calls[1];
+
+    expect(opts1?.idempotencyKey).toBeDefined();
+    // The equality is what makes Stripe collapse the two calls into ONE
+    // PaymentIntent — both the key and the exact params sent must agree.
+    expect(opts2?.idempotencyKey).toBe(opts1?.idempotencyKey);
+    expect(params2).toEqual(params1);
+  });
+
+  it("cross-branch scope separation: Branch A and Branch B keys differ for the same member in the same bucket, and each carries its own scope", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-06T00:00:00Z"));
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+
+    // Branch A first — non-active.
+    tableData.subscription = {
+      data: { status: "trial", stripe_customer_id: "cus_existing", current_period_end: null, promo_passes_used: 0 },
+    };
+    stripeMocks.subscriptionsCreate.mockResolvedValue({
+      id: "sub_new",
+      latest_invoice: { confirmation_secret: { type: "payment_intent", client_secret: "pi_new_secret" } },
+    });
+    await checkoutPOST();
+    const branchAKey = stripeMocks.subscriptionsCreate.mock.calls[0][1]?.idempotencyKey;
+
+    // Branch B — active, same member, same (untouched) bucket.
+    const futureEnd = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+    tableData.subscription = {
+      data: {
+        status: "active",
+        stripe_customer_id: "cus_existing",
+        current_period_end: futureEnd,
+        promo_passes_used: 0,
+      },
+    };
+    stripeMocks.paymentIntentsCreate.mockResolvedValue({ client_secret: "pi_renew_secret" });
+    await checkoutPOST();
+    const branchBKey = stripeMocks.paymentIntentsCreate.mock.calls[0][1]?.idempotencyKey;
+
+    expect(branchAKey).toBeDefined();
+    expect(branchBKey).toBeDefined();
+    expect(branchBKey).not.toBe(branchAKey);
+    // Pinned so a future rename that collapses the two scopes fails loudly here.
+    expect(branchBKey).toContain("-renewal-");
+    expect(branchAKey).toContain("-subscription-");
+  });
+
+  it("advanced-period divergence: a Branch B PaymentIntent after the webhook has advanced current_period_end gets a DIFFERENT key in the same bucket", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-06T00:00:00Z"));
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    const firstEnd = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+    tableData.subscription = {
+      data: {
+        status: "active",
+        stripe_customer_id: "cus_existing",
+        current_period_end: firstEnd,
+        promo_passes_used: 0,
+      },
+    };
+    stripeMocks.paymentIntentsCreate.mockResolvedValue({ client_secret: "pi_renew_secret" });
+
+    await checkoutPOST();
+    const firstKey = stripeMocks.paymentIntentsCreate.mock.calls[0][1]?.idempotencyKey;
+
+    // Simulate the webhook landing the first payment: current_period_end
+    // advances 30 days, still inside the SAME 10-minute bucket. A genuine
+    // second top-up must not be swallowed by the first one's key.
+    const advancedEnd = new Date(Date.parse(firstEnd) + THIRTY_DAYS_MS).toISOString();
+    tableData.subscription = {
+      data: {
+        status: "active",
+        stripe_customer_id: "cus_existing",
+        current_period_end: advancedEnd,
+        promo_passes_used: 0,
+      },
+    };
+
+    await checkoutPOST();
+    const secondKey = stripeMocks.paymentIntentsCreate.mock.calls[1][1]?.idempotencyKey;
+
+    expect(firstKey).toBeDefined();
+    expect(secondKey).toBeDefined();
+    expect(secondKey).not.toBe(firstKey);
+  });
+
+  it("renewal payload contract: the mode:'renewal' 200 response still carries exactly the documented keys", async () => {
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    const futureEnd = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+    tableData.subscription = {
+      data: { status: "active", stripe_customer_id: "cus_existing", current_period_end: futureEnd },
+    };
+    stripeMocks.paymentIntentsCreate.mockResolvedValue({ client_secret: "pi_renew_secret" });
+
+    const body = await (await checkoutPOST()).json();
+
+    expect(body.data.mode).toBe("renewal");
+    expect(Object.keys(body.data).sort()).toEqual(
+      [
+        "clientSecret",
+        "currency",
+        "currentPeriodEnd",
+        "mode",
+        "newPeriodEnd",
+        "promoRemaining",
+        "publishableKey",
+        "unitAmount",
+      ].sort(),
+    );
+  });
+
+  it("null current_period_end: keys DIVERGE once the clock advances a second — the documented residual gap, asserted so it cannot regress silently", async () => {
+    // route.ts names this as RESIDUAL GAP (1): with no current_period_end to
+    // anchor on, the fallback reads Date.now(), so two requests a second
+    // apart derive different `new_period_end`s and therefore different keys
+    // — both intents get created. This is KNOWN, OPEN, and deliberately not
+    // fixed (see the route's comment on why every cheap close is worse); this
+    // test exists so that gap stays a documented, asserted property instead
+    // of an unverified claim in a comment.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-06T00:03:00Z"));
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = {
+      data: { status: "active", stripe_customer_id: "cus_existing", current_period_end: null, promo_passes_used: 0 },
+    };
+    stripeMocks.paymentIntentsCreate.mockResolvedValue({ client_secret: "pi_renew_secret" });
+
+    await checkoutPOST();
+    vi.advanceTimersByTime(2_000);
+    await checkoutPOST();
+
+    const [key1, key2] = stripeMocks.paymentIntentsCreate.mock.calls.map((c) => c[1]?.idempotencyKey);
+    expect(key1).toBeDefined();
+    expect(key2).toBeDefined();
+    expect(key2).not.toBe(key1);
+  });
+
+  it("cross-member separation: two DIFFERENT members with otherwise identical rows never produce the same renewal key", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-06T00:03:00Z"));
+    const futureEnd = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+    stripeMocks.paymentIntentsCreate.mockResolvedValue({ client_secret: "pi_renew_secret" });
+
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = {
+      data: {
+        status: "active",
+        stripe_customer_id: "cus_existing",
+        current_period_end: futureEnd,
+        promo_passes_used: 0,
+      },
+    };
+    await checkoutPOST();
+    const memberOneKey = stripeMocks.paymentIntentsCreate.mock.calls[0][1]?.idempotencyKey;
+
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-2", email: "other-member@stablepass.co" } } });
+    tableData.subscription = {
+      data: {
+        status: "active",
+        stripe_customer_id: "cus_existing",
+        current_period_end: futureEnd,
+        promo_passes_used: 0,
+      },
+    };
+    await checkoutPOST();
+    const memberTwoKey = stripeMocks.paymentIntentsCreate.mock.calls[1][1]?.idempotencyKey;
+
+    expect(memberOneKey).toBeDefined();
+    expect(memberTwoKey).toBeDefined();
+    expect(memberTwoKey).not.toBe(memberOneKey);
+  });
+
+  it("amount divergence: a member who crosses the promo threshold between two Branch B invocations in the SAME bucket gets a DIFFERENT key", async () => {
+    // Mirrors Branch A's equivalent guarantee (subscriptions.create, ~line
+    // 1712) — without this, Stripe would replay the promo-priced intent at
+    // the standard price once the counter crosses the allowance.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-06T00:03:00Z"));
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    const futureEnd = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+    stripeMocks.paymentIntentsCreate.mockResolvedValue({ client_secret: "pi_renew_secret" });
+
+    tableData.subscription = {
+      data: {
+        status: "active",
+        stripe_customer_id: "cus_existing",
+        current_period_end: futureEnd,
+        promo_passes_used: 5, // still promo
+      },
+    };
+    await checkoutPOST();
+    const promoKey = stripeMocks.paymentIntentsCreate.mock.calls[0][1]?.idempotencyKey;
+
+    tableData.subscription = {
+      data: {
+        status: "active",
+        stripe_customer_id: "cus_existing",
+        current_period_end: futureEnd,
+        promo_passes_used: 6, // now standard, same member, same bucket
+      },
+    };
+    await checkoutPOST();
+    const standardKey = stripeMocks.paymentIntentsCreate.mock.calls[1][1]?.idempotencyKey;
+
+    expect(promoKey).toBeDefined();
+    expect(standardKey).toBeDefined();
+    expect(standardKey).not.toBe(promoKey);
   });
 });
