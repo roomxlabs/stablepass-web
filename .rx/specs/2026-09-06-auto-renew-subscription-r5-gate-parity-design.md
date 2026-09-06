@@ -22,9 +22,15 @@ keeps the `Math.ceil` convention shared with the account screen, and keeps its d
 ## Surface
 
 ```
-lib/api/access.ts + test
-app/(member)/expiry-banner.tsx + test
+lib/api/access.ts
+test/access.test.ts                         (repo convention; not lib/api/access.test.ts)
+app/(member)/expiry-banner.tsx
+test/expiry-banner.test.tsx                 (repo convention; not app/(member)/__tests__/)
 ```
+
+`test/account-status-truth.test.tsx` — one-line fixture widen only: `past` moved from
+1 hour to 4 days so the existing "ended" cases still mean grace-exhausted. The page
+itself is R4's.
 
 ## Acceptance
 
