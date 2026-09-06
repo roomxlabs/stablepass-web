@@ -1557,3 +1557,44 @@ a { color: inherit; text-decoration: none; }
 .trainer-card-web .trainer-name { font-family: var(--font-serif); font-size: 19px; font-weight: 600; margin: 0; line-height: 1.15; min-height: calc(2 * 1.15em); }
 .trainer-card-web .trainer-sub { font-size: 13px; color: var(--muted); margin: 2px 0 0; }
 .trainer-card-web .trainer-meta { font-size: 12px; color: var(--brand-green); font-weight: 600; margin-top: auto; }
+
+/* ====================================================================
+   BROWSE FILTER PILLS (ENG-960) — All | Following on the browse grids.
+   Web port of mobile's src/components/browse-filter.tsx. No mockup covers
+   this control (the web mockups draw the unfiltered grids only), so the
+   visual language is borrowed from `.tag` above: pill radius, its
+   --cream-dark fill, a hairline --line border, brand-green when active.
+   Tokens only.
+
+   The resting fill is --cream-dark, NOT --cream, even though mobile's pill
+   uses Colors.cream. `body` is --cream (see :root above), so a --cream pill
+   is invisible as a fill on web — outline-only — and `.tag`, the control this
+   copies, is already --cream-dark. Mobile gets away with --cream because its
+   pill FLOATS over the roster with a shadow to lift it; web deliberately drops
+   both the float and the shadow, which removes the only thing that made the
+   lighter fill read as a chip.
+
+   Unlike mobile these sit in normal flow under the page heading rather
+   than floating over the roster — see the component's own note.
+   ==================================================================== */
+.browse-filter { display: flex; gap: 8px; margin: 0 0 20px; }
+.browse-pill {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--cream-dark);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.browse-pill:hover:not(.is-active) { border-color: var(--line-dark); color: var(--ink); }
+.browse-pill.is-active {
+  background: var(--brand-green);
+  border-color: var(--brand-green);
+  color: var(--cream);
+  font-weight: 600;
+}
+.browse-pill:focus-visible { outline: 2px solid var(--brand-green); outline-offset: 2px; }

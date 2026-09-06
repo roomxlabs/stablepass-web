@@ -1822,3 +1822,42 @@ Mobile onboarding is trainers → horses → notifications, so any "web onboardi
 ticket that asks for a trainer step has **no backing design** and is `needs-spec` per the
 guardrail, not `ready`. Note also that the "Step 1 of 2" copy in `horse-picker.tsx` is
 aspirational — no step 2 screen or step routing exists in code.
+## A "remove one `.eq()`" ticket is usually THREE coupled sites, not one line
+ENG-960 (R8 shares reversal) named three files, each as a single line. Two were
+one line; `app/(member)/trainers/trainers-grid.tsx` was **four coupled sites**:
+the `TrainerRow` type, the explanatory comment, `shares_for_sale` inside the
+embedded `horses:horse!trainer_id(...)` projection, AND the client-side
+`horseCount` filter. Deleting only the projection column leaves the card
+reading **"0 horses"** for a for-sale-only stable while the roster one click
+away (fixed in `trainers/[id]/page.tsx`) lists three — the list looks fixed and
+the count silently still lies. Grep the whole file for the flag, not the one
+line the ticket cites, and pin the rendered COUNT in a test, not just the query.
+
+## Reversal tickets have a SECOND lock: the source-grep guard test
+`test/shares-segregation-guard.test.ts` asserts the exclusions **exist in
+source**. Removing them turns it red in a file no ticket lists in its surface.
+Any ticket reversing a documented rule must budget for inverting its guard.
+Two traps when you do:
+- The guard greps raw source, and your new code explains the removal in a
+  COMMENT that names the flag — so `expect(src).not.toMatch(/shares_for_sale/)`
+  fails on your own prose. Strip comments before matching (the file already has
+  a `strip()` helper for exactly this).
+- Invert it with a **positive anchor** (`.from("horse")`, `.eq("status",
+  "active")`) beside every negative one, or a file that failed to load passes
+  every `not.toMatch` vacuously — the false-green class this file already records.
+
+## `.rx/review/` PNGs: check the ticket's own e2e spec exists before assuming no harness
+The harness needs NO `.env.playwright` — `playwright.config.ts` passes the
+well-known local Supabase demo keys itself. It DOES need local Supabase already
+up (`curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:54321/rest/v1/`
+returns 200 when it is). That one curl is the whole pre-flight.
+
+## Web browse grids read UNBOUNDED until ENG-960
+`horses-grid.tsx` / `trainers-grid.tsx` had no `.limit()` at all, while mobile
+has capped every browse read at `BROWSE_PAGE_SIZE = 100` since ENG-424 and
+ENG-956's `shares-list.tsx` had already mirrored it as `SHARES_PAGE_SIZE = 100`.
+ENG-960 added `lib/browse.ts` (`BROWSE_PAGE_SIZE = 100`) for the two grids.
+The 60-item "Show more" PAGER is a different thing and lives only in web PR #81
+(`perf/query-batch`), which targets `main`, not `feature/launch-v1` — so on the
+launch branch the cap exists with no pager, and row 101 is unreachable until #81
+lands. Don't "fix" that by inventing a second pager.

@@ -3,31 +3,61 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * ENG-831 guardrail: for-sale horses must be filtered out of browse surfaces.
- * Saved and direct profile deep-links stay unfiltered (discovery-only).
+ * shares_for_sale source guards.
  *
- * ENG-956 note: R8 reversed the ENG-830/831 SEGREGATION on mobile (for-sale
- * horses now appear in Horses > All, and shares posts in the main feed). Web's
- * browse surfaces have NOT been migrated yet — `horses-grid.tsx`, the trainer
- * profile and `explore-feed.tsx` still filter them out — so the four
- * assertions below still describe web's reality and are left exactly as they
- * were. Bringing web's browse in line with R8 is its own ticket, and its file
- * surface is not this one's; do not "fix" these here.
+ * ENG-960 (R8 reversal) — this file's previous docblock said "Bringing web's
+ * browse in line with R8 is its own ticket". This is that ticket, so the first
+ * two assertions are INVERTED: the browse grid and the trainer roster must no
+ * longer filter for-sale horses out. The old assertions asserted the bug (a
+ * for-sale-only stable rendered an empty roster and an empty grid on web).
+ *
+ * Comments are stripped before matching. Every one of these files now
+ * *mentions* `shares_for_sale` in prose explaining why the filter is gone, so a
+ * raw source grep would match the explanation and pass vacuously — the exact
+ * failure mode `.rx/gotchas.md` records for guards that can go quietly green.
+ *
+ * DELIBERATELY UNCHANGED: the Explore assertion below. `explore-feed.tsx`
+ * carries the same exclusion twice more (the race-day band and the
+ * "trainers you follow" aside horse count), but it is outside ENG-960's
+ * declared surface AND is being edited right now by open PR #100 (ENG-961) on
+ * this same base branch, so touching it here would collide. Tracked as a
+ * follow-up; see the ENG-960 PR body. Do not "finish the job" here without
+ * checking that PR first.
  */
-describe("ENG-831 shares_for_sale source guards", () => {
+describe("shares_for_sale source guards", () => {
   const root = join(__dirname, "..");
+  const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  const read = (rel: string) => strip(readFileSync(join(root, rel), "utf8"));
+  const SHARES_FALSE_EQ = /\.eq\(\s*["']shares_for_sale["']\s*,\s*false\s*\)/;
 
-  it("Horses browse queries shares_for_sale=false", () => {
-    const src = readFileSync(join(root, "app/(member)/horses/horses-grid.tsx"), "utf8");
-    expect(src).toMatch(/\.eq\(\s*["']shares_for_sale["']\s*,\s*false\s*\)/);
+  it("ENG-960: Horses browse no longer excludes for-sale horses", () => {
+    const src = read("app/(member)/horses/horses-grid.tsx");
+    // Positive anchor first — a file that failed to load, or a query that got
+    // renamed away, would satisfy every negative assertion vacuously.
+    expect(src).toMatch(/\.from\(["']horse["']\)/);
+    expect(src).toMatch(/\.eq\(\s*["']status["']\s*,\s*["']active["']\s*\)/);
+    expect(src).not.toMatch(SHARES_FALSE_EQ);
+    expect(src).not.toMatch(/shares_for_sale/);
   });
 
-  it("Trainer profile stable grid queries shares_for_sale=false", () => {
-    const src = readFileSync(join(root, "app/(member)/trainers/[id]/page.tsx"), "utf8");
-    expect(src).toMatch(/\.eq\(\s*["']shares_for_sale["']\s*,\s*false\s*\)/);
+  it("ENG-960: Trainer profile stable grid no longer excludes for-sale horses", () => {
+    const src = read("app/(member)/trainers/[id]/page.tsx");
+    expect(src).toMatch(/\.from\(["']horse["']\)/);
+    expect(src).toMatch(/\.eq\(\s*["']trainer_id["']\s*,\s*id\s*\)/);
+    expect(src).not.toMatch(SHARES_FALSE_EQ);
+    expect(src).not.toMatch(/shares_for_sale/);
   });
 
-  it("Explore race-day and aside omit for-sale horses", () => {
+  it("ENG-960: Trainers browse counts every horse — the flag is not selected or filtered", () => {
+    const src = read("app/(member)/trainers/trainers-grid.tsx");
+    // The third coupled site: dropping the query column alone would still leave
+    // the card reading "0 horses" for a for-sale-only stable.
+    expect(src).toMatch(/horses:horse!trainer_id\(id\)/);
+    expect(src).not.toMatch(/shares_for_sale/);
+    expect(src).not.toMatch(/filter\(\s*\(h\)\s*=>\s*!h\.shares_for_sale\s*\)/);
+  });
+
+  it("Explore race-day and aside omit for-sale horses (out of ENG-960's surface — see docblock)", () => {
     const src = readFileSync(join(root, "app/(member)/explore/explore-feed.tsx"), "utf8");
     expect(src).toMatch(/shares_for_sale/);
     expect(src).toMatch(/horse\.shares_for_sale/);

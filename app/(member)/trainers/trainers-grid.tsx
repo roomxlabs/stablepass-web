@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
 import { AccessWall } from "@/components/access-wall";
 import { supabaseBrowser } from "@/lib/supabase/client";
+import { BROWSE_PAGE_SIZE } from "@/lib/browse";
 
 type TrainerRow = {
   id: string;
@@ -17,8 +18,9 @@ type TrainerRow = {
   display_name: string | null;
   stable_name: string | null;
   location: string | null;
-  // ENG-831: count non-sale horses only — for-sale horses are Shares-only.
-  horses: { id: string; shares_for_sale: boolean }[] | null;
+  // ENG-960 / R8: every active horse counts. `shares_for_sale` is no longer
+  // selected or filtered here — see the note on the query below.
+  horses: { id: string }[] | null;
 };
 type TrainerCardVM = { id: string; title: string; subtitle: string; horseCount: number };
 
@@ -59,8 +61,24 @@ export function TrainersGrid({ viewerId, everSubscribed }: { viewerId: string; e
         return;
       }
 
-      // horse:trainer_id returns the trainer's horses via RLS. We count only
-      // shares_for_sale=false (ENG-831) so for-sale horses never inflate browse.
+      // horse:trainer_id returns the trainer's horses via RLS.
+      //
+      // ENG-960 / R8: the count no longer excludes `shares_for_sale` horses,
+      // and the flag is no longer selected. This is the THIRD coupled site of
+      // the same exclusion (with the type above and the filter below) — dropping
+      // only the query column would have left the card reading "0 horses" for a
+      // for-sale-only stable while the roster one click away, fixed in
+      // trainers/[id]/page.tsx, listed them. A card that contradicts the screen
+      // it links to is the same live bug, one step removed.
+      //
+      // KNOWN PARITY DIVERGENCE (flagged on ENG-960, not silently taken): mobile
+      // `lib/browse.ts` still filters this one count (`browseCount = horses
+      // .filter(h => !h.shares_for_sale)`), even though R8 swept the exclusion
+      // out of `lib/profiles.ts` in the same round. So mobile currently shows
+      // the same contradiction. We follow the ticket ("shares horses fold into
+      // All and into the trainer roster") and web's own internal consistency;
+      // whether mobile's browse count is a missed R8 sweep is a separate call.
+      //
       // ACTIVE ONLY (Justin, 1 Sep 2026: "there is a deleted trainer... on
       // the website"). Admin "deletes" a trainer by flipping status to
       // 'onboarding', and `trainer_select_sub` does NOT filter status — mobile
@@ -68,9 +86,10 @@ export function TrainersGrid({ viewerId, everSubscribed }: { viewerId: string; e
       // trainers stayed listed here. All four web trainer reads carry it now.
       const { data, error: fetchError } = await sb
         .from("trainer")
-        .select("id, name, display_name, stable_name, location, horses:horse!trainer_id(id, shares_for_sale)")
+        .select("id, name, display_name, stable_name, location, horses:horse!trainer_id(id)")
         .eq("status", "active")
-        .order("name");
+        .order("name")
+        .limit(BROWSE_PAGE_SIZE);
 
       if (cancelled) return;
       if (fetchError) { setError(true); setLoading(false); return; }
@@ -79,7 +98,7 @@ export function TrainersGrid({ viewerId, everSubscribed }: { viewerId: string; e
         id: t.id,
         title: t.display_name || t.name,
         subtitle: [t.stable_name, t.location].filter(Boolean).join(" · "),
-        horseCount: (t.horses ?? []).filter((h) => !h.shares_for_sale).length,
+        horseCount: (t.horses ?? []).length,
       }));
       setTrainers(mapped);
       setLoading(false);
