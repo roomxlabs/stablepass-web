@@ -5,9 +5,10 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 // → subscribe / graceful-placeholder paths, not a live Stripe Elements mount.
 // @stripe/stripe-js and @stripe/react-stripe-js are stubbed so importing
 // checkout-form.tsx doesn't try to load the real Stripe.js script in jsdom.
-const { pushMock, replaceMock, stripeRef } = vi.hoisted(() => ({
+const { pushMock, replaceMock, assignMock, stripeRef } = vi.hoisted(() => ({
   pushMock: vi.fn(),
   replaceMock: vi.fn(),
+  assignMock: vi.fn(),
   stripeRef: { current: null as null | { confirmPayment: (...args: unknown[]) => Promise<unknown> } },
 }));
 
@@ -62,12 +63,15 @@ describe("CheckoutForm", () => {
   beforeEach(() => {
     pushMock.mockClear();
     replaceMock.mockClear();
+    assignMock.mockClear();
+    vi.stubGlobal("location", { origin: "http://localhost:3000", assign: assignMock });
     stripeRef.current = null;
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
   afterEach(() => {
     consoleErrorSpy.mockRestore();
+    vi.unstubAllGlobals();
   });
 
   it("posts to /api/subscription/checkout on mount with no body (no card data is ever posted)", async () => {
@@ -123,7 +127,8 @@ describe("CheckoutForm", () => {
     expect(await screen.findByText("Subscription · monthly")).toBeInTheDocument();
     expect(screen.getByText("Includes GST")).toBeInTheDocument();
     expect(document.body.textContent).toMatch(/renews monthly/i);
-    expect(document.body.textContent).toMatch(/A\$9\.00 today, then A\$19\.00 from March 2027/);
+    expect(document.body.textContent).toMatch(/A\$9\.00 today, then A\$19\.00/);
+    expect(document.body.textContent).not.toMatch(/from March 2027/);
     expect(screen.queryByText("30 days of full access")).not.toBeInTheDocument();
   });
 
@@ -265,12 +270,19 @@ describe("CheckoutForm", () => {
 
     fireEvent.click(payButton);
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "Processing…" })).toBeDisabled());
-    fireEvent.click(screen.getByRole("button", { name: "Processing…" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Unlocking…" })).toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "Unlocking…" }));
     expect(confirmPayment).toHaveBeenCalledTimes(1);
+    expect(confirmPayment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        confirmParams: { return_url: "http://localhost:3000/explore?paid=1" },
+        redirect: "if_required",
+      }),
+    );
 
     release({});
-    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/explore"));
+    await waitFor(() => expect(assignMock).toHaveBeenCalledWith("/explore"));
+    expect(pushMock).not.toHaveBeenCalled();
     expect(confirmPayment).toHaveBeenCalledTimes(1);
   });
 
@@ -288,6 +300,7 @@ describe("CheckoutForm", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Your card was declined.");
     expect(pushMock).not.toHaveBeenCalled();
+    expect(assignMock).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.getByRole("button", { name: "Subscribe · A$9.00" })).toBeEnabled());
   });
 });
@@ -298,21 +311,25 @@ describe("ENG-1027 — the introductory / recurring band", () => {
   beforeEach(() => {
     pushMock.mockClear();
     replaceMock.mockClear();
+    assignMock.mockClear();
+    vi.stubGlobal("location", { origin: "http://localhost:3000", assign: assignMock });
     stripeRef.current = null;
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
   afterEach(() => {
     consoleErrorSpy.mockRestore();
+    vi.unstubAllGlobals();
   });
 
-  it("introMonthsRemaining: 6 renders the introductory band with both prices and the change-over month", async () => {
+  it("introMonthsRemaining: 6 renders the introductory band with both prices and no calendar date", async () => {
     mockFetch({ data: INTRO });
 
     render(<CheckoutForm />);
 
     expect(await screen.findByText("Introductory pricing")).toBeInTheDocument();
-    expect(screen.getByText(/A\$9\.00 today, then A\$19\.00 from March 2027/)).toBeInTheDocument();
+    expect(screen.getByText(/A\$9\.00 today, then A\$19\.00/)).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/from March 2027/);
     expect(screen.getByText(/6 introductory months remain/)).toBeInTheDocument();
     expect(screen.getByText(/Charged monthly until you cancel/)).toBeInTheDocument();
   });

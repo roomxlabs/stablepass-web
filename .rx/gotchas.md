@@ -1628,3 +1628,8 @@ ticket. Putting that id in a unit test is a real object id in git.
 - **Do this:** assert pin-through with a fake (`bpc_test_pin`). Names only in
   the repo (`.env.example` already).
 
+## Intro change-over is paid invoices, not a calendar month (ENG-1045, 6 Sep 2026)
+- **Symptom:** checkout/account printed “A$19.00 from March 2027”. After cancel → gap → resubscribe that month is a lie. After `confirmPayment`, Explore showed the unpaid wall until a hard refresh — webhook had not written `active` yet.
+- **Cause:** remaining intro months are discounted invoices Stripe still has to issue, not calendar months from today. `confirmPayment` only means the card was charged; `hasAccess` flips when stripe-webhook writes the row.
+- **Do this:** `priceChangesOn` is always `null`. Account “Then” is `A$19.00 per month`. After pay, poll `GET /api/feed?limit=1` until 200, then `location.assign("/explore")`. 3DS `return_url` is `/explore?paid=1` and waits the same way. Timeout still navigates (fail-closed on the URL). Do not invent a change-over date from `current_period_end + remaining`.
+

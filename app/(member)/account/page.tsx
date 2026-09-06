@@ -22,7 +22,6 @@ import { AccountForms, type AccountPrefs, type AccountSubscriber } from "./accou
 import { CancelCard } from "./cancel-card";
 import {
   ACCOUNT_SUB_COLUMNS,
-  addCalendarMonthsSydney,
   formatMoney,
   isFailedRenewal,
   nextChargeAmount,
@@ -233,9 +232,6 @@ export default async function AccountPage() {
   const pricing = entitled && !canceled ? await readStripePricing(remaining) : null;
   const standardLabel = pricing ? formatMoney(pricing.unitAmount, pricing.currency) : null;
   const nextLabel = pricing ? formatMoney(nextChargeAmount(pricing, remaining), pricing.currency) : null;
-  const changeOverDate = sub?.current_period_end
-    ? addCalendarMonthsSydney(sub.current_period_end, remaining)
-    : null;
 
   const showNextCharge = entitled && !canceled && !!endDate;
   const showChangeOver = entitled && !canceled && remaining > 0;
@@ -313,11 +309,7 @@ export default async function AccountPage() {
           <div className="settings-row" data-testid="change-over">
             <span className="label">Then</span>
             <span className="value">
-              {standardLabel && changeOverDate
-                ? `${standardLabel} from ${changeOverDate}`
-                : standardLabel
-                  ? `${standardLabel} per month`
-                  : "the standard monthly price"}
+              {standardLabel ? `${standardLabel} per month` : "the standard monthly price"}
             </span>
           </div>
         )}

@@ -2,9 +2,11 @@
 // user's id (the (member) layout already guards auth — see app/(member)/layout.tsx)
 // and hands off to the client ExploreFeed, which owns the fetch/enrich/engagement
 // loop against the W5 BFF + supabaseBrowser (RLS-gated reads/writes).
+import { Suspense } from "react";
 import { supabaseServer } from "@/lib/supabase/server";
 import { readSubscriptionState } from "@/lib/api/subscription-state";
 import { ExploreFeed } from "./explore-feed";
+import { PostPayUnlock } from "./post-pay-unlock";
 
 export const metadata = { title: "Explore · StablePass" };
 
@@ -17,5 +19,12 @@ export default async function ExplorePage() {
   // `stripe_customer_id` itself must never reach client JS (.rx/guardrails.md #1).
   const { everSubscribed } = await readSubscriptionState(user!.id);
 
-  return <ExploreFeed viewerId={user!.id} everSubscribed={everSubscribed} />;
+  return (
+    <>
+      <Suspense fallback={null}>
+        <PostPayUnlock />
+      </Suspense>
+      <ExploreFeed viewerId={user!.id} everSubscribed={everSubscribed} />
+    </>
+  );
 }

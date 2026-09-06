@@ -17,8 +17,10 @@
 // another.
 //
 // `introMonthsRemaining` / `priceChangesOn` are DISPLAY ONLY. They arrive on
-// the response; they are never sent back. Nothing this file posts can influence
-// what the member is charged (the route takes no request body at all).
+// the response; they are never sent back. `priceChangesOn` is ignored on this
+// screen: remaining intro months are paid invoices, not a calendar date.
+// Nothing this file posts can influence what the member is charged (the route
+// takes no request body at all).
 //
 // .rx/guardrails.md #4 — the card never touches our server: Stripe Elements owns
 // the card input and we only exchange a clientSecret with Stripe directly. No
@@ -29,6 +31,7 @@ import { useRouter } from "next/navigation";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
 import { Wordmark } from "@/components/wordmark";
+import { goToExploreAfterPay, waitForEntitled } from "@/lib/api/wait-for-access";
 
 type Pricing = {
   unitAmount: number;
@@ -138,16 +141,13 @@ function RecurringBand({ pricing }: { pricing: Pricing | null }) {
   const today = formatMoney(pricing.amountDueNow, pricing.currency);
   const list = formatMoney(pricing.unitAmount, pricing.currency);
   const remaining = pricing.introMonthsRemaining;
-  const from = pricing.priceChangesOn;
 
   if (remaining > 0) {
     return (
       <div className="trial-banner-web">
         <div className="trial-label">Introductory pricing</div>
         <div className="trial-detail">
-          {today} today
-          {from ? `, then ${list} from ${from}` : `, then ${list}`}. Charged monthly until you
-          cancel.
+          {today} today, then {list}. Charged monthly until you cancel.
           {remaining === 1
             ? " This is the last month at the introductory rate."
             : ` ${remaining} introductory months remain, this one included.`}
@@ -183,7 +183,6 @@ function CheckoutHeader() {
 function PayForm({ pricing }: { pricing: Pricing | null }) {
   const stripe = useStripe();
   const elements = useElements();
-  const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -193,10 +192,11 @@ function PayForm({ pricing }: { pricing: Pricing | null }) {
     setError(null);
     // redirect:"if_required" keeps this inline (no hosted-checkout redirect
     // per .rx/guardrails.md #4); return_url is Stripe's required fallback for
-    // payment methods that must leave the page.
+    // payment methods that must leave the page. `?paid=1` tells Explore to
+    // keep waiting for the webhook if this confirm has to redirect.
     const { error: confirmError } = await stripe.confirmPayment({
       elements,
-      confirmParams: { return_url: `${window.location.origin}/explore` },
+      confirmParams: { return_url: `${window.location.origin}/explore?paid=1` },
       redirect: "if_required",
     });
     if (confirmError) {
@@ -204,7 +204,11 @@ function PayForm({ pricing }: { pricing: Pricing | null }) {
       setSubmitting(false);
       return;
     }
-    router.push("/explore");
+    // confirmPayment means Stripe charged the card. Access is granted only
+    // after stripe-webhook writes the row — jumping to /explore now shows
+    // the wall until a later hard refresh. Wait, then hard-navigate.
+    await waitForEntitled();
+    goToExploreAfterPay();
   }
 
   return (
@@ -224,7 +228,7 @@ function PayForm({ pricing }: { pricing: Pricing | null }) {
           disabled={!stripe || submitting}
           onClick={onPay}
         >
-          {submitting ? "Processing…" : <PayLabel pricing={pricing} />}
+          {submitting ? "Unlocking…" : <PayLabel pricing={pricing} />}
         </button>
       </div>
       <div className="checkout-secure">🔒 Secured by Stripe · PCI-DSS compliant</div>
