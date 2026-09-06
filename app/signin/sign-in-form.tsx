@@ -63,7 +63,7 @@ export function SignInForm({ notice }: { notice?: string | null }) {
       {/* Eviction notice (ENG-961): why the member landed back here. `status`,
           not `alert` — it is not a form error and must not compete with one. A
           real sign-in error below supersedes it. */}
-      {notice && !error && <div className="form-error" role="status">{notice}</div>}
+      {notice && !error && <div className="form-notice" role="status">{notice}</div>}
       {error && <div className="form-error" role="alert">{error}</div>}
 
       <div className="input-group">

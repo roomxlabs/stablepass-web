@@ -229,6 +229,14 @@ describe("apiFetch — a 401 must be OUR envelope", () => {
 });
 
 describe("isMemberApiRequest — server-side", () => {
+  // This pins the PROPERTY (nothing is ever classified as a member call without
+  // a window), not one line. Restoring the pre-review implementation — which
+  // fell back to a "http://localhost" base and then skipped the origin check
+  // entirely when `window` was undefined — turns this red: it returned TRUE for
+  // https://evil.com/api/x. Deleting only the `typeof window` early return is an
+  // EQUIVALENT mutant and stays green, because the unconditional
+  // `window.location.origin` then throws and the catch yields the same `false`.
+  // The early return is kept for intent: not relying on a thrown ReferenceError.
   it("is false with no window, so the latch is never set on the server", () => {
     const w = globalThis.window;
     // @ts-expect-error - simulating the Node render path

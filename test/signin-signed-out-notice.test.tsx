@@ -44,6 +44,9 @@ describe("SignInForm notice", () => {
   it("renders the eviction message when one is supplied", () => {
     render(<SignInForm notice="You were signed out because your account was signed in on another device." />);
     const notice = screen.getByRole("status");
+    // Not `.form-error`: this is information, not a validation failure.
+    expect(notice).toHaveClass("form-notice");
+    expect(notice).not.toHaveClass("form-error");
     expect(notice).toHaveTextContent(/signed out/i);
     expect(notice).toHaveTextContent(/another device/i);
   });
