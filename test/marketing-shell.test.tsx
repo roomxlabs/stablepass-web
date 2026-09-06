@@ -85,7 +85,21 @@ describe("marketing nav", () => {
     // returning visitors. They are root-relative on purpose: middleware already
     // 307s a non-shared apex path onto the app host, and an absolute URL would
     // send local dev at production.
-    expect(hrefs).toEqual(["#top", "#how", "#app", "#subscription", "#trainers", "#faq", "/signin", "/start"]);
+    // ENG-729 appends a ninth: the pre-launch "Join waitlist" button, which
+    // scrolls to the hero capture form rather than leaving for a route. All
+    // eight originals stay in the DOM — waitlist mode hides four of them with
+    // CSS, so the launch switch-back needs no markup back.
+    expect(hrefs).toEqual([
+      "#top",
+      "#how",
+      "#app",
+      "#subscription",
+      "#trainers",
+      "#faq",
+      "/signin",
+      "/start",
+      "#top",
+    ]);
   });
 
   it("keeps the two product destinations reachable and relative", () => {
@@ -245,7 +259,11 @@ describe("marketing layout", () => {
     const { container } = render(<MarketingLayout>{<p>page body</p>}</MarketingLayout>);
     const root = container.querySelector(".marketing");
     expect(root).toBeInTheDocument();
-    expect(root).toHaveAttribute("data-cta-mode", "trial");
+    // ENG-729 flipped this to the pre-launch mode (ENG-721). It is pinned
+    // rather than merely present because the value IS the cutover: flipping it
+    // back to "trial" on launch day is the whole switch-back, so a silent
+    // change to it would ship the wrong site with every other test green.
+    expect(root).toHaveAttribute("data-cta-mode", "waitlist");
   });
 
   it("marks the shell script-capable before first paint, for the .js/.rv contract", () => {
@@ -551,12 +569,29 @@ if (MOCKUP) {
     const isEmptyMediaMarker = (r: { selector: string; decls: string }) =>
       r.selector.startsWith("@media") && r.decls.trim() === "";
 
+    // ENG-729's pre-launch mode appends rules the mockup never had, and the
+    // ordered diff below reports ANY addition. They are lifted out here and
+    // pinned selector-for-selector by their own test, so the lift cannot hide a
+    // deletion or a restyle of a ported rule — only genuinely new ones.
+    //
+    // The predicate is the narrowest thing that identifies them: the mode
+    // attribute itself, the `.cta-waitlist` / `.launch-only` markup hooks, and
+    // the `.wl-` classes ENG-726's form emits.
+    const isWaitlistRule = (selector: string) =>
+      /\.cta-waitlist|\[data-cta-mode="waitlist"\]|\.wl-|\.launch-only/.test(selector);
+
     const wantRules = expected.filter(
       (r) => !EXCEPTIONS.has(r.selector) && !isNavRule(r.selector) && !isEmptyMediaMarker(r),
     );
     const gotRules = cssRules(MARKETING_CSS)
       .map((r) => ({ selector: unscope(r.selector), decls: r.decls }))
-      .filter((r) => !isException(r.selector) && !isNavRule(r.selector) && !isEmptyMediaMarker(r));
+      .filter(
+        (r) =>
+          !isException(r.selector) &&
+          !isNavRule(r.selector) &&
+          !isWaitlistRule(r.selector) &&
+          !isEmptyMediaMarker(r),
+      );
 
     it("carries every rule of the mockup, in order, with identical declarations", () => {
       const drifted: string[] = [];

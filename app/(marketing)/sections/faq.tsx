@@ -14,16 +14,25 @@
  * editing this file — it is in W3's declared DOM contract.
  */
 
+/**
+ * `launchOnly` marks the two pricing questions. Pre-launch they are hidden with
+ * the rest of the pricing (Naufal, 2 Sep) rather than deleted, for the same
+ * reason as every other hide in this mode: the copy freeze requires the text to
+ * stay in the DOM, and the launch switch-back is then a mode flip with no copy
+ * to restore.
+ */
 const FAQS = [
   {
     q: "What is stablepass.?",
     a: "stablepass. is a monthly racing experience subscription that gives subscribers access to behind-the-scenes content from participating thoroughbred racing stables.",
   },
   {
+    launchOnly: true,
     q: "Is there an introductory offer?",
     a: "Yes. New subscribers who join on or before 30 November 2026 pay $9 per month for their first 6 months, then $19 per month thereafter. Cancel anytime.",
   },
   {
+    launchOnly: true,
     q: "How much does stablepass. cost?",
     a: "stablepass. is $9 per month for your first 6 months, then $19 per month thereafter. Cancel anytime.",
   },
@@ -55,7 +64,7 @@ export default function Faq() {
         </div>
         <div className="faq rv" suppressHydrationWarning>
           {FAQS.map((item) => (
-            <details key={item.q}>
+            <details key={item.q} className={item.launchOnly ? "launch-only" : undefined}>
               <summary>{item.q}</summary>
               <p className="a">{item.a}</p>
             </details>

@@ -110,7 +110,19 @@ function isSharedPath(pathname: string): boolean {
     // be answerable ON the apex. The apex is still fronted by Wix until the DNS
     // cutover, so a certificate issuance during that migration would otherwise
     // be permanently redirected away from the host being validated.
-    pathname.startsWith("/.well-known/")
+    pathname.startsWith("/.well-known/") ||
+    // The ONE exception to "the BFF belongs to the app host" (ENG-726).
+    //
+    // The waitlist form lives on the marketing home, and a cross-origin POST to
+    // the app host would be a pointless CORS preflight on the one endpoint the
+    // apex genuinely owns. The 404 below exists to keep COOKIE-AUTHENTICATED
+    // endpoints off a second origin; `/api/waitlist` is anonymous and reads no
+    // cookie, so serving it here gives up nothing that rule protects.
+    //
+    // EXACT match, never a prefix: this is a hole punched in a deliberate
+    // blanket 404, and `/api/waitlist/*` must not widen it. Pinned by
+    // test/middleware.test.ts.
+    pathname === "/api/waitlist"
   );
 }
 

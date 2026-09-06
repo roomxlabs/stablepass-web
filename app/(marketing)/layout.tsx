@@ -132,7 +132,7 @@ export default function MarketingLayout({
     // free 30 days, "join" leads with the subscription. It sat on <body> in the
     // mockup; the root layout owns <body> here, so it rides the wrapper instead.
     // W5 makes it a setting; until then it keeps the mockup's chosen value.
-    <div className="marketing" data-cta-mode="trial" suppressHydrationWarning>
+    <div className="marketing" data-cta-mode="waitlist" suppressHydrationWarning>
       <script dangerouslySetInnerHTML={{ __html: MARK_JS_CAPABLE }} />
       <MarketingNav />
       {children}
