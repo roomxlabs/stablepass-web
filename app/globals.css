@@ -169,6 +169,20 @@ a { color: inherit; text-decoration: none; }
 .input-row { display: flex; gap: 12px; }
 .input-row .input-group { flex: 1; }
 .field-error { color: var(--red); font-size: 12.5px; margin-top: 6px; }
+/* Informational counterpart to .form-error (ENG-961). The signed-out-elsewhere
+   notice is not a validation failure — rendering it in the error red made a
+   routine "you were signed in elsewhere" read as something had gone wrong.
+   Brand green + ink, same geometry so the two swap cleanly in the same slot. */
+.form-notice {
+  background: rgba(40, 93, 80, 0.06);
+  border-left: 3px solid var(--brand-green);
+  color: var(--ink);
+  padding: 12px 16px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 13.5px;
+  margin-bottom: 18px;
+}
+
 .form-error {
   background: rgba(200, 74, 62, 0.08);
   border-left: 3px solid var(--red);
@@ -616,11 +630,31 @@ a { color: inherit; text-decoration: none; }
 .post-contact-cta { order: 2; margin: 0 22px 14px; }
 .post-body-web    { order: 3; }
 .post-head-web { display: flex; align-items: center; gap: 12px; padding: 16px 22px 14px; }
+/* ROUND 8 / ENG-958 — A ROUNDED BOX, NOT A DISC (mobile ENG-833 + ENG-869).
+   The browse thumbs went boxy first, with the client's reason: "with circles
+   it's going to be too difficult to position the horses" — a horse photographed
+   side-on is a long subject and a circle crops whichever end the framing did not
+   centre. ENG-869 brought the same corner to the post head, because it is the
+   same horse photo in the same product. `--radius-md` (14px) is mobile's
+   `AVATAR_BOX_RADIUS` (`Radius.md`) to the pixel, which is also this card's own
+   media radius — so bind the token, don't restate the number.
+   The stable-update panel footer's `.av` deliberately STAYS a circle — see the
+   note on `.post-panel-foot .av` below. */
 .post-avatar-web {
-  width: 44px; height: 44px; border-radius: 50%;
+  width: 44px; height: 44px; border-radius: var(--radius-md);
   background: linear-gradient(135deg, var(--brand-green-light), var(--brand-green));
   display: flex; align-items: center; justify-content: center;
   color: var(--cream); font-family: var(--font-serif); font-size: 18px; font-weight: 600; flex-shrink: 0;
+}
+/* The photo variant of the same box (ENG-958). `cover` because this is
+   PHOTOGRAPHY — the subject is central and the corners are background. (The
+   panel footer's disc is a stable's MARK and uses `contain` instead; the two
+   rules are different on purpose, per mobile's ENG-754 split.)
+   The gradient is cleared so a transparent PNG does not sit on brand green. */
+.post-avatar-web.post-avatar-photo {
+  object-fit: cover;
+  background: var(--media-ground);
+  display: block;
 }
 .post-meta-web { flex: 1; min-width: 0; }
 /* ROUND 5 / ENG-613 row 3 — option D. Was `var(--font-serif)` 18px/600 on
@@ -796,6 +830,39 @@ a { color: inherit; text-decoration: none; }
   content: ''; width: 5px; height: 5px; border-radius: 50%;
   background: var(--cream);
 }
+/* ROUND 8 / ENG-958 — THE CHIP CLOSES THE HEAD STACK (mobile ENG-869).
+   It sat ABOVE the horse name, where it displaced the headline and had to share
+   width with it. Below the byline it gets the whole column, which is the
+   truncation fix: `max-width: 100%` + the ellipsis on a real title rather than
+   two runs of text fighting over one line.
+   The margin is on the PILL, not on the byline above it, so a card with no
+   label draws no pill AND no gap — an unlabelled head is exactly as tall as it
+   was before this ticket. */
+.post-web .post-badge.stacked {
+  margin-top: 6px;
+  margin-bottom: 0;
+  max-width: 100%;
+  min-width: 0;
+  vertical-align: top;
+  overflow: hidden;
+}
+/* THE ELLIPSIS LIVES ON THE INNER SPAN, NOT ON THE PILL.
+   `.post-badge` is `inline-flex`, and `text-overflow` only applies to a BLOCK
+   container that directly holds the overflowing inline content. Put it on the
+   flex container and the copy becomes an anonymous flex item, the ellipsis is
+   never drawn, and a long title is hard-clipped MID-WORD instead — which is
+   silently worse than no truncation, because it looks deliberate.
+   Mobile solves it the same way: the pill is a `View` and the copy is its own
+   `<Text numberOfLines={1}>` child (post-card.tsx `renderLabelPill`).
+   `min-width: 0` is what lets the span shrink below its content width so the
+   ellipsis can actually engage; the dot is a sibling and keeps its fixed size. */
+.post-web .post-badge.stacked .post-badge-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.post-web .post-badge.stacked::before { flex: 0 0 auto; }
 /* Inter, NOT the website sample's serif: two client calls have already moved
    names off Cormorant, and 22px is one point up from mobile's 20 for the
    wider column. */
@@ -816,17 +883,68 @@ a { color: inherit; text-decoration: none; }
 }
 .post-web .post-panel p { font-size: 15px; line-height: 1.55; color: var(--ink); margin: 0 0 12px; }
 .post-web .post-panel p:last-of-type { margin-bottom: 0; }
+/* ROUND 8 / ENG-958 — THE 8-LINE CLAMP (mobile ENG-863).
+   The height is set INLINE by the component, from measured paragraph heights
+   over a measured line height; there is no line-height constant here to drift
+   from the arithmetic. The 12px above IS the gap the clamp charges for
+   (`PANEL_PARAGRAPH_GAP` in post-card.tsx) — change one and you must change the
+   other, or the panel shows the wrong number of lines silently.
+   NO `-webkit-line-clamp`: the budget is eight lines ACROSS paragraphs, which a
+   per-box clamp cannot express. The consequence is that there is no "…" on the
+   last line, which is deliberate and matches mobile — "Read more" is the whole
+   truncation cue, and the trailing dots were removed on 26 Aug 2026 because
+   "Read more…" reads as more COPY where the bare label reads as a control. */
+.post-web .post-panel-prose { flex-shrink: 0; }
+/* The line probe: laid out (so it HAS a height to report) but invisible and
+   out of flow. `display: none` would report zero and switch the clamp off. */
+.post-web .post-panel-line-probe {
+  height: 0; overflow: hidden; visibility: hidden; pointer-events: none;
+}
+.post-web .post-panel-line-probe > div { font-size: 15px; line-height: 1.55; }
+/* The affordance — an own-line, light-green medium control below the copy it
+   belongs to, sitting between the panel and the reaction bar (mobile's
+   placement). `order` is explicit because `.post-web` is a reordered flex
+   column: the panel is -2 and the actions are 1, so this must fall between. */
+.post-panel-read-more {
+  order: -1;
+  align-self: flex-start;
+  margin: 8px 22px 4px;
+  padding: 0;
+  background: none;
+  border: 0;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--brand-green-light);
+  cursor: pointer;
+}
+.post-panel-read-more:hover { color: var(--brand-green); }
 .post-web .post-panel-foot {
   display: flex; align-items: center; gap: 10px;
   border-top: 1px solid var(--line);
   margin-top: 16px; padding-top: 12px;
   font-size: 12.5px; color: var(--muted);
 }
+/* THIS DISC STAYS A CIRCLE (ENG-958, deliberately NOT swept up by the boxy
+   avatars above). It is a STABLE'S MARK, not a profile photo — mobile keeps it
+   circular for the same reason and pins it as a control in its own test. A
+   future "round the avatars" pass must not take this rule with it; a test pins
+   the split here too. */
 .post-web .post-panel-foot .av {
   width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
   background: linear-gradient(135deg, var(--brand-green-light), var(--brand-green-dark));
   color: var(--cream); font-size: 12px; font-weight: 600;
   display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}
+/* `contain` on a light ground, NOT `cover` — the ENG-754 trainer-logo rule:
+   `photo_url` holds a portrait for one trainer and a wide wordmark for the next,
+   and cover-cropping a wordmark into a 28px disc keeps the middle two letters
+   and throws the name away. The head avatar covers; this one contains. */
+.post-web .post-panel-foot .av.post-avatar-photo {
+  object-fit: contain;
+  background: var(--cream);
+  display: block;
 }
 
 .post-body-web { padding: 16px 22px; font-size: 15px; line-height: 1.55; color: var(--ink); }
@@ -1031,6 +1149,40 @@ a { color: inherit; text-decoration: none; }
 }
 .tag.race-day { background: var(--brand-green); color: var(--cream); }
 .tag.active { background: var(--brand-green-soft); color: var(--brand-green); }
+/* ROUND 8 / ENG-959 — THE HORSE STATUS SCALE (mobile ENG-866 + the 1 Sep re-cut).
+   These four classes are the web half of mobile's `StatusScale`
+   (src/components/ui/tag.tsx); `lib/horse/profile.ts` `statusTagClassOf()` is the
+   only thing that picks between them, so a status colour is decided ONCE. The
+   profile used to compare `training_status === "racing"` inline and leave the
+   other four statuses on the neutral `.tag` above.
+
+   spelling / retired / unknown are deliberately ABSENT: bland is the plain
+   `.tag`, so there is nothing to declare and no way for them to drift.
+
+   The two literal hexes are mobile's, restated rather than tokenised — they are
+   this scale's own shades and exist nowhere else in web's palette. Contrast is
+   AAA at the 10.5px label (computed in mobile's status-tag-shared-mapping test):
+   #E4C98F on --ink 10.82:1, #C3D9BB on --ink 11.57:1, --brand-green-dark on
+   --cream 8.36:1, #5C4033 on --cream 8.79:1.
+
+   `--brand-green-dark` for In training and NOT `--brand-green`: "Shares
+   Available" below is `.tag.race-day`, i.e. --brand-green, and it sits in this
+   same status row. One step darker keeps the two chips apart. The light gold
+   keeps ENG-866's distance guard from the --gold race badge (#C9A56F): #E4C98F
+   sits 95 of summed channel distance away, so the two cannot read as one chip. */
+.tag.status-breaking     { background: #E4C98F; color: var(--ink); }
+.tag.status-pre-training { background: #C3D9BB; color: var(--ink); }
+.tag.status-in-training  { background: var(--brand-green-dark); color: var(--cream); }
+.tag.status-racing       { background: #5C4033; color: var(--cream); }
+/* The shares CTA on the horse profile (ENG-959). Mobile draws this `primary` and
+   FULL-BLEED (`alignSelf: 'stretch'`) because it owns a phone-width column; web
+   deliberately does not follow it there. The button keeps its natural width and
+   sits left, which is how web already draws this very component on the trainer
+   profile — a 920px-wide green bar would read as a banner, not as an action, and
+   the two screens would then disagree about what the same CTA looks like.
+   `grid-column` is what it needs from the header grid: its own full-width row,
+   so it never shares a line with the stats block above it. */
+.profile-shares-cta-web { grid-column: 1 / -1; margin-top: 16px; display: flex; }
 .profile-name-web {
   font-family: var(--font-serif);
   font-size: 56px;
@@ -1405,3 +1557,53 @@ a { color: inherit; text-decoration: none; }
 .trainer-card-web .trainer-name { font-family: var(--font-serif); font-size: 19px; font-weight: 600; margin: 0; line-height: 1.15; min-height: calc(2 * 1.15em); }
 .trainer-card-web .trainer-sub { font-size: 13px; color: var(--muted); margin: 2px 0 0; }
 .trainer-card-web .trainer-meta { font-size: 12px; color: var(--brand-green); font-weight: 600; margin-top: auto; }
+
+/* ====================================================================
+   BROWSE FILTER PILLS (ENG-960) — All | Following on the browse grids.
+   Web port of mobile's src/components/browse-filter.tsx. No mockup covers
+   this control (the web mockups draw the unfiltered grids only), so the
+   visual language is borrowed from `.tag` above: pill radius, its
+   --cream-dark fill, a hairline --line border, brand-green when active.
+   Tokens only.
+
+   The resting fill is --cream-dark, NOT --cream, even though mobile's pill
+   uses Colors.cream. `body` is --cream (see :root above), so a --cream pill
+   is invisible as a fill on web — outline-only — and `.tag`, the control this
+   copies, is already --cream-dark. Mobile gets away with --cream because its
+   pill FLOATS over the roster with a shadow to lift it; web deliberately drops
+   both the float and the shadow, which removes the only thing that made the
+   lighter fill read as a chip.
+
+   Unlike mobile these sit in normal flow under the page heading rather
+   than floating over the roster — see the component's own note.
+   ==================================================================== */
+.browse-filter { display: flex; gap: 8px; margin: 0 0 20px; }
+.browse-pill {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--cream-dark);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.browse-pill:hover:not(.is-active) { border-color: var(--line-dark); color: var(--ink); }
+.browse-pill.is-active {
+  background: var(--brand-green);
+  border-color: var(--brand-green);
+  color: var(--cream);
+  font-weight: 600;
+}
+.browse-pill:focus-visible { outline: 2px solid var(--brand-green); outline-offset: 2px; }
+
+/* ENG-960 — the browse grids' "Show more" pager button. Appended at EOF, like
+   the browse pills above, so it cannot collide with PR #100's hunks earlier in
+   this file. Spacing comes from the existing scale rather than an inline
+   style; the skin is `.btn-light`'s, which this sits beside in the same grid. */
+.btn-showmore {
+  display: block;
+  margin: 24px auto 0;
+}

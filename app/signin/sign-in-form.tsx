@@ -7,6 +7,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
+import { clearEvictionSuppression } from "@/lib/api/client";
 import PasswordInput from "@/components/password-input";
 
 const GoogleMark = () => (
@@ -18,7 +19,7 @@ const GoogleMark = () => (
   </svg>
 );
 
-export function SignInForm() {
+export function SignInForm({ notice }: { notice?: string | null }) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -36,6 +37,11 @@ export function SignInForm() {
       setBusy(false);
       return;
     }
+    // A deliberate sign-out suppresses 401 eviction handling for a short window
+    // (lib/api/client.ts). `router.push` keeps the same document alive across
+    // sign-out → sign-in, so clear it here rather than letting the new session
+    // inherit the tail of the old one's window.
+    clearEvictionSuppression();
     router.push("/explore");
     router.refresh();
   }
@@ -60,6 +66,10 @@ export function SignInForm() {
       <h1>Welcome back.</h1>
       <p className="auth-sub">Sign in to pick up where you left off.</p>
 
+      {/* Eviction notice (ENG-961): why the member landed back here. `status`,
+          not `alert` — it is not a form error and must not compete with one. A
+          real sign-in error below supersedes it. */}
+      {notice && !error && <div className="form-notice" role="status">{notice}</div>}
       {error && <div className="form-error" role="alert">{error}</div>}
 
       <div className="input-group">

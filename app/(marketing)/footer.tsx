@@ -39,6 +39,12 @@ const LEGAL_LINKS: ReadonlyArray<{ label: string; slug: string }> = [
   { label: "Terms & Conditions", slug: "terms" },
   { label: "Cancellation & Refund Policy", slug: "cancellation" },
   { label: "Acceptable Use Policy", slug: "acceptable-use" },
+  // ENG-1041. NOT in the mockup, which predates the store submissions. Google
+  // Play requires the deletion page to be discoverable rather than reachable
+  // only by the direct URL pasted into the Data Safety form, and the footer is
+  // the only thing on every page. Last in the column on purpose: it is the
+  // entry a visitor wants least often and must never be nudged towards.
+  { label: "Delete Your Account", slug: "delete-account" },
 ];
 
 /** The mockup's three Support entries and the `data-subject` each carried. */

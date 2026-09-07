@@ -69,7 +69,37 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   if (!horseRow) return fail("not_found", "Horse not found.", 404);
 
   const row = horseRow as HorseProfileRow;
-  const trainer = one(row.trainer);
+  // `trainer.photo_url` is STRIPPED before this responds (ENG-958).
+  //
+  // The rule is the transport rule in lib/storage/photos.ts: a stored path may
+  // cross to the client only when a NAMED consumer is going to sign it. Here
+  // there is none. ENG-958 widened the shared `HORSE_PROFILE_COLUMNS` so the
+  // horse PROFILE PAGE could sign the trainer photo for its post-card avatars;
+  // that constant has two consumers and this route is the other one. It returns
+  // the embedded trainer VERBATIM, so the widening would have published a bare
+  // `trainer-photos` object path into this envelope with nobody responsible for
+  // it — one added consumer away from an `<img src>` that resolves the relative
+  // path against the page and silently gets HTML back.
+  //
+  // Note this is NOT "no path may leave the server": app/api/trainers/[id]/feed
+  // deliberately ships `horse.photo_url`, because `trainer-posts.tsx` signs it
+  // client-side under the viewer's own RLS. The difference is the named signer,
+  // and this route has none — nothing consumes the field today, which is exactly
+  // why it wanted a decision now rather than a discovery later. The route signs
+  // the horse's own cover below, server-side, for the same reason.
+  //
+  // Pinned by the ENG-958 block in test/horses-route.test.ts with LITERAL
+  // assertions. The null branch below is load-bearing and pinned there too (the
+  // ternary's else, reached for an empty array embed via `one()`'s own
+  // `?? null`): a horse with no trainer must still serialise as `trainer: null`,
+  // not as an empty object.
+  // Destructuring straight off a `?? {}` would quietly change this envelope's
+  // shape for every trainerless horse — a contract change smuggled in behind a
+  // security fix.
+  const trainerRow = one(row.trainer);
+  const trainer = trainerRow
+    ? (({ photo_url: _photoPath, ...rest }) => rest)(trainerRow)
+    : null;
 
   // Next race — earliest upcoming scheduled_at, or null.
   const { data: nextRaceRows } = await sb

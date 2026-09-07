@@ -14,9 +14,22 @@ const VIEWER_ID = "8f3c1a2b-1234-4abc-9def-0123456789ab";
 
 let feedRows: unknown[];
 
-const { fromMock } = vi.hoisted(() => ({ fromMock: vi.fn() }));
+const { fromMock, createSignedUrlsMock } = vi.hoisted(() => ({
+  fromMock: vi.fn(),
+  createSignedUrlsMock: vi.fn(),
+}));
 
-vi.mock("@/lib/supabase/client", () => ({ supabaseBrowser: () => ({ from: fromMock }) }));
+// `storage` is REQUIRED on this mock since ENG-958: `TrainerPosts` batch-signs
+// the embedded horse photos itself. Without it the mock is one fixture field
+// away from a TypeError rather than an assertion — and, worse, `signPhotoMap`
+// early-returns when no row carries a `photo_url`, so a fixture without one
+// keeps the suite green while testing nothing on that path.
+vi.mock("@/lib/supabase/client", () => ({
+  supabaseBrowser: () => ({
+    from: fromMock,
+    storage: { from: () => ({ createSignedUrls: createSignedUrlsMock }) },
+  }),
+}));
 
 function chainable(result: { data: unknown; error: null }) {
   const obj: Record<string, unknown> = {};
@@ -49,6 +62,13 @@ const TEXT_ROW = {
 beforeEach(() => {
   feedRows = [TEXT_ROW];
   fromMock.mockReset();
+  // A DISTINGUISHABLE signed value, so an assertion on the rendered `src`
+  // discriminates "signed" from "raw path" instead of passing either way.
+  createSignedUrlsMock.mockReset();
+  createSignedUrlsMock.mockImplementation((paths: string[]) => ({
+    data: paths.map((path) => ({ path, signedUrl: `https://sb.local/signed/${path}` })),
+    error: null,
+  }));
   fromMock.mockImplementation(() => chainable({ data: [], error: null }));
   global.fetch = vi.fn((input: string | URL, init?: RequestInit) => {
     const url = String(input);
@@ -396,6 +416,60 @@ describe("profile post feeds — ENG-799 post-media mint", () => {
     const mediaCalls = fetchMock.mock.calls.filter((c) => String(c[0]) === "/api/posts/media");
     expect(mediaCalls).toHaveLength(1);
     expect(JSON.parse(String(mediaCalls[0][1]?.body))).toEqual({ postIds: ["p1"] });
+  });
+
+  // ENG-958 — the head avatar must render the SIGNED url, never the stored
+  // path. `photo_url` is a bare object path in a PRIVATE bucket; rendered raw
+  // into `<img src>` it resolves against the current page and silently returns
+  // HTML, so the failure is invisible rather than loud.
+  //
+  // This runs TrainerPosts' REAL mapper end to end. It is the gate the other
+  // four feed screens already had and this one did not: before it existed,
+  // changing the mapper to `horsePhotoUrl: horse?.photo_url` (the raw path)
+  // failed NO test in the repo, because the fixture carried no `photo_url` at
+  // all and `signPhotoMap` short-circuits on an empty path list.
+  it("TrainerPosts renders the SIGNED horse photo, never the raw stored path", async () => {
+    const RAW_PATH = "horses/mahogany.jpg";
+    // A PHOTO row, deliberately not the default `text` one: an update card's
+    // head is the STABLE's voice and shows the trainer's photo, so a text row
+    // would never exercise `horsePhotoUrl` in the head at all.
+    feedRows = [
+      {
+        ...TEXT_ROW,
+        type: "photo",
+        title: null,
+        body: "Trackwork this morning.",
+        horse: { display_name: "Mahogany", racing_name: "Mahogany", photo_url: RAW_PATH },
+      },
+    ];
+
+    const { container } = render(
+      <TrainerPosts trainerId="t1" trainerName="Tom Alcott" viewerId={VIEWER_ID} />,
+    );
+    await screen.findByText("Trackwork this morning.");
+
+    const avatar = container.querySelector<HTMLImageElement>("[data-testid='post-avatar-photo']");
+    expect(avatar).not.toBeNull();
+    expect(avatar).toHaveAttribute("src", `https://sb.local/signed/${RAW_PATH}`);
+    // Assert the NEGATIVE explicitly: the raw path must not survive anywhere in
+    // the attribute, including as the tail of a wrongly-concatenated value.
+    expect(avatar!.getAttribute("src")).not.toBe(RAW_PATH);
+
+    // Signed in ONE batched call for the page, not once per card.
+    expect(createSignedUrlsMock).toHaveBeenCalledTimes(1);
+    expect(createSignedUrlsMock.mock.calls[0][0]).toEqual([RAW_PATH]);
+  });
+
+  it("TrainerPosts falls back to the monogram when the horse has no photo", async () => {
+    // No `photo_url` on the row — the pre-ENG-958 shape, and still the majority
+    // of real rows. A photo row again, so the head resolves the HORSE.
+    feedRows = [{ ...TEXT_ROW, type: "photo", title: null, body: "Trackwork this morning." }];
+    const { container } = render(
+      <TrainerPosts trainerId="t1" trainerName="Tom Alcott" viewerId={VIEWER_ID} />,
+    );
+    await screen.findByText("Trackwork this morning.");
+    expect(container.querySelector("[data-testid='post-avatar-photo']")).toBeNull();
+    expect(container.querySelector(".post-avatar-web")).toHaveTextContent("M");
   });
 
   it("TrainerPosts makes exactly one POST /api/posts/media for a photo page", async () => {

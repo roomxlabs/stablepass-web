@@ -19,14 +19,17 @@
 // Horses browse grid — `horse_select_sub` gates it to active + content-access.
 // Public columns ONLY: no owner PII, no price column, and the single outbound
 // link target is the trainer's public `website_url`.
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
 import { AccessWall } from "@/components/access-wall";
+import { ShowMoreButton } from "@/components/show-more-button";
 import { SharesDisclaimer } from "@/components/shares-disclaimer";
+import { BROWSE_PAGE_SIZE, browseRange, splitBrowsePage } from "@/lib/browse";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 import styles from "./shares-list.module.css";
+import { apiFetch } from "@/lib/api/client";
 
 // The exact projection is load-bearing in BOTH directions (see .rx/gotchas.md):
 // too narrow starves the row, and naming an undeployed column hard-fails the
@@ -34,13 +37,22 @@ import styles from "./shares-list.module.css";
 // base — `shares_for_sale`/`racing_name` by the Horses grid, `training_status`
 // by `lib/horse/profile.ts`, `website_url` by the trainer profile.
 /**
- * Cap on the list — a large for-sale roster must not become an unbounded read.
- * Mirrors mobile's `BROWSE_PAGE_SIZE` (`lib/browse.ts:24`), which bounds the
- * very same scoped read there. There is no pagination on this screen on either
- * platform; if the for-sale list ever approaches this, both need paging, not a
- * bigger number.
+ * Page size for the list — a large for-sale roster must not become an unbounded
+ * read.
+ *
+ * ENG-1038: this used to be a bare `.limit(SHARES_PAGE_SIZE)` with NO pager,
+ * which is not a cap but a TRUNCATION — row 101 of a stable's for-sale roster
+ * was unreachable, with no affordance to reach it. That is the exact defect
+ * ENG-960 removed from the Horses and Trainers browse grids, and /shares was
+ * the last member browse surface still carrying it.
+ *
+ * It is now an ALIAS of `BROWSE_PAGE_SIZE` rather than an independent 100.
+ * Both were already 100 and both cite "mirrors mobile's BROWSE_PAGE_SIZE" as
+ * the reason, so two constants meant two places to change and one of them
+ * would have been missed. Kept exported under its own name because the shares
+ * tests and any future shares-specific read reference it by that name.
  */
-export const SHARES_PAGE_SIZE = 100;
+export const SHARES_PAGE_SIZE = BROWSE_PAGE_SIZE;
 
 export const SHARES_HORSE_SELECT =
   "id, display_name, racing_name, training_status, trainer:trainer_id(id, name, website_url)";
@@ -124,7 +136,7 @@ function logWebsiteClick(trainerId: string) {
   // Fire-and-forget — the existing ENG-274 BFF. Never awaited and never allowed
   // to block or defer the navigation, so a slow log cannot cost the member the
   // click; `keepalive` lets it survive the page losing focus to the new tab.
-  void fetch(`/api/trainers/${trainerId}/website-click`, {
+  void apiFetch(`/api/trainers/${trainerId}/website-click`, {
     method: "POST",
     keepalive: true,
   }).catch(() => {
@@ -170,64 +182,138 @@ export function SharesList({ viewerId, everSubscribed }: { viewerId: string; eve
   const [loading, setLoading] = useState(true);
   const [gated, setGated] = useState(false);
   const [error, setError] = useState(false);
+  // Paging (ENG-1038) — same shape as the browse grids; see lib/browse.ts for
+  // the off-by-one this avoids.
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // THE ERROR SPLIT, and why it is not just `error`. ENG-960's self-review
+  // caught this on the trainers grid: routing a failed page 2 into the same
+  // destructive `error` state unmounts the whole loaded roster. /shares has no
+  // filter pills — nothing on this screen ever re-runs offset 0 for the life of
+  // the mount — so that would be UNRECOVERABLE without a full page reload.
+  // `error` is therefore first-page-only; `pageError` keeps the roster on
+  // screen and turns the pager into a one-click "Try again".
+  const [pageError, setPageError] = useState(false);
+  // Generation counter, replacing the old `cancelled` flag. A bare boolean is
+  // enough for one fetch per mount, but not once a load-more can be in flight:
+  // this makes a superseded request's writes no-ops rather than letting a slow
+  // page append rows to a roster it no longer belongs to.
+  const runRef = useRef(0);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
+  // Which failure state a dead request lands in depends ONLY on whether there
+  // is a roster worth keeping. `hasMore` is deliberately left alone on a failed
+  // page so the button survives and the retry is one click.
+  const failPage = useCallback((offset: number) => {
+    if (offset === 0) setError(true);
+    else setPageError(true);
+    setLoading(false);
+    setLoadingMore(false);
+  }, []);
+
+  const fetchPage = useCallback(async (offset: number) => {
+    const run = ++runRef.current;
+    const live = () => runRef.current === run;
+
+    if (offset === 0) {
       setLoading(true);
       setError(false);
       setGated(false);
-      const sb = supabaseBrowser();
+      setHasMore(false);
+      // Cleared here as well as on success: a first page that succeeds after
+      // a failed load-more must not keep showing the retry line.
+      setPageError(false);
+      setLoadingMore(false);
+    } else {
+      setPageError(false);
+      setLoadingMore(true);
+    }
+    const sb = supabaseBrowser();
 
-      // The shared entitlement rule (`lib/api/access.ts`) — status alone is not
-      // it: an `active` member whose `current_period_end` has passed must see
-      // the wall, not an empty screen (ENG-585).
-      const { data: sub, error: subError } = await sb
-        .from("subscription")
-        .select(ACCESS_COLUMNS)
-        .eq("user_id", viewerId)
-        .maybeSingle();
-      // Fails CLOSED (below) — but log it, or a paying member walled by a
-      // transient read failure looks identical to a genuinely lapsed one, with
-      // nothing in the console. Same rule as the horse read further down.
-      if (subError) console.error("shares subscription read failed", subError);
-      if (!hasAccess(sub as AccessRow | null)) {
-        if (!cancelled) {
-          setGated(true);
-          setLoading(false);
-        }
-        return;
-      }
-
-      const { data, error: fetchError } = await sb
-        .from("horse")
-        .select(SHARES_HORSE_SELECT)
-        // Platform visibility — a disabled horse is never listed.
-        .eq("status", "active")
-        // THE screen's defining filter: /shares is the only list of for-sale
-        // horses as such.
-        .eq("shares_for_sale", true)
-        .order("display_name")
-        .limit(SHARES_PAGE_SIZE);
-
-      if (cancelled) return;
-      if (fetchError) {
-        // Never discard the Supabase error: a 42703 from an undeployed column
-        // lands in the same branch as "no for-sale horses" and would otherwise
-        // be a silent, invisible blackout (.rx/gotchas.md).
-        console.error("shares horse read failed", fetchError);
-        setError(true);
-        setLoading(false);
-        return;
-      }
-
-      setHorses(mapSharesHorses((data ?? []) as unknown as HorseRow[]));
+    // The shared entitlement rule (`lib/api/access.ts`) — status alone is not
+    // it: an `active` member whose `current_period_end` has passed must see
+    // the wall, not an empty screen (ENG-585).
+    //
+    // RE-READ ON EVERY PAGE, deliberately — it costs a second round trip per
+    // "Show more" and could have been hoisted to `offset === 0`. Two reasons
+    // not to. The pass is a 30-day one that does NOT auto-renew, so it can
+    // expire mid-session, and paging is precisely the long-lived interaction
+    // that makes that reachable: a member who keeps clicking must not keep
+    // being served content past the moment they stop being entitled. And the
+    // browse grids re-read it per page for the same reason, so hoisting it
+    // here would make /shares the odd one out for a saving of one cached
+    // round trip. RLS would refuse the rows regardless; this is what turns
+    // that refusal into the WALL rather than a silently empty page.
+    const { data: sub, error: subError } = await sb
+      .from("subscription")
+      .select(ACCESS_COLUMNS)
+      .eq("user_id", viewerId)
+      .maybeSingle();
+    // Fails CLOSED (below) — but log it, or a paying member walled by a
+    // transient read failure looks identical to a genuinely lapsed one, with
+    // nothing in the console. Same rule as the horse read further down.
+    if (subError) console.error("shares subscription read failed", subError);
+    if (!live()) return;
+    if (!hasAccess(sub as AccessRow | null)) {
+      setGated(true);
       setLoading(false);
-    })();
+      setLoadingMore(false);
+      return;
+    }
+
+    const { data, error: fetchError } = await sb
+      .from("horse")
+      .select(SHARES_HORSE_SELECT)
+      // Platform visibility — a disabled horse is never listed.
+      .eq("status", "active")
+      // THE screen's defining filter: /shares is the only list of for-sale
+      // horses as such.
+      .eq("shares_for_sale", true)
+      // A TOTAL order is required once this is paged. `display_name` alone
+      // leaves ties broken by whatever the planner returns, and a tie ordered
+      // differently between two requests silently drops or duplicates a horse
+      // across the `.range` boundary. `id` is the tiebreaker, so two windows
+      // can never disagree.
+      .order("display_name")
+      .order("id")
+      // `.range` is inclusive, so this asks for SHARES_PAGE_SIZE + 1 rows —
+      // one probe row past what we render. See BROWSE_FETCH_LIMIT in
+      // lib/browse.ts for why the probe, and not `rows.length === PAGE_SIZE`.
+      .range(...browseRange(offset));
+
+    if (!live()) return;
+    if (fetchError) {
+      // Never discard the Supabase error: a 42703 from an undeployed column
+      // lands in the same branch as "no for-sale horses" and would otherwise
+      // be a silent, invisible blackout (.rx/gotchas.md).
+      console.error("shares horse read failed", fetchError);
+      failPage(offset);
+      return;
+    }
+
+    const { page, hasMore: more } = splitBrowsePage((data ?? []) as unknown as HorseRow[]);
+    // Mapped-and-sorted PER PAGE, not across the accumulated roster.
+    // `mapSharesHorses` sorts on the RESOLVED name (racing_name || display_name),
+    // which the server cannot order by — so page 2 is A-Z within itself and
+    // appends below page 1 rather than interleaving into it. That is the
+    // deliberate choice: re-sorting the whole roster on every "Show more"
+    // would reshuffle rows the member is already looking at, and moving a row
+    // out from under a click is worse than a second alphabetical run. For a
+    // roster of one page (every real stable today) the rendering is byte-for-
+    // byte what it was before paging.
+    const mapped = mapSharesHorses(page);
+    setHorses((prev) => (offset === 0 ? mapped : [...prev, ...mapped]));
+    setHasMore(more);
+    setLoading(false);
+    setLoadingMore(false);
+  }, [viewerId, failPage]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial data fetch, not derived state
+    fetchPage(0);
     return () => {
-      cancelled = true;
+      runRef.current += 1;
     };
-  }, [viewerId]);
+  }, [fetchPage]);
 
   return (
     <div className={styles.screen}>
@@ -322,6 +408,30 @@ export function SharesList({ viewerId, everSubscribed }: { viewerId: string; eve
             );
           })}
         </ul>
+      )}
+
+      {/* The pager lives OUTSIDE the `<ul>` but inside the same roster gate, so
+          it is structurally unreachable whenever there is no roster to extend.
+          The retry line sits ABOVE the button, next to the rows it failed to
+          add, and `pageError` deliberately does NOT retire the button — losing
+          it is what would make the failure unrecoverable on a screen with no
+          pills. */}
+      {!gated && !error && horses.length > 0 && (
+        <>
+          {pageError && (
+            <p role="alert" className={styles.pageError} data-testid="shares-page-error">
+              Couldn&rsquo;t load more horses.
+            </p>
+          )}
+          {hasMore && (
+            <ShowMoreButton
+              loadingMore={loadingMore}
+              pageError={pageError}
+              onClick={() => fetchPage(horses.length)}
+              className={styles.showMore}
+            />
+          )}
+        </>
       )}
     </div>
   );

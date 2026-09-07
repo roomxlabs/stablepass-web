@@ -45,7 +45,9 @@ const ACTIVE_SUB = { status: "active", trial_ends_at: null, current_period_end: 
 
 function chainable(result: { data: unknown; error: unknown }) {
   const obj: Record<string, unknown> = {};
-  for (const method of ["select", "eq", "in", "not", "order", "limit"]) {
+  // `range` joined this list in ENG-1038, when the screen's bare `.limit()`
+  // truncation became a `.range()` pager.
+  for (const method of ["select", "eq", "in", "not", "order", "limit", "range"]) {
     obj[method] = vi.fn(() => obj);
   }
   obj.maybeSingle = vi.fn(() => Promise.resolve(result));
@@ -109,8 +111,18 @@ describe("SharesList (ENG-956)", () => {
     );
     expect(horseChain.eq).toHaveBeenCalledWith("status", "active");
     expect(horseChain.eq).toHaveBeenCalledWith("shares_for_sale", true);
-    // Bounded, mirroring mobile's BROWSE_PAGE_SIZE — never an unbounded read.
-    expect(horseChain.limit).toHaveBeenCalledWith(SHARES_PAGE_SIZE);
+    // BOUNDED BUT NOT TRUNCATING (ENG-1038). This asserted
+    // `.limit(SHARES_PAGE_SIZE)` until ENG-1038 — a cap with no pager, which
+    // made row 101 unreachable. The read is still bounded to one page, but by
+    // an inclusive `.range` asking for exactly ONE probe row past what is
+    // rendered, which is what lets the pager answer "is there more?" without
+    // #81's `=== PAGE_SIZE` off-by-one. `.limit` must be GONE, not merely
+    // joined by `.range` — the two together would double-bound the read.
+    expect(horseChain.range).toHaveBeenCalledWith(0, SHARES_PAGE_SIZE);
+    expect(horseChain.limit).not.toHaveBeenCalled();
+    // The total order the `.range` window depends on (see the query's comment).
+    expect(horseChain.order).toHaveBeenCalledWith("display_name");
+    expect(horseChain.order).toHaveBeenCalledWith("id");
 
     // The `post` table is never touched, and no feed route is called.
     expect(fromMock.mock.calls.map((c) => c[0])).not.toContain("post");

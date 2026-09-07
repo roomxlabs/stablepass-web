@@ -11,7 +11,7 @@
 import type { MetadataRoute } from "next";
 import { headers } from "next/headers";
 import { isLocalHost, normaliseHost, spaceForHost } from "@/lib/hosts";
-import { MARKETING_IS_INDEXABLE } from "@/lib/seo";
+import { ALWAYS_INDEXABLE_PATHS, MARKETING_IS_INDEXABLE } from "@/lib/seo";
 
 export const dynamic = "force-dynamic";
 
@@ -22,12 +22,23 @@ export default async function robots(): Promise<MetadataRoute.Robots> {
   // X-Robots-Tag header middleware sets for the very same request.
   const host = normaliseHost(store.get("x-forwarded-host") ?? store.get("host"));
 
-  const indexable =
-    !isLocalHost(host) && spaceForHost(host) === "marketing" && MARKETING_IS_INDEXABLE;
+  const marketing = !isLocalHost(host) && spaceForHost(host) === "marketing";
+  const indexable = marketing && MARKETING_IS_INDEXABLE;
 
   if (!indexable) {
     // Covers the member space (always), a developer machine, and the marketing
     // site while it still shows real trainers beside placeholder biography.
+    //
+    // ENG-1041: the account-deletion page is exempt, but ONLY on the marketing
+    // host. A blanket `Disallow: /` would keep it out of the index no matter
+    // what its meta tag said, because a crawler that may not fetch the page
+    // never reads the tag. `Allow` wins on longest-match, which is how one
+    // path is carved out of a site-wide disallow.
+    if (marketing) {
+      return {
+        rules: [{ userAgent: "*", allow: [...ALWAYS_INDEXABLE_PATHS], disallow: "/" }],
+      };
+    }
     return { rules: [{ userAgent: "*", disallow: "/" }] };
   }
 

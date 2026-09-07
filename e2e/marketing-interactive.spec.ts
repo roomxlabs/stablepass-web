@@ -344,6 +344,11 @@ test.describe("the footer's links", () => {
       "href",
       "/legal/acceptable-use",
     );
+    // ENG-1041 — the deletion page Google Play requires be discoverable.
+    await expect(legal.getByRole("link", { name: "Delete Your Account" })).toHaveAttribute(
+      "href",
+      "/legal/delete-account",
+    );
 
     // ...and one of them actually lands, rather than merely being well-formed.
     await legal.getByRole("link", { name: "Privacy Policy" }).click();

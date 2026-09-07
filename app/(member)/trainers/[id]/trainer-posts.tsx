@@ -7,15 +7,20 @@
 // the horse version, a trainer's updates span their whole stable, so each post
 // carries its OWN horse name for the byline. Mirrors W7 HorsePosts otherwise.
 import { useEffect, useState } from "react";
-import { PostCard, mediaBoxProps } from "@/components/post-card";
+import { PostCard, PostAvatar, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
+import { signPhotoMap, HORSE_PHOTO_BUCKET } from "@/lib/storage/photos";
 import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@/lib/api/post-media";
 import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
 import type { FeedPost, ReactionEmoji } from "@/components/types";
 import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
+import { apiFetch } from "@/lib/api/client";
 
-type HorseRef = { display_name: string; racing_name: string | null };
+// `photo_url` is a bare object path in the PRIVATE `horse-photos` bucket — this
+// route is a plain BFF read (not a signing surface), so the SCREEN batch-signs
+// it client-side with `signPhotoMap`, same rule as every other feed mapper (ENG-958).
+type HorseRef = { display_name: string; racing_name: string | null; photo_url: string | null };
 type PostRow = PostIntrinsicRow & { horse_id: string; horse: HorseRef | HorseRef[] | null };
 type ReactionRow = { post_id: string; emoji: ReactionEmoji };
 type BookmarkRow = { post_id: string };
@@ -32,10 +37,13 @@ export interface TrainerPostsProps {
   stableName?: string | null;
   /** `trainer.location` — the other half of that footer. */
   stableLocation?: string | null;
+  /** This trainer's ALREADY-SIGNED photo — the page signs it once as `coverUrl`
+   *  and this prop reuses that value rather than signing a second time (ENG-958). */
+  trainerPhotoUrl?: string | null;
   viewerId: string;
 }
 
-export function TrainerPosts({ trainerId, trainerName, stableName = null, stableLocation = null, viewerId }: TrainerPostsProps) {
+export function TrainerPosts({ trainerId, trainerName, stableName = null, stableLocation = null, trainerPhotoUrl = null, viewerId }: TrainerPostsProps) {
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -48,7 +56,7 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
       setLoading(true);
       setError(false);
       try {
-        const res = await fetch(`/api/trainers/${trainerId}/feed`);
+        const res = await apiFetch(`/api/trainers/${trainerId}/feed`);
         if (!res.ok) {
           if (!cancelled) setError(true);
           return;
@@ -68,6 +76,12 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
         ]);
         const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
         const mySet = new Set(((bookmarkRows ?? []) as BookmarkRow[]).map((b) => b.post_id));
+        // ONE batch call for the whole page's horse photos — never per card.
+        const horsePhotos = await signPhotoMap(
+          sb,
+          HORSE_PHOTO_BUCKET,
+          rows.map((r) => one(r.horse)?.photo_url),
+        );
         // Photos + their slide counts via ONE POST /api/posts/media; video posters
         // via playback?posterOnly=1. Absolute URLs pass through. A 402 surfaces the
         // AccessWall (guardrail 3). `slideCounts` rides in on the same batch, which
@@ -99,6 +113,8 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
             trainerName,
             stableName,
             stableLocation,
+            horsePhotoUrl: horse?.photo_url ? horsePhotos.get(horse.photo_url) ?? null : null,
+            trainerPhotoUrl,
             bookmarked: mySet.has(r.id),
           };
         });
@@ -110,7 +126,7 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
     return () => {
       cancelled = true;
     };
-  }, [trainerId, trainerName, stableName, stableLocation]);
+  }, [trainerId, trainerName, stableName, stableLocation, trainerPhotoUrl]);
 
   async function react(postId: string, emoji: ReactionEmoji) {
     const target = posts.find((p) => p.id === postId);
@@ -151,7 +167,7 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
   async function play(postId: string) {
     setPlayError((prev) => ({ ...prev, [postId]: false }));
     try {
-      const res = await fetch(`/api/posts/${postId}/playback`);
+      const res = await apiFetch(`/api/posts/${postId}/playback`);
       if (res.status !== 200) {
         setPlayError((prev) => ({ ...prev, [postId]: true }));
         return;
@@ -186,7 +202,7 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
           return (
             <article className="post-web" key={p.id}>
               <div className="post-head-web">
-                <div className="post-avatar-web" aria-hidden="true">{p.horseName[0]?.toUpperCase() ?? "?"}</div>
+                <PostAvatar url={p.horsePhotoUrl} initial={p.horseName[0]?.toUpperCase() ?? "?"} />
                 <div className="post-meta-web">
                   <h3 className="post-horse">{p.horseName}</h3>
                   {/* title on a media card is withheld (client, 18 Aug 2026) — see post-card.tsx */}
