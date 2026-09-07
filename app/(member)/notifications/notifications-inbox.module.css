@@ -1,0 +1,228 @@
+/*
+ * The notification inbox (ENG-957). Scoped as a CSS module: `app/globals.css`
+ * is a shared surface this ticket does not own, and the sidebar chip it DOES
+ * need (`.sidebar-nav .nav-badge`) already exists there.
+ *
+ * Every value is an `app/globals.css` token — no eyeballed hex or spacing. The
+ * row is the web cut of mobile's Alerts row (`src/app/(tabs)/alerts.tsx`):
+ * read rows flat on cream, unread rows raised on white with a green glyph.
+ */
+
+.screen {
+  padding: 32px 40px 60px;
+  max-width: var(--content-max);
+  width: 100%;
+}
+
+/* Title and "Mark all read" on one baseline. The action is right-aligned so it
+   sits over the row dots rather than crowding the serif title. */
+.head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.title {
+  /* .section-title-web supplies the serif face/size; only the shared bottom
+     margin is dropped, because .head owns the spacing here. */
+  margin: 0;
+}
+
+.markAll {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--brand-green);
+  cursor: pointer;
+}
+
+.markAll:hover {
+  color: var(--brand-green-dark);
+  text-decoration: underline;
+}
+
+/* The populated-list error (a failed mark-read), pinned above the rows. */
+.errorBanner {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--red);
+}
+
+/* --- the list ------------------------------------------------------------ */
+
+.list {
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 18px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  /* Read rows sit FLAT on the cream canvas. */
+  background: var(--cream);
+  font-family: var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Unread rows lift off the canvas onto white — the whole "what's new" signal,
+   carried by ground rather than by a second colour. */
+.rowUnread {
+  background: var(--white);
+}
+
+/* The separators are BETWEEN rows, so the last one is dropped — otherwise it
+   hangs as a stray rule inside the list's rounded bottom edge. */
+.list li:last-child .row {
+  border-bottom: 0;
+}
+
+.row:hover {
+  background: var(--cream-dark);
+}
+
+.row:focus-visible {
+  outline: 2px solid var(--brand-green);
+  outline-offset: -2px;
+}
+
+/* --- the leading glyph --------------------------------------------------- */
+
+.glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: var(--radius-pill);
+}
+
+.glyph :global(.ic) {
+  width: 17px;
+  height: 17px;
+}
+
+.glyphUnread {
+  background: var(--brand-green-soft);
+  color: var(--brand-green);
+}
+
+.glyphRead {
+  background: var(--cream-dark);
+  color: var(--muted-light);
+}
+
+/* --- the row's text column ----------------------------------------------- */
+
+.rowBody {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+/* Read titles recede to --muted; unread titles come forward to --ink. */
+.rowTitle {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.rowTitleUnread {
+  color: var(--ink);
+}
+
+.rowText {
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.time {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--muted-light);
+}
+
+/* The unread dot. Nudged down so it aligns with the title's cap height rather
+   than floating against the top padding. */
+.dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  margin-top: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--brand-green);
+}
+
+/* --- load more ------------------------------------------------------------ */
+
+.more {
+  display: flex;
+  justify-content: center;
+  margin-top: 18px;
+}
+
+/* --- empty / error / loading --------------------------------------------- */
+
+.message {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 60px 20px;
+  text-align: center;
+}
+
+.emptyGlyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  margin-bottom: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--brand-green-soft);
+  color: var(--brand-green);
+}
+
+.emptyGlyph :global(.ic) {
+  width: 25px;
+  height: 25px;
+}
+
+.messageTitle {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.messageBody {
+  margin: 0;
+  max-width: 340px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.skeleton {
+  height: 68px;
+  margin-top: 10px;
+  border-radius: var(--radius-md);
+  background: var(--cream-dark);
+}

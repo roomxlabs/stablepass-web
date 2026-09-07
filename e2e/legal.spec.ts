@@ -29,7 +29,12 @@ import { test, expect, type Page } from "@playwright/test";
  */
 
 const SHOT_DIR = ".rx/review";
-const DOCUMENTS = ["privacy", "terms"] as const;
+// ENG-1041 added delete-account. It joins this loop deliberately: the whole
+// point of that page is that a Play reviewer can OPEN the URL, so its 200, its
+// emitted canonical and its readability with scripting off all have to be
+// exercised against a real server rather than inferred from a rendered
+// component.
+const DOCUMENTS = ["privacy", "terms", "delete-account"] as const;
 const ALIASES = ["cancellation", "acceptable-use"] as const;
 
 const BANNED = ["This preview shows", "will be supplied by stablepass", "loaded as its own page before launch"];

@@ -93,8 +93,25 @@ describe("robots.txt is host-aware", () => {
     expect(await robots()).toEqual({ rules: [{ userAgent: "*", disallow: "/" }] });
   });
 
-  it("disallows everything on the marketing host while the flag is off", async () => {
+  /**
+   * ENG-1041 changed this one case. The blanket `Disallow: /` now carries an
+   * `Allow:` for the account-deletion page Google Play's Data Safety form
+   * requires — without it a crawler may not fetch the page at all, so the
+   * page's own `robots: { index: true }` would never be read. `Allow` wins on
+   * longest-match, which is how one path is carved out of a site-wide
+   * disallow. Everything else on the host stays disallowed.
+   */
+  it("disallows everything on the marketing host except the deletion page", async () => {
     requestHost = "stablepass.co";
+    expect(await robots()).toEqual({
+      rules: [{ userAgent: "*", allow: ["/legal/delete-account"], disallow: "/" }],
+    });
+  });
+
+  it("keeps the deletion-page exemption off the member host", async () => {
+    // /legal/* renders on the app host too; its canonical is the apex, so the
+    // app copy must not be crawlable and compete with the apex copy.
+    requestHost = "app.stablepass.co";
     expect(await robots()).toEqual({ rules: [{ userAgent: "*", disallow: "/" }] });
   });
 

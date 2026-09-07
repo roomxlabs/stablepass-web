@@ -2,16 +2,14 @@ import type { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
 
 import {
-  formatLastUpdated,
   isLegalDocumentSlug,
   LEGAL_SLUGS,
   legalCanonicalUrl,
   readLegalDocument,
   redirectTargetFor,
-  type LegalBlock,
 } from "@/lib/legal";
 
-import styles from "../legal.module.css";
+import LegalDocumentShell from "../legal-document";
 
 /**
  * `/legal/[slug]` (ENG-590 / W4).
@@ -67,28 +65,6 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   };
 }
 
-function Block({ block }: { block: LegalBlock }) {
-  switch (block.kind) {
-    case "heading":
-      return block.level === 2 ? (
-        <h2 className={styles.section}>{block.text}</h2>
-      ) : (
-        <h3 className={styles.subsection}>{block.text}</h3>
-      );
-    case "list":
-      return (
-        <ul className={styles.list}>
-          {block.items.map((item, index) => (
-            // Index, not the text: two identical bullets are legal copy, not a bug.
-            <li key={index}>{item}</li>
-          ))}
-        </ul>
-      );
-    case "paragraph":
-      return <p className={styles.body}>{block.text}</p>;
-  }
-}
-
 export default async function LegalPage({ params }: PageProps) {
   const { slug } = await params;
 
@@ -107,18 +83,5 @@ export default async function LegalPage({ params }: PageProps) {
 
   const document = readLegalDocument(slug);
 
-  return (
-    <main className={styles.page}>
-      <div className="wrap">
-        <article className={styles.doc}>
-          <span className={`eyebrow ${styles.kicker}`}>Legal</span>
-          <h1 className={styles.title}>{document.title}</h1>
-          <p className={styles.updated}>Last updated {formatLastUpdated(document.lastUpdated)}</p>
-          {document.blocks.map((block, index) => (
-            <Block key={`${block.kind}-${index}`} block={block} />
-          ))}
-        </article>
-      </div>
-    </main>
-  );
+  return <LegalDocumentShell document={document} />;
 }

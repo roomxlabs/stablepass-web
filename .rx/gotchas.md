@@ -24,12 +24,51 @@ is an **early renewal** (a one-off PaymentIntent), not a `409 already_active` �
 `/checkout` therefore no longer redirects active members away. `docs/specs/*`
 still describes the old cancel/payment-method endpoints; those docs are stale.
 
-## `.rx/mockups.md` points at a DEAD path — the real mockups are outside the repo
-The manifest says `../docs/dev-handover/mockups/web/`. That directory does not exist.
-The real HTML mockups live at `<workspace>/dev-handover/StablePass-mockups/mockups/web/screens/`
-(e.g. `04-checkout.html`). `ls` the path before building a screen; don't trust the
-manifest until the fix lands. Same for the `docs/dev-handover/mockups/web/*` claim in
-`CLAUDE.md` § Design source.
+## Mockups live OUTSIDE the repo — `.rx/mockups.md` is now right, `CLAUDE.md` is not
+**Corrected 5 Sep 2026 (ENG-991).** This entry used to send people to
+`<workspace>/dev-handover/StablePass-mockups/mockups/web/screens/`. That path has never
+existed — `ls` fails on it. `.rx/mockups.md` was fixed by ENG-612 and is now the source
+of truth: the real mockups are at `<workspace>/06-stage1-design/mockups/web/screens/`
+(verified 5 Sep 2026), and the marketing mockup at
+`<workspace>/10-marketing-site/deploy/src/mockup.html`.
+
+`CLAUDE.md` § Design source still claims `docs/dev-handover/mockups/web/*` — **that one
+is still stale.** Trust `.rx/mockups.md`, and `ls` before building.
+
+## Resolving anything OUTSIDE the repo: walk from the git common dir, never just cwd
+`process.cwd()` is the worktree, and rx workers run in one — often `~/.claude/jobs/<id>/`,
+entirely outside the repo tree, where walking up never reaches the workspace. Use:
+
+```ts
+execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd })
+// -> "<main checkout>/.git"; path.dirname() -> the real repo root, from ANY worktree
+```
+
+`test/support/mockup.ts` is the shared implementation — import it rather than writing a
+fourth copy. (`--path-format` needs git >= 2.31; wrap in try/catch and fall back to the
+cwd walk.)
+
+## A test guard that SKIPS when its fixture is missing will report a false green
+ENG-991: the marketing fidelity guards resolved their mockup by walking up from cwd, so
+from `~/.claude/jobs/` they vanished — `marketing-shell.test.tsx` went from "36 tests,
+1 failed" to **"29 tests, all green"**, and `marketing-home.test.tsx` from "1 FAILED" to
+"PASSED". A real red disappeared and the run reported success. Rules:
+
+- **Never `describe.skipIf` / `it.skipIf` on fixture availability.** Call a
+  `mockupOrThrow()`-style helper INSIDE the test body so the test still registers and
+  goes red with a diagnostic.
+- **Pin the guard from outside the block it guards** — a meta-assertion living inside
+  the block vanishes with it.
+- **Pin execution, not just registration.** vitest runs a *skipped* describe's callback
+  at collection time, so `describe.skipIf` still registers every test while running
+  none. A registration count alone passes that. `marketing-shell.test.tsx` has both pins.
+- Note a `skipIf` keeps the test COUNT identical, so "same count from both locations" is
+  not sufficient evidence — compare the pass/fail SET.
+
+## This repo has no test workflow in CI
+The only checks on a PR are Vercel builds; `npm test` never runs on CI. The suite is
+whatever the author ran locally — which is exactly why a guard that silently no-ops in a
+worktree went unnoticed. State the suite result explicitly in the PR body.
 
 ## Screenshotting a screen whose data needs an unconfigured third party
 With no `STRIPE_*` keys the checkout BFF 502s before it can resolve a price or a mode,
@@ -1633,3 +1672,648 @@ ticket. Putting that id in a unit test is a real object id in git.
 - **Cause:** remaining intro months are discounted invoices Stripe still has to issue, not calendar months from today. `confirmPayment` only means the card was charged; `hasAccess` flips when stripe-webhook writes the row.
 - **Do this:** `priceChangesOn` is always `null`. Account “Then” is `A$19.00 per month`. After pay, poll `GET /api/feed?limit=1` until 200, then `location.assign("/explore")`. 3DS `return_url` is `/explore?paid=1` and waits the same way. Timeout still navigates (fail-closed on the URL). Do not invent a change-over date from `current_period_end + remaining`.
 
+## The marketing copy guardrail sweeps the WHOLE build — comments included (ENG-953, 4 Sep 2026)
+
+`test/marketing-marquee.test.ts` greps `.next/{server,static}` for the
+`CONFIRMATION_COPY` fragments. It is **not** scoped to `app/(marketing)/`: a
+phrase from that list anywhere in the app fails the build-artifact sweep. A
+forgot-password confirmation sentence tripped it.
+
+Then the fix tripped it a second time. `.map` files are in the sweep and
+sourcemaps carry **source comments**, so a comment *explaining* that the banned
+wording was removed — quoting it to be helpful — fails identically.
+
+- **Do this:** before writing any "we've sent it" confirmation copy, read
+  `CONFIRMATION_COPY` in that test. Describe the banned phrases; never quote
+  them, in copy or in a comment.
+- The test is `it.skipIf(!existsSync('.next'))`, so it is **silent until you
+  build**. `npm test` alone will not catch it — run the documented gate
+  (`typecheck && lint && build && test`), and rebuild after changing copy or a
+  stale `.next` will keep reporting the old result.
+
+## Supabase password-recovery links: PKCE is the default and it breaks cross-device (ENG-953, 4 Sep 2026)
+
+`supabaseServer()` is a `@supabase/ssr` client, which forces **PKCE**. So
+`resetPasswordForEmail` mints a `pkce_` token, and the return trip carries
+`?code=` — exchangeable **only** by the browser holding the
+`…-code-verifier` cookie. Request the reset on a laptop, open the mail on a
+phone, and the exchange fails. Worse, Supabase's `/auth/v1/verify` consumes the
+emailed token *before* redirecting, so retrying in the original browser fails
+too: the member is stuck in a loop of "expired" screens.
+
+- **Do this:** the durable shape is `?token_hash=…&type=recovery`
+  (`verifyOtp`, no verifier, any device). It requires the Supabase recovery
+  **email template** to use `{{ .TokenHash }}` and point at the app — dashboard
+  config, so a **blocking deploy step**, not a code change.
+- Also dashboard config: the **redirect allow-list** must contain the
+  `redirectTo` or Supabase silently substitutes the project Site URL and the
+  link never reaches `/reset-password` — with every test still green. Verified
+  live: a non-allow-listed value came back rewritten to the bare Site URL.
+- `/reset-password` handles both shapes, and gives the PKCE-mismatch case its
+  own screen — telling that member the link "expired" sends them round a loop
+  that cannot succeed.
+
+## `updateUser({ password })` needs no current password — a session is NOT authorisation (ENG-953, 4 Sep 2026)
+
+Gating a set-new-password screen on `getUser()` returning a user turns it into a
+change-password screen with no re-authentication: any live session (unattended
+browser, or a stolen cookie — the `@supabase/ssr` session cookie is **not**
+httpOnly) becomes a permanent takeover, and single-device login (guardrail #5)
+then locks the real member out silently. Three independent reviews reproduced
+this on the first draft.
+
+- **Do this:** gate on evidence of the *recovery* specifically — an httpOnly,
+  short-lived marker cookie set by the exchange handler
+  (`app/reset-password/recovery-cookie.ts`), or the session's `amr` containing
+  `recovery`. Never on "is someone signed in".
+- Note guardrail #1 says tokens live in httpOnly cookies. **They do not** —
+  `createBrowserClient` requires a JS-readable cookie and ~10 components depend
+  on it. Don't write comments asserting the guardrail holds; it needs its own
+  reconciliation ticket.
+
+## A route that must not enumerate users needs a timing floor, not just a constant body (ENG-953, 4 Sep 2026)
+
+`POST /api/auth/forgot-password` returned an identical 200 for every input and
+was still a one-request oracle: `await`ing the Supabase send made a registered
+address 2.5-5x slower than an unknown one, with **non-overlapping**
+distributions. `curl -w '%{time_total}'` is as scriptable as reading a status.
+
+- **Do this:** pad every response to a fixed floor (see `DEFAULT_RESPONSE_FLOOR_MS`).
+  Do **not** detach the send with `after()`/`waitUntil` — the send is what writes
+  the PKCE verifier cookie onto that response, and detaching silently breaks the
+  `?code=` exchange.
+- Read the env floor override **per call**: a module-scope `process.env` read
+  happens at import, which ESM hoists above a test file's own statements, so the
+  override never applies and every case waits the full floor.
+- Such a route is also CSRF-able (`req.json()` ignores Content-Type, so a
+  cross-site `<form enctype="text/plain">` drives it). That plants an
+  attacker-known PKCE verifier in the victim's browser → login CSRF. Require
+  `application/json` and reject cross-site `Sec-Fetch-Site` **before** touching
+  Supabase, and still answer 200 so the guard adds no signal.
+- **The test override that neutralises the floor also neutralises its tests
+  (found in review, 5 Sep).** `test/forgot-password-route.test.ts` sets
+  `PASSWORD_RESET_FLOOR_MS = "0"` before importing the route — correct, or its
+  40-odd cases each cost 1.5s. But that made the floor unobservable to *every*
+  test in the file: deleting the pad from the route left the whole suite green.
+  A guardrail whose only tests run with it switched off is not pinned at all.
+  **Do this:** when a suite disables a production safety via env, pin that safety
+  in a SEPARATE test file that sets its own NON-ZERO value — see
+  `test/forgot-password-floor.test.ts`. Then mutation-test it: delete the
+  production code and confirm the new test actually goes red.
+- **Do NOT reason about that split as "vitest isolates the env".** It does not.
+  Vitest gives each file its own MODULE registry (so the route is re-imported and
+  re-reads the value), but `process.env` is process-global and workers are reused
+  across files. The invariant that actually holds is "**every** file importing
+  this route sets `PASSWORD_RESET_FLOOR_MS` itself" — add a third importer that
+  sets nothing and it inherits whatever ran before it, which is order-dependent
+  and silent. Use `vi.stubEnv` + `vi.unstubAllEnvs` if you need one.
+- **A floor must be measured on a MONOTONIC clock.** `Date.now()` truncates to
+  integer ms, so two calls straddling a tick report 1ms for microseconds of real
+  work and the pad lands a millisecond short — enough to make the floor's own
+  test fail ~20% of the time on an idle machine (and pass under load, because
+  timer overshoot hides it). It is also wall-clock: an NTP step mid-request can
+  produce a huge `elapsed` that skips the pad entirely. Use `performance.now()`.
+
+## Token-type smuggling has TWO branches to close, not one (ENG-953, 5 Sep 2026)
+
+`/reset-password/confirm` pinned `type === "recovery"` on the `token_hash`
+branch, and the `?code=` branch was left handing any PKCE code to
+`exchangeCodeForSession` unchecked — so a member's own OAuth or magic-link code,
+spent against that URL, bought the httpOnly recovery marker and with it the
+"set a new password without knowing the old one" form.
+
+- **Do this:** on the PKCE branch require `redirectType === "recovery"` from the
+  exchange result. `resetPasswordForEmail` stores the verifier with a
+  `/recovery` suffix (`getCodeChallengeAndMethod(..., isPasswordRecovery)`), and
+  `_exchangeCodeForSession` splits it back off and returns it — the same signal
+  auth-js uses to pick `PASSWORD_RECOVERY` over `SIGNED_IN`.
+- The field is real at runtime but **absent from the published type**, so it
+  needs a narrow cast. That fails closed (a missing field refuses every link),
+  which is the right direction here.
+- When a route grants a capability, audit **every** branch that reaches the
+  grant. Fixing the branch the reviewer happened to look at is not the fix.
+
+## A suffix match must never decide an origin (ENG-953, 5 Sep 2026)
+
+`publicOrigin()` in the forgot-password route reached its allow-list only on the
+*second* branch. The first branch — "is this a developer machine?" — returned
+early with the **raw** header interpolated, so it reached neither the allow-list
+nor any scheme check. It was not gated on `NODE_ENV`, so it was live in
+production, and its output is the origin of a password-reset link.
+
+- `isLocalHost` from `lib/hosts` matches the **suffixes** `.local` and
+  `.localhost`. That is correct for "which URL space does this host serve", and
+  catastrophic for "may this host build a URL": `attacker.com/.local` ends with
+  `.local`, so it took the local branch and produced
+  `http://attacker.com/.local`. `x-forwarded-proto` was copied through unread,
+  so `javascript` produced a `javascript:` origin.
+- **Do this:** for anything that becomes an origin, match the host **exactly**
+  against a set, rebuild the value from the *normalised* host plus a separately
+  validated numeric port, and choose the scheme yourself — never interpolate a
+  header. Gate any developer affordance on `NODE_ENV !== "production"` **as
+  well as** validating it; the gate and the validation are not substitutes.
+- **The review lesson:** the first pass "confirmed" this route safe by testing
+  `evil.attacker.example`, which takes the *other* branch. A test that never
+  enters the vulnerable branch proves nothing about it. Enumerate the branches,
+  then write a case that lands in each.
+
+## A dev-server `.next` makes a build guard test the WRONG bundle (ENG-957, 5 Sep 2026)
+
+`test/marketing-marquee.test.ts`'s "ships no confirmation copy in the built
+output either" is gated `it.skipIf(!existsSync(REPO/.next))`. That is meant to
+mean "run this where the documented `build && test` gate runs". It actually
+means "run this whenever a `.next` directory exists" — and **Playwright leaves a
+`next dev` build behind**. A dev bundle is unminified and carries source text
+the production bundle does not, so the guard failed on a branch that had changed
+nothing in marketing, purely because the e2e run happened first.
+
+- **Symptom:** capturing screenshots (any `npx playwright test`) adds one
+  marketing failure that a bare `npm test` on the same commit does not have.
+  Order-dependent, and it looks like the FE change caused it.
+- **Do this:** run the gate in the documented order — `rm -rf .next &&
+  npm run build && npm test`. Never diff a suite result against a baseline
+  unless both sides have the *same kind* of `.next` (both production, or
+  neither). The like-for-like baseline is a worktree at the **same path depth**
+  (see below) with the same build state.
+- **Same family as ENG-991:** these marketing guards silently change behaviour
+  with the environment rather than with the code. `marketing-shell` /
+  `marketing-home` additionally resolve their mockup by walking up from the
+  checkout, so they SKIP in a worktree outside the repo (e.g. `/tmp`) and RUN in
+  one under `.claude/worktrees/`. A `/tmp` baseline therefore "passes" and
+  frames the real, pre-existing red as yours. Both of those fail on an
+  untouched `feature/launch-v1` when the guard actually runs — that is ENG-991's
+  territory, not a regression in whatever ticket happens to notice it.
+
+## A server component cannot CALL an export of a `"use client"` module (ENG-959)
+
+Rendering a client component from a server component is fine; **calling a plain
+function it exports is not**. It fails only at request time, with
+
+    Attempted to call hasLinkableWebsite() from the server but
+    hasLinkableWebsite is on the client.
+
+- **Symptom:** the page 500s in the browser while `npm run typecheck` is clean
+  and the jsdom unit tests pass — those tests mock the client module, so the RSC
+  boundary is never exercised. Only Playwright caught it.
+- **Cause:** the helper lived beside the component that used it
+  (`app/(member)/trainers/[id]/website-link.tsx`), which carries `"use client"`
+  for its onClick. A second, *server* caller then imported the helper from there.
+- **Do this:** a pure helper shared by a client component and a server component
+  belongs in a directive-free `lib/` module both sides import — not in either
+  component's file, and never copy-pasted into the second caller. Pin it with a
+  guard test that reads the module and asserts it has neither a `"use client"`
+  directive nor any `import` (anchor the directive regex to a bare line — the
+  module's own comment will quote the phrase while explaining the rule).
+
+## A shared `*_COLUMNS` constant can change an API response from another file (ENG-959, ENG-958)
+
+`HORSE_PROFILE_COLUMNS` (`lib/horse/profile.ts`) has **two** consumers: the horse
+profile page and `app/api/horses/[id]/route.ts`. The route returns the embedded
+`trainer` object **verbatim**, so any field added to `trainer:trainer_id(...)` is
+silently published in that route's JSON — a contract change made by editing a
+different file, with nothing in front of it.
+
+Two tickets hit this in the same week, from different angles:
+
+- **ENG-959** wanted `trainer.website_url` for a shares CTA on ONE screen, and
+  did NOT widen the embed — that screen reads the column itself.
+- **ENG-958** needed `trainer.photo_url` on the profile page and DID widen it,
+  which put a bare private-bucket **object path** into the BFF envelope — the
+  exact thing `lib/storage/photos.ts` exists to prevent. The suite stayed green,
+  because `test/horses-route.test.ts` asserted only TOP-LEVEL envelope keys.
+
+**Do this:** before widening a shared projection, `grep` every consumer and check
+what each one *returns*, not just what it reads. A column ONE screen needs should
+be read by that screen. Adding a column the route field-picks (a `horse` column)
+is safe; adding one it passes through is not — and if you must, strip or sign it
+in the envelope and pin the object's key set with a **literal** assertion. A test
+that compares against the re-imported constant guards nothing: widening the
+constant widens the assertion with it, and the guard passes on any value.
+
+## `horse_training_status_check` now admits only six values (ENG-959)
+
+The 1 Sep 2026 migration merged the legacy training-yard spellings. Locally the
+constraint is `spelling | breaking_in | pre_training | in_training | racing |
+retired`, so **seeding `farm_training`/`city_training` in an e2e fails with
+23514**. Cover the legacy collapse at unit level, where the value can still
+exist, and keep those switch cases in production code for clients rendering a
+cached pre-migration row.
+
+## `text-overflow: ellipsis` does NOTHING on an `inline-flex` pill (ENG-958, 5 Sep 2026)
+
+**Symptom:** `.post-badge` was given `max-width` + `overflow:hidden` +
+`white-space:nowrap` + `text-overflow:ellipsis`, and a long label still clipped
+**mid-word with no ellipsis** — which reads as deliberate, so it survived review,
+six passing e2e tests and a committed screenshot.
+
+**Cause:** `.post-badge` is `display: inline-flex` (it needs the flex row for its
+`::before` dot). `text-overflow` only applies to a **block container that
+directly holds the overflowing inline content**; inside a flex container the copy
+becomes an *anonymous flex item* and the ellipsis is never drawn.
+
+**Do this:** put the copy in its own child (`.post-badge-text`) and move
+`overflow/white-space/text-overflow/min-width:0` onto **that**, leaving only
+`max-width:100%; min-width:0; overflow:hidden` on the pill. This is what mobile
+already does — its pill is a `View` whose copy is a `<Text numberOfLines={1}>`
+child. `.reel-head .reel-horse` was already the correct idiom in this file.
+
+**And pin it with a fixture that actually overflows.** Every labelled fixture in
+`app/preview/components/page.tsx` was short enough to fit the column, so nothing
+could catch this. A truncation guard that never truncates passes vacuously — the
+e2e now asserts `scrollWidth > clientWidth` FIRST, then the ellipsis.
+
+## `getComputedStyle().borderRadius` returns a PERCENTAGE verbatim (ENG-958)
+
+Asserting a circle by resolving `50%` against the box (`parseFloat(radius) ≈
+width/2`) FAILS: Chrome reports the literal `"50%"`, so `parseFloat` yields 50 and
+a 28px box compares against 14. Compare the **token** (`toBe("50%")` for the
+circle, `toBe("14px")` for the box) — the two are distinguishable precisely
+because one is a percentage and the other is not.
+
+## The preview gallery's fixtures are SHARED — a new one can break a sibling's test (ENG-958)
+
+`e2e/eng-613-*` locates the stable-update card by the phrase `"Quiet week here"`.
+A new ENG-958 update fixture that reused that opening made the locator match two
+cards and fail as a Playwright strict-mode violation — a red spec in a file the
+diff never touched. Same class: an unscoped `filter({ hasText: "Winx" })` matches
+this round's card *and* the round-5 card it was spread from.
+**Do this:** give a new fixture distinctive copy, and scope every locator in a new
+spec to that round's own `data-testid` section.
+
+## Recurring — grill-time prevention
+
+### Never claim a mutation test you did not run (ENG-1016, 5–6 Sep 2026)
+
+A PR body asserts *"revert X → N tests fail"*, the reviewer reads the table, believes the guard is
+pinned, and approves. The guard is not pinned. This class landed **eight verified times across the
+four repos on 5–6 Sep 2026 alone** — every one re-checked in-repo while writing this, not taken on
+report. Four of the five originally recorded here were caught by the author's own fresh-eyes pass and
+fixed inside the same PR; all eight are fixed at `feature/launch-v1` today, so the merged state is
+clean — but every one of them was *written down as run* before it was run. That is the failure being
+recorded here.
+
+Count with care: an earlier draft of this entry said *five*, having stopped counting at the instances
+that fit the two shapes it had named. The number was not wrong because someone miscounted — it was
+wrong because the taxonomy below was treated as the boundary of the class.
+
+**1. Never write a mutation-test table from reasoning.** Run `delete → test → restore → test` and
+paste both counts. If you did not run it, do not claim it. admin #78 (ENG-950) claimed *"remove
+`.in("status", ...)` → race test fails (`expected 200 to be 409`)"*. Deleting
+`.in("status", ["draft","scheduled"])` from the route actually left the publish suite **12/12
+green** — `supabase-fake`'s `in` was a no-op. The claim only became true at commit `32117af`, and
+the PR body now says so in exactly those words.
+
+**2. Reviewer's rule: re-checking a corrected claim means re-RUNNING the mutation, not re-reading
+the prose.** The prose was confidently wrong the first time. mobile #112 (ENG-954) is the case: the
+original claim was, in the author's own words, "honest but coarse" — every existing test reached
+`stripUrlQuery` through `redactText`, which percent-decodes **first**, so the `%3F|%23` alternation
+was pinned by nothing and deleting it left **37/37 green**. No amount of re-reading that sentence
+would have surfaced it; running it did. The fix was a `describe` block calling `stripUrlQuery`
+directly.
+
+**3. Apply the mutation, then `git diff` to confirm you changed the line you meant** — before you
+believe a green result. A mutation that silently no-ops is indistinguishable from an un-pinned
+guard, and it lies in *both* directions: it makes a real guard look vacuous as easily as it lets a
+vacuous one look pinned. Prefer a **python exact-match edit** over `perl -0pi -e 's/…/…/'`: an
+escaped-regex payload silently substitutes nothing, and a non-global substitution hits the **first**
+match, which is usually a doc comment rather than the code. That bit the integrate loop twice in one
+day, in opposite directions.
+
+**4. Two fixture smells that make an assertion vacuous.**
+
+- **A seed that already satisfies the assertion in both directions.** admin #84 (ENG-963) seeded
+  `[t1 (2 horses), t2 (1 horse)]` and asserted `horses desc === ["t1","t2"]` — which is just the
+  fetch order, so deleting `sortTrainerRows` outright left the suite green. The fix reorders the
+  seed so that **no** asserted order equals it; the merged test carries a `SEED ORDER IS
+  LOAD-BEARING` comment explaining why. (The suite here is 1321 tests / 75 files — if you are
+  quoting a count, re-measure it rather than copying one from another PR body.)
+- **`toContainEqual`/`toContain` where `toEqual`/`toBe` is meant.** A containment matcher passes on a
+  **superset** — i.e. on the leak itself. admin #79 (ENG-993) pinned a filter-leak test with
+  `expect(second.filters).toContainEqual({ column: "archived_at", value: null, op: "is" })` in
+  commit `c3d075d`: that passes on an array that has picked up extra entries, which is precisely the
+  bug the test was written to catch. Replaced with `expect(first.filters).toEqual([...])` in
+  `af4c5e8`.
+
+**5. Pin with literals, not by re-importing the constant under test.**
+`expect(x).toBe(IMPORTED_CONST)` is vacuous *with respect to that constant's content*: widening the
+constant widens the assertion along with it. The cleanest contrast is two PRs in the same repo,
+days apart:
+
+- **web #90 (ENG-958) — wrong.** `test/horses-route.test.ts` imports `HORSE_PROFILE_COLUMNS` and
+  asserts `expect(horseSelectMock).toHaveBeenCalledWith(HORSE_PROFILE_COLUMNS)` — the same constant
+  the route uses to build its own `.select()`. The advertised `photo_url` strip therefore survives
+  deletion with the suite green **and** `tsc` clean.
+- **web #91 — right.** `test/horse-status-scale.test.tsx` treats the constant as the *subject* and
+  pins it with literals: `expect(HORSE_PROFILE_COLUMNS).toContain("shares_for_sale")` and
+  `expect(trainerEmbed).not.toContain("website_url")`.
+
+**6. The assertion's subject is source text, not behaviour.** admin #83 (ENG-984), at
+`7a65b97:lib/analytics/reset.test.ts:108`:
+
+```js
+it("still defaults to a dry run and only deletes behind --confirm", () => {
+  // Cheap textual guard on the two properties that make this script safe.
+  expect(cliSource).toMatch(/argv\.includes\("--confirm"\)/);
+  expect(cliSource).toMatch(/Dry run — no rows deleted\./);
+});
+```
+
+`cliSource` is a `readFileSync` of the script (declared at `:82`), so the body greps a file instead
+of running it. **This survived deleting both safety gates of a script that wipes four production
+tables** — the highest-severity instance in the set. The signature worth learning: **a test title
+naming runtime behaviour over a body that greps source.** Fixed at base by a real behavioural gate,
+`reset CLI — GATE B: dry run is the default`, which asserts on the rows actually deleted.
+
+**7. The harness supplies the thing the claim attributes to production code.** admin #85 (ENG-964),
+at `4f2e75f:app/(dash)/posts/PostActions.test.tsx:190`:
+
+```jsx
+// ...and the layout mounts the single region alongside them.
+render(<ToastRegion />);
+```
+
+The comment credits `layout.tsx`; the line directly under it mounts the region **in the harness**.
+Every other toast test mounted it the same way, so nothing pinned the layout's own mount and
+deleting `<ToastRegion />` from `layout.tsx` left the suite green. Fixed at base twice over: the
+comment now states exactly what the harness does and does not prove, and `app/(dash)/layout.test.tsx`
+pins the layout mount for real, mutation-proven.
+
+**The shapes seen so far — an open list, not a checklist.** Do **not** stop looking when an instance
+matches none of these; an incomplete taxonomy asserted as complete is worse than none, because it
+tells you when to stop:
+
+- **a fixture that satisfies the assertion either way** — ENG-963 (pre-sorted seed), ENG-954
+  (assertion routed through a decoder), ENG-993 (containment matcher);
+- **a mock that discards the thing being asserted** — ENG-950 (`supabase-fake`'s `in` was a no-op),
+  ENG-958 (the projection pinned against its own imported constant);
+- **an assertion whose subject is source text, not behaviour** — ENG-984 (6 above);
+- **a harness that supplies the thing the claim attributes to production code** — ENG-964 (7 above);
+  and
+- **a wait that resolves on a weaker proxy than the precondition it stands for** — ENG-1024, where
+  `findByTestId("photo-crop-dialog")` proves only that the dialog MOUNTED, never that it is USABLE,
+  so the click that followed took `apply()`'s `if (!loaded) applyAsIs()` path and `cropToBlob` never
+  ran at all.
+
+ENG-993 fixed the *mechanism* behind the second shape in `supabase-fake` (8 query methods that
+silently no-opped). Nothing prevents any of these from being **claimed** without being run — which
+is what this entry exists to prevent.
+## Client `/api/*` calls go through `apiFetch`, not bare `fetch` (ENG-961)
+`lib/api/client.ts` wraps `fetch` and centrally handles a 401 from a member BFF
+call (single-device eviction → clear session → `/signin?reason=signed-out-elsewhere`).
+Any NEW client-side `/api/*` call should use `apiFetch` or it silently opts out of
+eviction handling. Two call sites deliberately stay on bare `fetch`:
+`app/start/trial-start-form.tsx` and `app/forgot-password/forgot-password-form.tsx`
+— they are the SIGNED-OUT flows, and `/api/auth/*` is excluded by the wrapper too.
+
+**Do not widen the trigger to 402.** `GATED()` is a lapsed *subscription*, not a dead
+session (guardrail 3); signing those members out strands them with no way to reactivate.
+Every 401 under `app/api/*` is `UNAUTH()` behind an `if (!user)` guard — there is no
+route that 401s for a non-session reason, which is what makes the status a safe signal.
+
+## A `fetch` wrapper must forward the ORIGINAL argument shape
+`apiFetch(input, init)` calling `fetch(input, init)` with `init === undefined` passes a
+SECOND argument, and `fetch.mock.calls` then records `[url, undefined]`. That broke
+`test/post-media-client.test.ts`, which asserts `toHaveBeenCalledWith(url)` exactly.
+Branch on `init === undefined` and call `fetch(input)` — a drop-in wrapper has to be
+indistinguishable from `fetch` at the call site.
+
+## Member nav is plain `<a>`, so EVERY *shell* screen change is a full page load (ENG-961)
+`app/(member)/sidebar.tsx` renders `<a href>`, not `next/link`. So every hop taken
+through the sidebar — Explore -> Saved -> a profile — tears down the document and
+the JS heap, and the destination screen re-runs its server component and re-fetches
+from scratch.
+
+**One carve-out, and it is not "anywhere in the member shell":** `next/link` is
+imported in exactly one member file, `app/(member)/shares/shares-list.tsx:23`, used
+at `:281` for the row link to a horse profile. That hop IS a client-side transition
+and the module heap DOES survive it. It changes nothing about bookmarks (`/shares`
+holds no bookmark state), but do not restate the absolute — check with
+`grep -rn "next/link" "app/(member)"` before relying on "no client transitions
+exist", because an over-broad absolute here is how the next wrong conclusion gets
+built.
+
+Two consequences worth knowing before building anything "cross-screen":
+
+1. **A module-level store/bus/cache CANNOT carry state between member screens.**
+   It does not survive the reload. ENG-961 originally ported mobile's
+   `subscribeBookmarkChanges` bus for cross-surface bookmark sync; it was inert on
+   web and was removed before merge. The mobile precedent transfers badly because
+   React Navigation keeps sibling tab screens MOUNTED, so a module-level Set
+   reaches them — App Router with plain anchors never does. The five screens
+   holding their own `bookmarked` (explore-feed, following-screen, saved-feed,
+   trainers/[id]/trainer-posts, horses/[id]/horse-posts) are never co-mounted:
+   one feed per route, no parallel/intercepting routes.
+
+2. **"Screen A does not reflect a change made on screen B" is usually NOT a bug
+   here** — each screen re-reads its own `bookmark`/`reaction`/`follow` rows on
+   mount, so the reload already shows fresh state. Reproduce such a report against
+   the running app before building a sync mechanism for it.
+   `e2e/eng-961-bookmark-journey.spec.ts` pins the real behaviour end to end
+   (save on a horse profile -> sidebar link -> the card is on /saved).
+
+If the shell moves to `next/link` more broadly, both points flip — revisit anything
+that relies on the reload.
+
+## An auth-provider outage can sign EVERY member out at once (ENG-961, residual)
+The 401 eviction in `lib/api/client.ts` trusts `UNAUTH()`, and every `app/api/*`
+route emits `UNAUTH()` from a bare `if (!user)` — **discarding the `getUser()`
+error**. A transient GoTrue outage therefore nulls `user` for everyone at the same
+time, so every logged-in member gets a 401 they did not earn, is signed out, and is
+told their account was used on another device. This is a real storm, not a
+hypothetical, and it belongs next to the trigger rules rather than only in a PR
+description.
+
+What keeps it survivable today: `signOut({ scope: "local" })` clears only the
+browser that saw the 401, so members simply sign back in — `scope: "global"` would
+have revoked their sessions on every device from one spurious 401, which is not
+recoverable by the member. Keep the scope local.
+
+The proper fix is upstream and not in this ticket: distinguish "no session" from
+"could not reach the auth provider" in the route guards and emit a 5xx for the
+latter, so the client never reads an outage as an eviction. Do that before widening
+the eviction trigger any further.
+
+## The web onboarding mockup is horses-only "Step 1 of 2" — there is no trainer step
+`06-stage1-design/mockups/web/screens/05-onboarding.html` has ONE step (pick horses,
+"2 minimum to continue") and no trainer picker; `_archive/` has no onboarding variant.
+Mobile onboarding is trainers → horses → notifications, so any "web onboarding parity"
+ticket that asks for a trainer step has **no backing design** and is `needs-spec` per the
+guardrail, not `ready`. Note also that the "Step 1 of 2" copy in `horse-picker.tsx` is
+aspirational — no step 2 screen or step routing exists in code.
+## A "remove one `.eq()`" ticket is usually THREE coupled sites, not one line
+ENG-960 (R8 shares reversal) named three files, each as a single line. Two were
+one line; `app/(member)/trainers/trainers-grid.tsx` was **four coupled sites**:
+the `TrainerRow` type, the explanatory comment, `shares_for_sale` inside the
+embedded `horses:horse!trainer_id(...)` projection, AND the client-side
+`horseCount` filter. Deleting only the projection column leaves the card
+reading **"0 horses"** for a for-sale-only stable while the roster one click
+away (fixed in `trainers/[id]/page.tsx`) lists three — the list looks fixed and
+the count silently still lies. Grep the whole file for the flag, not the one
+line the ticket cites, and pin the rendered COUNT in a test, not just the query.
+
+## Reversal tickets have a SECOND lock: the source-grep guard test
+`test/shares-segregation-guard.test.ts` asserts the exclusions **exist in
+source**. Removing them turns it red in a file no ticket lists in its surface.
+Any ticket reversing a documented rule must budget for inverting its guard.
+Two traps when you do:
+- The guard greps raw source, and your new code explains the removal in a
+  COMMENT that names the flag — so `expect(src).not.toMatch(/shares_for_sale/)`
+  fails on your own prose. Strip comments before matching (the file already has
+  a `strip()` helper for exactly this).
+- Invert it with a **positive anchor** (`.from("horse")`, `.eq("status",
+  "active")`) beside every negative one, or a file that failed to load passes
+  every `not.toMatch` vacuously — the false-green class this file already records.
+
+## `.rx/review/` PNGs: check the ticket's own e2e spec exists before assuming no harness
+The harness needs NO `.env.playwright` — `playwright.config.ts` passes the
+well-known local Supabase demo keys itself. It DOES need local Supabase already
+up (`curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:54321/rest/v1/`
+returns 200 when it is). That one curl is the whole pre-flight.
+
+## Web browse grids read UNBOUNDED until ENG-960
+`horses-grid.tsx` / `trainers-grid.tsx` had no `.limit()` at all, while mobile
+has capped every browse read at `BROWSE_PAGE_SIZE = 100` since ENG-424 and
+ENG-956's `shares-list.tsx` had already mirrored it as `SHARES_PAGE_SIZE = 100`.
+ENG-960 added `lib/browse.ts` (`BROWSE_PAGE_SIZE = 100`) for the two grids.
+The 60-item "Show more" PAGER originated in web PR #81 (`perf/query-batch`),
+which targets `main`, not `feature/launch-v1`. **That is no longer the state of
+this branch.** An earlier revision of ENG-960 shipped the cap with no pager,
+making row 101 unreachable; Naufal rejected it (6 Sep 2026) — nothing may be
+truncated — and ENG-960 then lifted the mechanism into `lib/browse.ts` for both
+grids. So on `feature/launch-v1` **every row is reachable via "Show more"**:
+neither grid carries a `.limit()`; both page with `.range()`. (Stated that way
+deliberately — reading only the merged branch you will find no `.limit()`
+anywhere, so "replaces `.limit()`" describes a moment, not the tree.)
+
+Two things to carry rather than re-derive. `splitBrowsePage()` over-fetches ONE
+probe row (`BROWSE_FETCH_LIMIT = BROWSE_PAGE_SIZE + 1`) and answers
+`hasMore: rows.length > BROWSE_PAGE_SIZE` — **not** `=== BROWSE_PAGE_SIZE`, which
+is the off-by-one PR #81 still carries and which offers "Show more" with nothing
+behind it when the total is an exact multiple of the page size. And the next
+offset is the RENDERED count, not the fetched count, so the probe row leaves no
+gap. Reuse `lib/browse.ts`; do not write a third copy of this.
+
+## A test can "pin" an invariant it never touches — check the fixture, not the title
+ENG-960 shipped a test titled *"INVARIANT: the pager can never outlive its
+roster"* whose comment said hoisting the Show-more button out of the
+`horses.length > 0` render gate would red it. It did not: the fixture supplied
+ZERO rows, so `splitBrowsePage` returned `hasMore: false` and the inner
+`{hasMore && (<button>)}` satisfied "no Show more" on its own, whatever the
+outer gate said. Deleting `horses.length > 0` left the whole 1367-test suite
+green. Renaming the test moved the false claim; it did not repair it.
+
+The shape to watch for: **an assertion satisfied by an inner guard tells you
+nothing about the outer one.** A negative assertion ("X is absent") is
+especially prone to this — absence is over-determined, so any one of several
+guards can produce it while the test appears to name a specific one. Fixing it
+meant asserting the gate's OWN effect (with no rows the `.onboarding-grid-web`
+container does not render at all), which is not reachable via `hasMore`.
+
+Corollary, learned the same day on the same file: **union protects the append;
+it does not keep the content true.** `.rx/gotchas.md` is `merge=union`, so a
+paragraph that was true when written lands verbatim on the launch branch long
+after it went stale. When you touch this file, re-read the paragraphs AROUND
+your edit and check they are still true of the merged tree — do not only append.
+
+## A shared helper introduced by an OPEN PR is not on your base (ENG-1038, 6 Sep 2026)
+
+**Symptom.** The ticket says "reuse `lib/browse.ts` — `splitBrowsePage()` / `browseRange()`, do not
+re-derive". You branch off `origin/feature/launch-v1`, import it, and the module does not exist.
+
+**Cause.** ENG-960 *extracted* those helpers, and ENG-960 is **PR #104, still open**. A worktree
+branched off the integration branch sees only **merged** work. This is the same blindness the
+migration-numbering note describes, one level up: it applies to any file an in-flight PR introduces,
+not just migrations.
+
+**Do this.** Do **not** re-cut the helper under a new name — that is how a codebase ends up with
+three paging variants that silently disagree on an off-by-one. Carry the file **byte-identical** from
+the open PR's branch and verify it:
+
+```bash
+git checkout origin/<their-branch> -- lib/browse.ts
+diff <(git show origin/<their-branch>:lib/browse.ts) lib/browse.ts && echo identical
+```
+
+An add/add merge of identical content resolves cleanly, so whoever merges second gets a no-op. Make
+**zero** edits to the carried file (an edit turns the clean add/add into a real conflict), say so in
+the PR body, and state that if their PR changes the file during review, theirs wins wholesale.
+
+**Note the second half of the mechanism may NOT be shared.** #104 shared the paging *arithmetic* but
+left the Show-more *button* copy-pasted between two grids with inline styles, and its `.btn-showmore`
+class lives in `app/globals.css` — also that PR's surface. Style a third surface's pager from its own
+CSS module rather than depending on a global class that is not on your base, or it ships unstyled.
+
+## The marketing site is noindex site-wide — "make this page indexable" is a 3-surface job (ENG-1041, 6 Sep 2026)
+
+`MARKETING_IS_INDEXABLE` in `lib/seo.ts` is `false` and **three** surfaces read it:
+`app/robots.ts`, `middleware.ts`'s `X-Robots-Tag`, and `app/(marketing)/layout.tsx`'s
+meta tag. A ticket that says "must not be noindexed" is therefore never a one-line
+metadata change, and it is never a reason to flip the flag — the flag is false
+because 19 real trainers are photographed beside placeholder biography.
+
+- **Do this:** carve out a PATH allowlist (`ALWAYS_INDEXABLE_PATHS`) read by all
+  three, not a flag flip. Scope it to the marketing host so the member space stays
+  noindex unconditionally, and test both directions — the exempt path AND that its
+  neighbours, near-miss paths and the app host are unchanged.
+- **`Disallow: /` in robots.txt beats a page's `index` meta tag**, because a crawler
+  that may not fetch the page never reads the tag. The `Allow:` line is mandatory,
+  not belt-and-braces. Next emits all `Allow:` before all `Disallow:`, and longest
+  match wins.
+- **Two different match semantics, easy to miss:** `Allow:` in robots.txt is a
+  PREFIX rule; an `includes()` allowlist is EXACT. robots.txt therefore already
+  permits crawling any future child route under an allowlisted path.
+- **`follow` is not symmetric with `index`.** `Disallow: /` stops crawlers FETCHING
+  the rest of the site; it does not stop them INDEXING a URL discovered as a link.
+  One indexable page inside a shared shell links `/start`, `/signin` and every other
+  legal route from its nav and footer. Use `follow: false` unless link discovery is
+  actually wanted.
+
+## A `force-static` page cannot have host-aware metadata — say so before claiming it does (ENG-1041)
+
+`/legal/*` renders on BOTH hosts from ONE prerendered HTML file. So a page-level
+`robots: { index: true }` says `index` on `app.stablepass.co` too, and no
+`generateMetadata` can prevent that — it has no request to read. The member space
+stays noindex only because the two HOST-AWARE surfaces (the `X-Robots-Tag` header
+and that host's `Disallow: /`) also apply, and Google resolves a meta-vs-header
+conflict to the most restrictive.
+- **Do this:** don't write "marketing space only" over all three surfaces; it is
+  true of two. Say which surface is unconditional and warn against "fixing" the
+  apparent disagreement by dropping a backstop. A reviewer WILL find this.
+
+## Adding a legal page: `content/legal/*.md` + a slug, but the parser has no inline links (ENG-1041)
+
+Adding a document to `/legal/[slug]` is three edits — a slug in `LEGAL_DOCUMENT_SLUGS`,
+a `content/legal/<slug>.md` with `title`/`lastUpdated` frontmatter, and a footer entry.
+But `lib/legal.ts`'s markdown subset deliberately does NOT interpret inline markup, so
+a document on the generic route can PRINT an address and cannot offer a working
+`mailto:`. A page that needs a live link, or its own `robots`, needs its own route.
+- **Keep a standalone slug OUT of `LEGAL_SLUGS`** (`LEGAL_STANDALONE_SLUGS` exists for
+  this). That constant drives `[slug]`'s `generateStaticParams`, so listing it there
+  makes two routes claim one path: the static segment wins and the prerender is dead
+  weight nobody can see is dead.
+- **Lift the whole document SHELL, not just the block renderer.** ENG-1041 first
+  shared only `<Block>` and still wrote the `<main>`/`.wrap`/`<article>` frame, kicker,
+  `<h1>` and "Last updated" line out twice — which is the part that actually drifts.
+  `legal-document.tsx` now owns the frame; `children` is the one seam.
+
+## The footer's Legal column is pinned in THREE places, exactly (ENG-1041)
+
+Adding a fifth link reds `test/marketing-shell.test.tsx`, `test/marketing-sheets.test.tsx`
+and `e2e/marketing-interactive.spec.ts`. Two are exact-list `toEqual` assertions.
+- **Do this:** update all three and keep them EXACT — do not relax to `toContain`. The
+  footer is the only discovery path for a page like the deletion route, so a silent
+  drop must red. `legal.module.css` is NOT covered by the ENG-991 marketing.css guard
+  (that guard diffs `marketing.css` against the mockup), so page-specific rules belong
+  there — but use the sheet's real tokens (`--line`, the 12/16/20/22/26/32 radius
+  ladder, the ported `.eyebrow`) rather than inventing values. A one-off `color-mix()`
+  or a `10px` radius is exactly what a fidelity reviewer catches.
+
+## Adding a public page? Add it to `e2e/legal.spec.ts`'s DOCUMENTS loop (ENG-1041)
+
+A unit test that imports and renders a page component proves the component renders.
+It does NOT prove the ROUTE resolves 200, that the canonical is emitted into the DOM,
+or that the page reads with scripting off (an explicit client requirement here). For a
+page whose entire purpose is "a store reviewer can open this URL", that gap matters.
+The `DOCUMENTS` loop in `e2e/legal.spec.ts` gives all of it for one array entry —
+but its ALIASES loop hardcodes an `<h1>` of "Terms & Conditions", so only join
+`DOCUMENTS`.

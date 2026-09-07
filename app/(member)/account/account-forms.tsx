@@ -11,6 +11,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
+import { apiFetch, suppressEviction } from "@/lib/api/client";
 
 export interface AccountSubscriber {
   // First/last are the source of truth (ENG-566). `name` is deliberately NOT
@@ -38,7 +39,7 @@ const NOTIF_TOGGLES: { key: keyof AccountPrefs; title: string; sub: string }[] =
 ];
 
 async function patchMe(body: unknown) {
-  return fetch("/api/me", {
+  return apiFetch("/api/me", {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -92,7 +93,15 @@ export function AccountForms({
   }
 
   async function signOut() {
+    // Deliberate sign-out: stop any in-flight member call that 401s on the way
+    // out from redirecting to "?reason=signed-out-elsewhere" and claiming the
+    // account was used on another device (ENG-961).
+    suppressEviction();
     await supabaseBrowser().auth.signOut();
+    // Re-arm AFTER the await settles. The window is a deadline, not a flag, and
+    // auth-js has no request timeout — a slow signOut would otherwise burn the
+    // whole window before the straggler 401s it exists to cover even arrive.
+    suppressEviction();
     router.push("/signin");
     router.refresh();
   }

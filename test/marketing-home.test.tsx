@@ -5,6 +5,8 @@ import path from "node:path";
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { mockupOrThrow } from "./support/mockup";
+
 import HomeSections from "@/app/(marketing)/sections";
 import { TRAINERS } from "@/app/(marketing)/sections/trainers.data";
 
@@ -57,24 +59,6 @@ function revealFiles() {
   ];
 }
 
-/**
- * The mockup lives in a sibling design tree outside this repo, and its depth above
- * the repo root differs between a normal checkout and the loop's worktree. Absent
- * (CI, a fresh clone) → the mockup-derived tests skip rather than fail, exactly as
- * ENG-587's suite does.
- */
-const MOCKUP_SUFFIX = "10-marketing-site/deploy/src/mockup.html";
-function findMockup(): string | null {
-  let dir = REPO;
-  for (;;) {
-    const candidate = path.join(dir, MOCKUP_SUFFIX);
-    if (existsSync(candidate)) return candidate;
-    const parent = path.dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
-}
-const MOCKUP = findMockup();
 
 /**
  * The mockup inlines every image as a base64 data URI. W1 extracted each one to
@@ -86,7 +70,7 @@ const MOCKUP = findMockup();
 const MIME_EXT: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
 
 function mockupDocument(): Document {
-  const html = readFileSync(MOCKUP!, "utf8").replace(
+  const html = readFileSync(mockupOrThrow(), "utf8").replace(
     /data:(image\/[a-z.+-]+);base64,([A-Za-z0-9+/=\s]+)/g,
     (_match, mime: string, b64: string) => {
       const bytes = Buffer.from(b64.replace(/\s+/g, ""), "base64");
@@ -397,10 +381,63 @@ describe("marketing home — copy matches the frozen fixture", () => {
     expect(blocksOf(container, "main").map(signatureOf)).toEqual(fixture.blocks.map((b) => b.signature));
   });
 
-  it("renders every string verbatim", () => {
+  /**
+   * ENG-729 — the waitlist cutover's copy, layered OVER the frozen fixture.
+   *
+   * The fixture is distilled from the signed-off mockup, which predates the
+   * waitlist entirely and therefore contains none of this copy. Regenerating it
+   * was the obvious move and is the wrong one: the fixture's whole job is to be
+   * the thing the page is checked against, so rebuilding it from the page makes
+   * the check circular and freezes whatever drifted in alongside. Instead the
+   * additions are pinned here, per block, and subtracted before the comparison.
+   *
+   * That keeps both halves of the guarantee, and this is the part worth reading:
+   *
+   *   - nothing may be REMOVED or REORDERED. After the subtraction the runs must
+   *     equal the fixture exactly, so hiding a mockup line in waitlist mode
+   *     would fail here even though CSS `display:none` leaves the DOM untouched
+   *     — which is precisely why every hide in this ticket is CSS-only.
+   *   - nothing may be ADDED except these strings. An unpinned run survives the
+   *     subtraction and breaks the same equality.
+   *   - the allow-list cannot go stale. Every pinned string must actually
+   *     render, or `remaining` is non-empty and this fails — so when the mode
+   *     flips back to "trial" on launch day, this test tells you to delete the
+   *     list rather than leaving a permanent hole in the copy freeze.
+   *
+   * Keys are fixture block signatures. `section#.` is the CTA band, the one
+   * section the mockup gives neither an id nor a class.
+   */
+  const WAITLIST_ADDITIONS: Record<string, string[]> = {
+    "header#top.hero": [
+      // The pre-launch line. Says nothing about a trial: the 30-day trial is
+      // not the offer any more (Naufal, 2 Sep).
+      "Join the waitlist to be first to receive exclusive updates on our launch and special offers.",
+      // ENG-726's form: its field label and its submit button.
+      "Email address",
+      "Join the waitlist",
+    ],
+    "section#.": ["Email address", "Join the waitlist"],
+  };
+
+  it("renders every string verbatim, plus only ENG-729's pinned waitlist copy", () => {
     const { container } = render(<HomeSections />);
     blocksOf(container, "main").forEach((block, i) => {
-      expect(textRuns(block), `copy drift in ${fixture.blocks[i].signature}`).toEqual(fixture.blocks[i].runs);
+      const { signature, runs: want } = fixture.blocks[i];
+
+      // Subtracted one occurrence at a time, not with a set: "Join the waitlist"
+      // is both the button label and part of the line above it in the hero, and
+      // a set-based filter would strip every copy of a string the mockup might
+      // legitimately repeat.
+      const remaining = [...(WAITLIST_ADDITIONS[signature] ?? [])];
+      const withoutAdditions = textRuns(block).filter((run) => {
+        const at = remaining.indexOf(run);
+        if (at === -1) return true;
+        remaining.splice(at, 1);
+        return false;
+      });
+
+      expect(remaining, `pinned waitlist copy never rendered in ${signature}`).toEqual([]);
+      expect(withoutAdditions, `copy drift in ${signature}`).toEqual(want);
     });
   });
 
@@ -418,15 +455,24 @@ describe("marketing home — copy matches the frozen fixture", () => {
 });
 
 /**
- * COPY FIDELITY — LAYER 2, only where the design tree is reachable.
+ * COPY FIDELITY — LAYER 2.
  *
  * Proves the committed fixture is still a faithful distillation of the mockup. On
  * its own layer 1 would happily freeze a typo forever; this is what stops that.
- * It skips cleanly when the mockup is absent — and note the reads sit inside the
- * `it` bodies, not the describe callback, which is the ENG-596 trap.
+ *
+ * ENG-991: this used to be `describe.skipIf(!MOCKUP)` and it did NOT skip "cleanly" —
+ * from an rx worktree outside the repo tree the mockup was unresolvable, so this whole
+ * layer skipped and the file reported PASSED while `matches the mockup block for block`
+ * was genuinely failing in the real checkout. It no longer skips: the read goes through
+ * `mockupOrThrow()` inside the `it` body (the reads must stay in the body, not the
+ * describe callback — that is the ENG-596 trap), so an unreachable mockup is a loud red.
+ * `executedGuardTest` below pins that this layer actually ran.
  */
-describe.skipIf(!MOCKUP)("marketing home — the frozen fixture still matches the mockup", () => {
+const executedGuardTest: string[] = [];
+
+describe("marketing home — the frozen fixture still matches the mockup", () => {
   it("matches the mockup block for block", () => {
+    executedGuardTest.push("matches the mockup block for block");
     const fixture = JSON.parse(
       readFileSync(path.join(REPO, "test", "fixtures", "marketing-copy.json"), "utf8"),
     ) as { blocks: { signature: string; runs: string[]; images: (string | null)[] }[] };
@@ -454,5 +500,16 @@ describe.skipIf(!MOCKUP)("marketing home — the frozen fixture still matches th
     }
 
     expect(live).toEqual(fixture.blocks);
+  });
+});
+
+/**
+ * ENG-991 execution pin, mirroring `test/marketing-shell.test.tsx`. Declared last so
+ * the guard above has already run. Stops a future `describe.skipIf` from quietly
+ * returning this file to the state where it reported green while hiding a real red.
+ */
+describe("ENG-991 — the copy fidelity guard never silently skips", () => {
+  it("executes the mockup copy fidelity test", () => {
+    expect(executedGuardTest).toEqual(["matches the mockup block for block"]);
   });
 });

@@ -291,6 +291,315 @@ export function PostCaption({ body }: { body: string }) {
   );
 }
 
+/**
+ * THE HEAD AVATAR — a rounded BOX carrying the real photo, monogram as fallback
+ * (ENG-958, porting mobile's ENG-833 + ENG-869).
+ *
+ * Shape: mobile went boxy on the browse rows at ENG-833 and brought the same
+ * corner to the post head at ENG-869, with the client's reason recorded on the
+ * mobile `AVATAR_BOX_RADIUS`: *"with circles it's going to be too difficult to
+ * position the horses"* — a horse photographed side-on is a long subject and a
+ * circle crops whichever end the framing did not centre. So this is a cropping
+ * decision, not a taste one, and it is the same horse photo in the same product
+ * as the browse thumbs. The radius lives in `.post-avatar-web` (14px, mobile's
+ * `Radius.md`, the card-media radius). **The stable-update panel's footer disc
+ * (`.post-panel-foot .av`) stays a CIRCLE** — it is a stable's mark, not a
+ * profile photo (mobile ENG-754 draws it the same way, and pins it as a
+ * control). A test pins that split so a future "round the avatars" sweep cannot
+ * quietly take the footer with it.
+ *
+ * Photo: web drew an initial letter and nothing else until now, on every card,
+ * while mobile has painted the signed photo since ENG-754. `url` is an ALREADY
+ * SIGNED url — this component never mints and never fetches, exactly like the
+ * rest of the card; the screens sign in their existing batch (`signPhotoMap`).
+ *
+ * `onError` → monogram. Not defensive padding: a revoked or rotated bucket
+ * object does NOT throw, it resolves to an `<img>` that never paints (see
+ * `.rx/gotchas.md`, ENG-815 — "a revoked bucket does not throw, it renders a
+ * carousel of nulls"). Falling back on the error event turns that silent broken
+ * -image icon back into the monogram the card had before.
+ */
+export function PostAvatar({
+  url,
+  initial,
+  className = "post-avatar-web",
+}: {
+  url?: string | null;
+  initial: string;
+  className?: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  // A NEW url deserves a fresh attempt — otherwise one dead object poisons the
+  // element for every post that recycles it during a feed page change.
+  //
+  // React's "adjust state when a prop changes" pattern (a render-phase
+  // `setState`, which React re-renders immediately without painting), NOT a
+  // `useEffect`. `react-hooks/set-state-in-effect` is an ERROR in this repo, not
+  // a warning (.rx/gotchas.md), and the effect form is also a frame slower: it
+  // would paint the previous post's monogram before resetting.
+  const [seenUrl, setSeenUrl] = useState(url);
+  if (url !== seenUrl) {
+    setSeenUrl(url);
+    setFailed(false);
+  }
+
+  if (url && !failed) {
+    return (
+      // `alt=""` + aria-hidden: the horse's name is already the adjacent
+      // headline, so announcing it twice is noise for a screen reader. The
+      // monogram branch has always been `aria-hidden` for the same reason.
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        className={`${className} post-avatar-photo`}
+        src={url}
+        alt=""
+        aria-hidden="true"
+        data-testid="post-avatar-photo"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+  return <div className={className} aria-hidden="true">{initial}</div>;
+}
+
+/**
+ * How many lines of the stable-update PANEL a member sees before "Read more"
+ * (mobile ENG-863; Justin, 26 Aug 2026: a long update should truncate rather
+ * than run the height of the screen).
+ *
+ * EIGHT, not the caption's two — the panel IS the post on this variant (there
+ * is no media box and no second copy below the bar), so clamping it as hard as
+ * a caption would leave the card saying nothing. The caption stays at 2 and is
+ * untouched here.
+ */
+export const PANEL_CLAMP_LINES = 8;
+
+/**
+ * The 12px gap between panel paragraphs. The STYLE (`.post-panel p`'s
+ * `margin-bottom`) and the clamp arithmetic below must be the SAME number: the
+ * budget walks paragraphs and pays for each gap it crosses, so a one-sided drift
+ * is a silently wrong clamp. Mobile names its own constant for this exact
+ * reason; this is the web half.
+ */
+export const PANEL_PARAGRAPH_GAP = 12;
+
+/** The affordance copy, shared by both halves of the in-place toggle. */
+export const READ_MORE_LABEL = "Read more";
+/**
+ * The collapse half (Justin, 26 Aug 2026: "expanded text can be minimized
+ * back"). Only the PANEL offers it — the caption's clamp is two lines, so
+ * expanding it adds little, and there is no post-detail route on web to send a
+ * member to instead.
+ */
+export const READ_LESS_LABEL = "Read less";
+
+/**
+ * How many lines of prose the panel carries, from each paragraph's MEASURED
+ * height over the MEASURED height of one line.
+ *
+ * WHY MEASURED AND NOT A CONSTANT (ported from mobile's `panelLineCount`): a
+ * token-derived line height is not invariant to the reader's text size or to the
+ * webfont, so `8 * 23.25` fires "Read more" under an update that is not
+ * truncated as soon as the page is zoomed a notch. Dividing a measured
+ * paragraph height by a measured line height cancels the scale factor out.
+ *
+ * `Math.round`, not `Math.ceil`: a browser reports a three-line paragraph as
+ * 58.5 but has been seen to report 58.500001, and `ceil` calls that four lines.
+ * `Math.max(1, …)` floors a laid-out paragraph at one line so a sub-pixel height
+ * can never count as zero.
+ */
+export function panelLineCount(paragraphHeights: readonly number[], lineHeight: number): number {
+  // Nothing measured yet — 0 lines, so the panel renders UNCLAMPED on the first
+  // frame rather than collapsing to nothing.
+  if (lineHeight <= 0) return 0;
+  let lines = 0;
+  for (const height of paragraphHeights) {
+    if (height > 0) lines += Math.max(1, Math.round(height / lineHeight));
+  }
+  return lines;
+}
+
+/**
+ * The height the clamped panel may occupy to show exactly `maxLines` lines of
+ * prose — THE BETWEEN-PARAGRAPH GAPS INCLUDED.
+ *
+ * Capping at `maxLines * lineHeight` would be wrong on the multi-paragraph
+ * updates that are the common shape here: the 12px gaps would come out of that
+ * budget, so a three-paragraph update would show six and a half lines of text
+ * under a rule that says eight. This walks the paragraphs instead — spending the
+ * line budget on real lines and paying for each gap it crosses on top — so the
+ * member sees eight lines of WORDS whatever the paragraphing.
+ *
+ * Returns 0 when nothing has been measured; the caller reads that as "do not
+ * clamp yet", never "clamp to nothing".
+ */
+export function panelClampHeight(
+  paragraphHeights: readonly number[],
+  lineHeight: number,
+  gap: number = PANEL_PARAGRAPH_GAP,
+  maxLines: number = PANEL_CLAMP_LINES,
+): number {
+  if (lineHeight <= 0 || maxLines <= 0) return 0;
+  let spent = 0;
+  let height = 0;
+  for (const paragraphHeight of paragraphHeights) {
+    if (spent >= maxLines) break;
+    if (!(paragraphHeight > 0)) continue;
+    const lines = Math.max(1, Math.round(paragraphHeight / lineHeight));
+    const take = Math.min(lines, maxLines - spent);
+    // The gap is charged only for a paragraph actually REACHED, so a budget that
+    // runs out mid-way never pays for a gap the member cannot see.
+    if (height > 0) height += gap;
+    height += take * lineHeight;
+    spent += take;
+  }
+  return height;
+}
+
+/**
+ * THE STABLE-UPDATE PANEL, clamped to eight measured lines with an in-place
+ * "Read more" / "Read less" (ENG-958, porting mobile ENG-863). Web rendered
+ * every paragraph unclamped until now, so a long update ran the height of the
+ * screen.
+ *
+ * WHY `max-height` + `overflow: hidden` AND NOT `-webkit-line-clamp`: the budget
+ * is EIGHT LINES ACROSS PARAGRAPHS. A line-clamp caps ONE box, so eight on each
+ * `<p>` shows twenty-four lines on a three-paragraph update; eight on the
+ * wrapper collapses the paragraph gaps into the clamped flow and (per
+ * `.rx/gotchas.md`, ENG-761) would swallow any affordance placed inside it.
+ * Walking the measured paragraphs is the only arrangement that spends the budget
+ * on real lines and charges the real gaps.
+ *
+ * THE TRADE, stated honestly and inherited from mobile: a `-webkit-line-clamp`
+ * box gets the browser's own "…" on its last line and a clipped box does not, so
+ * the ONLY truncation cue here is the "Read more" below it. That is deliberate
+ * and is the SAME call as mobile's — the trailing dots were removed on 26 Aug
+ * 2026 ("Read more…" reads as a sentence trailing off, i.e. as more COPY, where
+ * the bare "Read more" reads as a control). The light-green medium styling is
+ * what separates it from the prose now, and this ticket must not reintroduce the
+ * dots on web while mobile has dropped them — that IS the parity item.
+ *
+ * The affordance is a SIBLING of the clamped box, never a child of it.
+ */
+export function PostPanel({
+  paragraphs,
+  stableLine,
+  trainerInitial,
+  trainerPhotoUrl,
+}: {
+  paragraphs: string[];
+  stableLine: string;
+  trainerInitial: string;
+  trainerPhotoUrl?: string | null;
+}) {
+  const proseRef = useRef<HTMLDivElement | null>(null);
+  const probeRef = useRef<HTMLDivElement | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [heights, setHeights] = useState<number[]>([]);
+  const [lineHeight, setLineHeight] = useState(0);
+
+  const measure = useCallback(() => {
+    const prose = proseRef.current;
+    const probe = probeRef.current;
+    if (!prose || !probe) return;
+    // A zero is IGNORED rather than stored: it would take the divisor to 0 and
+    // switch the clamp off for the life of the card, silently.
+    const probeHeight = probe.getBoundingClientRect().height;
+    if (probeHeight > 0) setLineHeight(probeHeight);
+    // The prose block is never itself clamped (the WRAPPER is), which is what
+    // lets each paragraph report its FULL height while the member sees less.
+    const next = Array.from(prose.querySelectorAll("p")).map(
+      (p) => p.getBoundingClientRect().height,
+    );
+    setHeights((prev) =>
+      prev.length === next.length && prev.every((h, i) => Math.abs(h - next[i]) < 0.5)
+        ? prev // identical — returning `prev` keeps this out of a render loop
+        : next,
+    );
+  }, []);
+
+  useEffect(() => {
+    measure();
+    // RE-MEASURE WHEN THE WEBFONT LANDS — the same path `PostCaption` documents:
+    // the first measurement runs against the fallback face, and a wider real
+    // face turns an eight-line update into nine. `document.fonts` is absent in
+    // jsdom, hence the guard.
+    let cancelled = false;
+    if (typeof document !== "undefined" && document.fonts?.ready) {
+      document.fonts.ready.then(() => { if (!cancelled) measure(); });
+    }
+    // The column is fluid, so a resize repaginates the prose. Guarded because
+    // jsdom has no ResizeObserver.
+    if (typeof ResizeObserver === "undefined") return () => { cancelled = true; };
+    const ro = new ResizeObserver(measure);
+    if (proseRef.current) ro.observe(proseRef.current);
+    return () => { cancelled = true; ro.disconnect(); };
+  }, [measure, paragraphs]);
+
+  const needsMore = panelLineCount(heights, lineHeight) > PANEL_CLAMP_LINES;
+  const clamped = needsMore && !expanded;
+  const maxHeight = panelClampHeight(heights, lineHeight);
+
+  return (
+    <>
+      <div className="post-panel">
+        <div
+          className="post-panel-clamp"
+          data-testid="post-panel-clamp"
+          // `maxHeight: 0` is never applied — `clamped` is false until something
+          // has been measured, so an unmeasured panel renders in full rather
+          // than collapsing to nothing on the first frame.
+          style={clamped && maxHeight > 0 ? { maxHeight, overflow: "hidden" } : undefined}
+        >
+          <div className="post-panel-prose" ref={proseRef} data-testid="post-panel-prose">
+            {paragraphs.map((paragraph, i) => (
+              <p key={i}>{paragraph}</p>
+            ))}
+          </div>
+        </div>
+        {/* THE LINE PROBE — one line of panel prose at the size the member is
+            actually reading at, so the arithmetic divides by a MEASURED number
+            instead of a token (the text-size bug the helpers document). A
+            non-breaking space cannot wrap, so its height is one line by
+            construction. Laid out but invisible: `visibility: hidden` in a
+            zero-height box, NOT `display: none` — a node that is not laid out
+            has no height to report. `aria-hidden` keeps it out of the a11y
+            tree. */}
+        <div className="post-panel-line-probe" aria-hidden="true">
+          <div ref={probeRef} data-testid="post-panel-line-probe">{" "}</div>
+        </div>
+        {stableLine && (
+          <div className="post-panel-foot">
+            {/* The footer disc stays a CIRCLE and takes the TRAINER's photo,
+                `contain` on a light ground — the ENG-754 rule: this is a
+                stable's MARK (often a wordmark logo), and cover-cropping a wide
+                logo into a disc keeps the middle two letters and throws the name
+                away. Contrast with the head avatar above, which is photography
+                and covers. */}
+            <PostAvatar url={trainerPhotoUrl} initial={trainerInitial} className="av" />
+            <span>{stableLine}</span>
+          </div>
+        )}
+      </div>
+      {/* Below the panel box, above the reaction bar — mobile's placement. Its
+          `order` is set in globals.css so it lands with the panel in the card's
+          reordered flex column. */}
+      {needsMore && (
+        <button
+          type="button"
+          className="post-panel-read-more"
+          data-testid="post-panel-read-more"
+          aria-expanded={expanded}
+          aria-label={expanded ? "Read less of this update" : "Read more of this update"}
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {expanded ? READ_LESS_LABEL : READ_MORE_LABEL}
+        </button>
+      )}
+    </>
+  );
+}
+
 export interface PostCardProps {
   post: FeedPost;
   viewerId: string; // signed-in user id — for the watermark overlay
@@ -348,6 +657,12 @@ export function PostCard({
   // An update card is the STABLE's voice, so it leads with the trainer's initial;
   // a media card is about the horse and leads with the horse's.
   const initial = isUpdate ? trainerInitial : post.horseName?.[0]?.toUpperCase() ?? "?";
+  // The photo follows the SAME rule as the monogram it replaces, so the head
+  // never shows one identity's picture over the other's letter: an update card
+  // is the stable's voice and takes the trainer's photo, every other variant is
+  // about the horse and takes the horse's. Undefined on a screen that has not
+  // resolved photos yet, which simply falls back to the monogram.
+  const headPhotoUrl = isUpdate ? post.trainerPhotoUrl : post.horsePhotoUrl;
   // The box takes the asset's OWN ratio, clamped — except a REEL (portrait
   // video), which keeps its true ratio down to 9:16 and takes Instagram's
   // in-feed reel layout: the header overlays the top of the frame on an ink
@@ -372,18 +687,27 @@ export function PostCard({
     <article className="post-web">
       {!isReel && (
       <div className="post-head-web">
-        <div className="post-avatar-web" aria-hidden="true">{initial}</div>
+        <PostAvatar url={headPhotoUrl} initial={initial} />
         <div className="post-meta-web">
+          {/* THE STACK (ENG-958, porting mobile ENG-869; Justin, 28 Aug 2026,
+              screenshot 1): race badge, then horse name, then trainer + age,
+              then the green chip UNDER all three.
+
+              The pill used to sit ABOVE the horse name here. On mobile it
+              shared the NAME's line from 26 Aug, capped at 62% of the row, and
+              a real title truncated to "Race Replay - Sunsh…" while the name
+              beside it also had to shrink — two runs of text fighting over one
+              line and both losing. Moving it below the byline gives each of the
+              three its own line and gives the chip the whole column, which is
+              the truncation fix. Both the race badge and the pill can be on one
+              card: the race badge renders FIRST, above; the pill LAST, below.
+
+              Null label = no pill AND no gap — the margin lives on the pill,
+              not on the byline above it, so an unlabelled card's head is
+              exactly as tall as it was. */}
           {post.raceBadge && (
             <div className={`race-badge${post.raceBadge.kind === "result" ? " result" : ""}`}>{post.raceBadge.text}</div>
           )}
-          {/* The `.post-badge` pill RETURNS in round 6 (ENG-761), but as DATA
-              rather than the card-type copy it used to be: it draws
-              `post.label`, one of the be's 13 presets (ENG-738), and nothing
-              at all when the column is null — which is every pre-round-6 post.
-              The 18 Aug retirement stands for the old derived-copy pill; the
-              horse name still heads every card variant beneath it. */}
-          {post.label && <span className="post-badge">{post.label}</span>}
           <h3 className="post-horse">{post.horseName}</h3>
           {/* `post.title` is not drawn AT ALL — on any variant (client, 18
               Aug 2026, in two steps: media cards first, then the update card:
@@ -392,6 +716,18 @@ export function PostCard({
           <div className="post-byline">
             <span className="by-trainer">{post.trainerName}</span> · {post.postedAgo}
           </div>
+          {/* The `.post-badge` pill is DATA, not card-type copy: `post.label`,
+              one of the be's 13 presets (ENG-738), and nothing at all when the
+              column is null — which is every pre-round-6 post. `.stacked` is
+              what takes it off the old centred one-line treatment and gives it
+              the full column. */}
+          {post.label && (
+            <span className="post-badge stacked">
+              {/* The copy is its OWN element so the ellipsis has a block box to
+                  apply to — see `.post-badge.stacked .post-badge-text`. */}
+              <span className="post-badge-text">{post.label}</span>
+            </span>
+          )}
         </div>
         <button className="post-more-web" type="button" aria-label="More"><More /></button>
       </div>
@@ -422,15 +758,22 @@ export function PostCard({
                Follow pill IN the row next to the name (mobile's 18 Aug
                placement: aligned and legible, ENG-606's pill untouched). */
             <div className="reel-head">
-              <div className="post-avatar-web" aria-hidden="true">{initial}</div>
+              <PostAvatar url={headPhotoUrl} initial={initial} />
               <div className="reel-head-meta">
-                {/* The pill draws on EVERY web card variant, reel included —
-                    web has no separate reel treatment for it this round. */}
-                {post.label && <span className="post-badge">{post.label}</span>}
+                {/* SAME STACK AS THE CLASSIC HEAD (Naufal, 31 Aug 2026: the reel
+                    follows the post format) — name, byline, then the chip. The
+                    reel head carries no race badge, exactly as mobile's does
+                    not. It costs one line of picture on a 9:16 asset; accepted
+                    on mobile, and accepted here for the same reason. */}
                 <h3 className="reel-horse">{post.horseName}</h3>
                 <div className="reel-byline">
                   <span className="by-trainer">{post.trainerName}</span> · {post.postedAgo}
                 </div>
+                {post.label && (
+                  <span className="post-badge stacked">
+                    <span className="post-badge-text">{post.label}</span>
+                  </span>
+                )}
               </div>
               {canFollow && <FollowPill trainerName={post.trainerName} onFollow={onFollow} />}
             </div>
@@ -449,17 +792,12 @@ export function PostCard({
       )}
 
       {showPanel && (
-        <div className="post-panel">
-          {paragraphs.map((paragraph, i) => (
-            <p key={i}>{paragraph}</p>
-          ))}
-          {stableLine && (
-            <div className="post-panel-foot">
-              <div className="av" aria-hidden="true">{trainerInitial}</div>
-              <span>{stableLine}</span>
-            </div>
-          )}
-        </div>
+        <PostPanel
+          paragraphs={paragraphs}
+          stableLine={stableLine}
+          trainerInitial={trainerInitial}
+          trainerPhotoUrl={post.trainerPhotoUrl}
+        />
       )}
 
       <ReactionBar

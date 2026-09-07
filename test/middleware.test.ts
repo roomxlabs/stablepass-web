@@ -348,6 +348,32 @@ describe("robots headers", () => {
   it("noindexes marketing while MARKETING_IS_INDEXABLE is false", () => {
     expect(run({ host: MARKETING, path: "/" }).robots).toBe("noindex, nofollow");
   });
+
+  /**
+   * ENG-1041 — the one carve-out. Google Play's Data Safety form needs a
+   * publicly reachable deletion page, and the person it exists for finds it by
+   * searching, having already uninstalled the app.
+   *
+   * The exemption is a path allowlist, NOT a flip of MARKETING_IS_INDEXABLE:
+   * the site is noindex because 19 real trainers are photographed beside
+   * placeholder biography, and none of them are on a deletion policy page.
+   */
+  it("lets the account-deletion page be indexed on the marketing host", () => {
+    expect(run({ host: MARKETING, path: "/legal/delete-account" }).robots).toBeNull();
+  });
+
+  it("keeps the exemption to that one path, on that one host", () => {
+    // Every neighbouring legal page stays noindex...
+    expect(run({ host: MARKETING, path: "/legal/privacy" }).robots).toBe("noindex, nofollow");
+    expect(run({ host: MARKETING, path: "/legal/terms" }).robots).toBe("noindex, nofollow");
+    // ...a near-miss path is not the allowlisted one...
+    expect(run({ host: MARKETING, path: "/legal/delete-account/extra" }).robots).toBe("noindex, nofollow");
+    // ...and the member space stays noindex unconditionally, which is the
+    // invariant the carve-out must never weaken. /legal/* renders on the app
+    // host too, and its canonical is the apex, so the app copy has nothing to
+    // gain from being indexed and would only compete with the apex copy.
+    expect(run({ host: APP, path: "/legal/delete-account" }).robots).toBe("noindex, nofollow");
+  });
 });
 
 describe("the matcher", () => {

@@ -70,9 +70,35 @@ Derived from the Stage 1 blueprint (API Design 03, Auth & RBAC 04). REST over HT
 | POST/DELETE | `bookmark` / `unbookmark` (PostgREST `bookmark`) | Save/unsave a post. | `{ postId }` | 201 / 204 | 201 · 204 · 401 |
 | POST/DELETE | `react` / `unreact` (PostgREST `reaction`) | Upsert/delete a reaction from the curated positive-only set (👍❤️👏🙏🔥💪🐎); **moves `post.like_count`**. No comments. | `{ postId, emoji }` | 201 / 204 | 201 · 204 · 401 · 400 (bad emoji) |
 | GET | `bookmarks` (PostgREST `bookmark`) | Saved posts, newest-first. | `cursor?` | array | 200 · 401 |
-| GET | `notifications` (PostgREST `notification`) | Own notification inbox; drives in-app red-dot. | `cursor?` | array | 200 · 401 |
-| PATCH | `notification.read` (PostgREST) | Mark own notification(s) read. | `{ read:true }` | 204 | 204 · 401 |
+| GET | `notifications` (PostgREST `notification`) | Own notification inbox; drives in-app red-dot. *(Mobile reads PostgREST directly; **web goes through the BFF below** — see ENG-957.)* | `cursor?` | array | 200 · 401 |
+| PATCH | `notification.read` (PostgREST) | Mark own notification(s) read. *(web: BFF below)* | `{ read:true }` | 204 | 204 · 401 |
 | POST/DELETE | `device_token` (PostgREST) | Register / prune an Expo push token for a device. | `{ expoToken, platform }` | 201 / 204 | 201 · 204 · 401 |
+
+### Web notification BFF *(ENG-957 — the `/notifications` screen + the sidebar chip)*
+
+Web does not read `notification` from the browser. These Route Handlers own it, so the
+column allow-list and the `user_id` self-scoping live in one server-side place.
+
+| Method | Path | Description | Request | Response | Status |
+|---|---|---|---|---|---|
+| GET | `/api/notifications` | Own inbox, newest first, 50/page. `before` is a `created_at` cursor (not an offset, which would skip/repeat rows when an alert arrives mid-scroll). Gated like the content its rows open into. | `?before=<iso>` | `{ data:[{id,type,targetType,targetId,title,body,read,createdAt}], meta:{hasMore} }` | 200 · 400 · 401 · 402 |
+| PATCH | `/api/notifications/:id` | Mark ONE own alert read. Only `read:true` is accepted — the inbox has no un-read affordance. 204 even on a miss, so a wrong id cannot confirm another member's row exists. | `{ read:true }` | — | 204 · 400 · 401 |
+| POST | `/api/notifications/read-all` | Mark every unread own alert read. | — | — | 204 · 401 |
+| GET | `/api/notifications/unread-count` | `head:true` count for the sidebar chip. Uncapped by any page size, and never returns the rows. | — | `{ data:{ unread } }` | 200 · 401 |
+
+**Self-scoping is explicit, not inherited.** Every read and write above carries
+`.eq('user_id', session.user.id)` **on top of** RLS. On the two writes this is
+load-bearing rather than defensive: an id-only `PATCH` would flip another member's row if
+RLS were ever relaxed, and the unfiltered `read-all` update would otherwise mark the whole
+table read. The projection is the explicit `NOTIFICATION_COLUMNS` allow-list (never `*`)
+and omits `user_id` and `pushed`.
+
+**Web navigates only to `target_type = 'horse'`.** There is no post detail route on web, so
+`post`- and `race`-targeted rows list and mark themselves read **without** navigating
+(fail closed — see `app/api/notifications/contract.ts`). Mobile additionally routes `post`,
+because `src/app/post/[id].tsx` exists there. Adding a web post permalink is a separate
+ticket; it would add `"post"` to `ROUTED_SCREENS`.
+
 
 ## Admin — content *(gated: `is_admin`; `admin.stablepass.co`)*
 
