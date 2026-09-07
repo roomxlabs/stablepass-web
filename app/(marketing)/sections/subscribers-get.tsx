@@ -76,7 +76,7 @@ const APP_SCREENS: AppScreen[] = [
     caption: "Horse progress reports",
   },
   {
-    src: "/marketing/0d9afc88.jpg",
+    src: "/marketing/9b52214f.jpg",
     alt: "stablepass app: horse profile with the next race card",
     caption: "Race previews",
   },
