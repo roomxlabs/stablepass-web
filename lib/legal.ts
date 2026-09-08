@@ -58,7 +58,7 @@ export const LEGAL_SLUGS: readonly LegalSlug[] = [...LEGAL_DOCUMENT_SLUGS, ...LE
  * path — the static segment would win and the dynamic prerender would be dead
  * weight nobody could see was dead. A test pins this separation.
  */
-export const LEGAL_STANDALONE_SLUGS = ["delete-account"] as const;
+export const LEGAL_STANDALONE_SLUGS = ["delete-account", "support"] as const;
 export type LegalStandaloneSlug = (typeof LEGAL_STANDALONE_SLUGS)[number];
 
 /** Every slug with a `content/legal/*.md` behind it, however it is routed. */
