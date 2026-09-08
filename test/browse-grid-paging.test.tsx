@@ -17,8 +17,12 @@ import { BROWSE_PAGE_SIZE, BROWSE_FETCH_LIMIT, browseRange, splitBrowsePage } fr
 
 const VIEWER_ID = "8f3c1a2b-1234-4abc-9def-0123456789ab";
 
+// ENG-999 retired the free trial, so `status: "trial"` is no longer entitled
+// (lib/api/access.ts grants only `active` and `canceled`). The name says
+// ENTITLED, so it is now a paid active row. Left as a trial it would silently
+// turn every case in this file into a 402.
 const ENTITLED_SUB = {
-  data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null },
+  data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" },
   error: null,
 };
 
