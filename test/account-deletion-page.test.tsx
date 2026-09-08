@@ -263,10 +263,21 @@ describe("the page is not noindexed — and nothing else changed", () => {
 describe("the standalone route does not collide with /legal/[slug]", () => {
   it("is a standalone slug, and is NOT in the set [slug] prerenders", () => {
     expect(isLegalStandaloneSlug("delete-account")).toBe(true);
-    expect([...LEGAL_STANDALONE_SLUGS]).toEqual(["delete-account"]);
-    // Two routes claiming /legal/delete-account would resolve to the static one
-    // and leave a dead prerender nobody could see was dead.
-    expect([...LEGAL_SLUGS]).not.toContain("delete-account");
+    // The exact set, as a change detector: a new standalone route is a routing
+    // decision and should be made deliberately, not noticed later. `support`
+    // joined it for the App Store listing's Support URL, which needs the same
+    // working `mailto:` this page needs and for the same reason — the markdown
+    // subset does not interpret inline links.
+    expect([...LEGAL_STANDALONE_SLUGS]).toEqual(["delete-account", "support"]);
+
+    // THE PROPERTY THAT ACTUALLY MATTERS, asserted for EVERY standalone slug
+    // rather than only for this page's own: two routes claiming one path
+    // resolve to the static one and leave a dead prerender nobody could see was
+    // dead. Written as a loop so the next standalone route is covered the
+    // moment it is added, instead of relying on whoever adds it to remember.
+    for (const slug of LEGAL_STANDALONE_SLUGS) {
+      expect([...LEGAL_SLUGS], slug).not.toContain(slug);
+    }
   });
 
   it("parses as a legal document under the same reader as every other policy", () => {
