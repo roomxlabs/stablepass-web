@@ -324,16 +324,44 @@ describe("Retired buy-days copy is gone", () => {
     expect(document.body.textContent).not.toMatch(/trial/i);
   });
 
-  it("source of the card + cancel island does not contain the retired strings", () => {
+  // WIDENED AFTER THIS GUARD MISSED THE REAL THING, twice over.
+  //
+  // ENG-1028 retired the buy-days vocabulary and wrote this check — but scoped
+  // it to the three /account files it was touching. `components/access-wall.tsx`
+  // renders on every gated member screen and was never in the list, so it went
+  // on telling members "it never renews on its own" for the whole epic, while
+  // /checkout one click away said the subscription renews monthly.
+  //
+  // The pattern would have missed it even in scope: it banned "does not renew"
+  // and "doesn't renew", and the wall's phrasing was "never renews on its own".
+  // A denial has more than two spellings, so the pattern now covers the shape
+  // rather than two literals.
+  //
+  // Add the file when you add the copy. A list is only a guard for what is on it.
+  it("source of the card, cancel island and the access wall carries no retired strings", () => {
     const files = [
       "app/(member)/account/page.tsx",
       "app/(member)/account/cancel-card.tsx",
       "app/(member)/account/billing.ts",
+      "components/access-wall.tsx",
     ];
     for (const rel of files) {
       const src = readFileSync(path.join(process.cwd(), rel), "utf8");
-      expect(src, rel).not.toMatch(/Buy 30 days|Extend access|30-day pass/);
-      expect(src, rel).not.toMatch(/does not renew|buy another 30 days/i);
+      // Comments in these files DO discuss the retired wording on purpose (the
+      // history is why the copy reads as it does), so strip them first and
+      // assert against rendered strings only.
+      const code = src
+        .split("\n")
+        .filter((l) => {
+          const t = l.trim();
+          return !t.startsWith("//") && !t.startsWith("*") && !t.startsWith("/*");
+        })
+        .join("\n");
+      expect(code, rel).not.toMatch(/Buy 30 days|Extend access|30-day pass/);
+      expect(code, rel).not.toMatch(/\bnever renews\b/i);
+      expect(code, rel).not.toMatch(/\bdoes ?n[o']?t (?:auto-?)?renew/i);
+      expect(code, rel).not.toMatch(/\brenews? on its own\b/i);
+      expect(code, rel).not.toMatch(/buy another 30 days/i);
     }
   });
 });

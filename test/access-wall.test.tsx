@@ -16,11 +16,13 @@ import { AccessWall, WALL_COPY, accessWallCopy } from "@/components/access-wall"
 // other's.
 
 describe("AccessWall — the copy branches on whether the member ever paid", () => {
-  it("a member who has NEVER paid is told they do not have a pass yet", () => {
+  it("a member who has NEVER paid is told they do not have a subscription yet", () => {
     render(<AccessWall everSubscribed={false} />);
-    expect(screen.getByText("You don't have a pass yet")).toBeInTheDocument();
+    expect(screen.getByText("You don't have a subscription yet")).toBeInTheDocument();
     expect(
-      screen.getByText("Buy a pass for 30 days of full access — it never renews on its own."),
+      screen.getByText(
+        "Subscribe to see every update from the stables you follow. It renews monthly and you can cancel any time.",
+      ),
     ).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Get full access" })).toHaveAttribute("href", "/checkout");
     // ENG-1008: they never had one, so nothing of theirs can have ended.
@@ -31,22 +33,22 @@ describe("AccessWall — the copy branches on whether the member ever paid", () 
   it("a member who HAS paid is told their access paused, not that they are new", () => {
     render(<AccessWall everSubscribed />);
     expect(screen.getByText("Your access has paused")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Buy 30 days" })).toHaveAttribute("href", "/checkout");
+    expect(screen.getByRole("link", { name: "Restart my subscription" })).toHaveAttribute("href", "/checkout");
     // The original regression: this is the sentence the DRI's paying member saw.
     expect(screen.queryByText(/trial/i)).not.toBeInTheDocument();
     // …and the new one: a returning member is not a first-time buyer.
-    expect(screen.queryByText("You don't have a pass yet")).not.toBeInTheDocument();
+    expect(screen.queryByText("You don't have a subscription yet")).not.toBeInTheDocument();
   });
 
   it("renders the onboarding hero skin without changing the words", () => {
     render(<AccessWall everSubscribed variant="hero" />);
     expect(screen.getByRole("heading", { name: "Your access has paused" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Buy 30 days" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Restart my subscription" })).toBeInTheDocument();
   });
 
   it("the hero skin carries the never-subscribed words too", () => {
     render(<AccessWall everSubscribed={false} variant="hero" />);
-    expect(screen.getByRole("heading", { name: "You don't have a pass yet" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "You don't have a subscription yet" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Get full access" })).toHaveAttribute("href", "/checkout");
   });
 
@@ -80,18 +82,41 @@ describe("AccessWall — the copy branches on whether the member ever paid", () 
 // not claim to be a cross-repo guarantee. ENG-1004 owns the mobile wording.
 describe("wall copy — the pinned strings", () => {
   it("pins the titles and CTAs verbatim", () => {
-    expect(WALL_COPY.neverSubscribed.title).toBe("You don't have a pass yet");
+    expect(WALL_COPY.neverSubscribed.title).toBe("You don't have a subscription yet");
     expect(WALL_COPY.neverSubscribed.cta).toBe("Get full access");
     expect(WALL_COPY.paused.title).toBe("Your access has paused");
-    expect(WALL_COPY.paused.cta).toBe("Buy 30 days");
+    expect(WALL_COPY.paused.cta).toBe("Restart my subscription");
   });
 
-  it("never states or implies the pass renews", () => {
+  // INVERTED BY ENG-1022, and that inversion is the whole point of this test.
+  //
+  // It used to assert the copy never implies renewal, which was correct for the
+  // 30-day non-renewing pass. ENG-1028 then shipped monthly auto-renewal and
+  // nobody came back here: both branches went on saying "it never renews on its
+  // own" while /checkout, one click later, said "Your subscription renews
+  // monthly until you cancel". Whichever a member read second, one of them was
+  // false — and telling an Australian consumer a purchase does not auto-renew
+  // before enrolling them in one is a misrepresentation, not a copy nit.
+  //
+  // So the assertion now runs the other way, and the DENIALS are banned
+  // outright: a future edit that reintroduces "never renews" turns this red
+  // instead of shipping.
+  it("says the subscription renews, and never denies it", () => {
     for (const copy of Object.values(WALL_COPY)) {
       const text = `${copy.title} ${copy.body} ${copy.cta}`;
-      expect(text).not.toMatch(/\brenews\b(?!\s+on its own)/i);
-      expect(text).not.toMatch(/auto-?renew/i);
-      expect(text).not.toMatch(/subscription will continue/i);
+      expect(text).toMatch(/\brenews?\b/i);
+      expect(text).not.toMatch(/\bnever renews\b/i);
+      expect(text).not.toMatch(/\bdoes ?n[o']?t (?:auto-?)?renew/i);
+      expect(text).not.toMatch(/\bon its own\b/i);
+    }
+  });
+
+  // The other half of the same promise. If the copy says it renews, it must
+  // also say how to stop it — an auto-renewing charge advertised without the
+  // exit is the part a consumer regulator cares about.
+  it("tells the member they can cancel", () => {
+    for (const copy of Object.values(WALL_COPY)) {
+      expect(`${copy.body}`).toMatch(/\bcancel\b/i);
     }
   });
 
@@ -113,23 +138,29 @@ describe("wall copy — the pinned strings", () => {
   // different claim from "your thing expired". Pin the shape, not just the
   // string, so a future reword cannot quietly reintroduce an expiry story to
   // someone who has no history to expire.
-  it("tells a never-subscribed member about buying, not about expiry", () => {
+  it("tells a never-subscribed member about subscribing, not about expiry", () => {
     const { title, body } = WALL_COPY.neverSubscribed;
     const text = `${title} ${body}`;
-    expect(text).toMatch(/\bpass\b/i);
-    expect(text).toMatch(/\bbuy\b/i);
-    // Over the WHOLE sentence, not just the title: "Buy a pass — your access
+    expect(text).toMatch(/\bsubscri(?:be|ption)\b/i);
+    // Over the WHOLE sentence, not just the title: "Subscribe — your access
     // ended" would otherwise sail through a title-only check.
     expect(text).not.toMatch(/\b(?:ended|expired|run out|ran out)\b/i);
   });
 });
 
-// ── The guardrail test: "Reactivate" is retired ─────────────────────────────
-// This epic deleted the cancel and payment-method routes because there is
-// nothing to cancel and nothing to reactivate — the pass ends and you buy
-// another 30 days. "Reactivate" is vocabulary from the auto-renewing model that
-// no longer exists. A grep guard rather than a per-screen assertion, because the
-// word crept into EIGHT screens the first time precisely by being copy-pasted.
+// ── The guardrail test: "Reactivate" stays out of the copy ──────────────────
+// Originally this banned "Reactivate" because nothing renewed, so there was
+// nothing to reactivate. ENG-1022 brought auto-renewal back and that rationale
+// is gone — a paused subscription IS a thing you restart.
+//
+// The ban stands anyway, now for a plainer reason: ONE verb for one action. The
+// wall says "Restart my subscription" and /account says the same, because the
+// word crept into EIGHT screens the first time precisely by being copy-pasted
+// and two synonyms for the same button is how that starts again. A grep guard
+// rather than a per-screen assertion, for the same reason.
+//
+// If someone deliberately standardises on "Reactivate", this test is the place
+// to make that decision — not a file to route around.
 function tsxFilesUnder(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {

@@ -181,7 +181,7 @@ describe("FollowingScreen", () => {
     render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={true} />);
 
     expect(await screen.findByText(/your access has paused/i)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Buy 30 days" })).toHaveAttribute("href", "/checkout");
+    expect(screen.getByRole("link", { name: "Restart my subscription" })).toHaveAttribute("href", "/checkout");
     expect(screen.queryByRole("button", { name: "Nature Strip" })).not.toBeInTheDocument();
   });
 

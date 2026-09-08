@@ -8,10 +8,14 @@
 // introductory period had ended and invited them to "reactivate" a
 // subscription. Both halves were wrong for the member who found that bug: they
 // had converted to a paid pass and PAID for it, so nothing introductory had
-// ended — and "reactivate" is vocabulary from the auto-renewing plan this epic
-// removed. There is nothing to reactivate; a pass simply ends and you buy
-// another 30 days. Eight copies is also why it stayed wrong: nobody was going
-// to fix the same sentence eight times. Now the copy lives once, here.
+// ended. Eight copies is also why it stayed wrong: nobody was going to fix the
+// same sentence eight times. Now the copy lives once, here — which is what made
+// the ENG-1022 correction below a four-line change instead of another sweep.
+//
+// (That paragraph also used to argue that "reactivate" was wrong because
+// nothing renewed. Under auto-renew a paused subscription is precisely a thing
+// you restart, so the CTA says so again. Kept as a record of how completely a
+// billing-model change can invert this file's vocabulary.)
 //
 // ── WHAT THE SPLIT MEANS NOW (ENG-1008) ─────────────────────────────────────
 // ENG-999 retired the introductory free period outright — the status it used is
@@ -22,8 +26,8 @@
 // was never offered. The split itself is still right; it is simply no longer
 // about that retired offer. It is:
 //
-//     never bought a pass   → they need their FIRST pass
-//     bought one before     → their pass ran out and access is paused
+//     never subscribed   → they need their FIRST subscription
+//     subscribed before  → theirs is not running and access is paused
 //
 // Both branches send the member to the same place; only the sentence that
 // explains why differs. Keep them distinguishable — those are two genuinely
@@ -49,14 +53,23 @@
 //   resolved, and entitlement itself comes from `hasAccess()` / the BFF's 402.
 // * `everSubscribed` is a BOOLEAN by design. `stripe_customer_id` is resolved
 //   server-side and never crosses into client JS (.rx/guardrails.md #1).
-// * No copy here states or implies the pass renews — "it never renews on its
-//   own" is the point, not a caveat.
-// * No cancel / payment-method affordance: the only action is buying days.
-// * **No amount, ever — not even in a comment.** A pass has two prices, and
-//   which one a given member is offered depends on their promo counter and is
+// * The copy MUST say the subscription renews. This guardrail was the exact
+//   opposite until the auto-renew epic (ENG-1022) landed — it read "no copy
+//   here states or implies the pass renews", which was correct for the 30-day
+//   non-renewing pass and became false the moment ENG-1028 shipped monthly
+//   auto-renewal. Both halves of this file said "it never renews on its own"
+//   while /checkout, one click later, said "Your subscription renews monthly
+//   until you cancel". Whichever the member read second, one of them was a lie
+//   — and telling an Australian consumer a purchase does not auto-renew before
+//   enrolling them in one is not merely a copy defect. If the billing model
+//   changes again, this sentence changes WITH it, in the same PR.
+// * No cancel / payment-method affordance: the only action is starting or
+//   restarting the subscription. Managing a live one belongs on /account.
+// * **No amount, ever — not even in a comment.** There are two prices, and
+//   which one a given member is offered depends on their intro counter and is
 //   decided server-side (ENG-1001). A number written here would be wrong for
 //   half the people who read it, and a stale one in a comment is how it gets
-//   copied back into the copy. Say "a pass".
+//   copied back into the copy. Say "a subscription".
 
 /**
  * The two things the wall can be. They are NOT interchangeable, and the
@@ -66,18 +79,19 @@
  * theirs ran out invents an account history they do not have.
  */
 export const WALL_COPY = {
-  // No `stripe_customer_id` — never a Stripe customer, so they have simply never
-  // bought a pass. (Renamed by ENG-1008 — the offer the old key named is gone.)
+  // No `stripe_customer_id` — never a Stripe customer, so they have never
+  // subscribed. (Renamed by ENG-1008 — the offer the old key named is gone.)
   neverSubscribed: {
-    title: "You don't have a pass yet",
-    body: "Buy a pass for 30 days of full access — it never renews on its own.",
+    title: "You don't have a subscription yet",
+    body: "Subscribe to see every update from the stables you follow. It renews monthly and you can cancel any time.",
     cta: "Get full access",
   },
-  // Has a `stripe_customer_id` — they have bought before, so the PASS ran out.
+  // Has a `stripe_customer_id` — they have subscribed before, so the
+  // subscription is cancelled, or a renewal did not go through.
   paused: {
     title: "Your access has paused",
-    body: "Your 30 days have run out. Buy another 30 days — it never renews on its own.",
-    cta: "Buy 30 days",
+    body: "Your subscription isn't running right now. Start it again to pick up where you left off — it renews monthly and you can cancel any time.",
+    cta: "Restart my subscription",
   },
 } as const;
 
