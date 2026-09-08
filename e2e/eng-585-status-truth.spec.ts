@@ -97,7 +97,7 @@ test("expired paid member — Account says Ended, and the wall does not mention 
   // The wall this member sees on the content screens. They PAID — so they must
   // never be told a trial ended.
   await expect(page.getByText("Your access has paused")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Buy 30 days" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Restart my subscription" })).toBeVisible();
   // ENG-1008 removed the last of that vocabulary from the wall, so this can be
   // the whole word rather than the one stale sentence — but scope it to the WALL.
   // "trial" is ordinary racing vocabulary ("barrier trial") and already appears
@@ -105,7 +105,7 @@ test("expired paid member — Account says Ended, and the wall does not mention 
   // throwaway members follow anything and the feed renders.
   await expect(page.getByTestId("access-wall").getByText(/trial/i)).toHaveCount(0);
   // They HAVE paid before, so they must not get the first-time-buyer sentence.
-  await expect(page.getByText("You don't have a pass yet")).toHaveCount(0);
+  await expect(page.getByText("You don't have a subscription yet")).toHaveCount(0);
   await page.screenshot({ path: ".rx/review/eng-585-wall-paid.png", fullPage: true });
 
   await page.goto("/account");
@@ -143,7 +143,7 @@ test("member who never paid — Account reads Ended, with no trial wording", asy
 
   await signIn(page, email);
 
-  await expect(page.getByText("You don't have a pass yet")).toBeVisible();
+  await expect(page.getByText("You don't have a subscription yet")).toBeVisible();
   await expect(page.getByRole("link", { name: "Get full access" })).toHaveAttribute("href", "/checkout");
   // The whole point of ENG-1008: this member has never subscribed, so nothing of
   // theirs can have "ended". Assert the absence, not just the new presence — the
@@ -180,7 +180,7 @@ test("active member with a NULL period end is entitled, not expired", async ({ p
   // so the real feed renders, and "barrier trial" is legitimate post copy.)
   await expect(page.getByTestId("access-wall")).toHaveCount(0);
   await expect(page.getByText("Your access has paused")).toHaveCount(0);
-  await expect(page.getByText("You don't have a pass yet")).toHaveCount(0);
+  await expect(page.getByText("You don't have a subscription yet")).toHaveCount(0);
 
   await page.goto("/account");
   await expect(page.getByText("Active", { exact: true })).toBeVisible();

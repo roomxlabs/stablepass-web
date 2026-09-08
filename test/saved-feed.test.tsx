@@ -196,7 +196,7 @@ describe("SavedFeed", () => {
 
     expect(await screen.findByText(/your access has paused/i)).toBeInTheDocument();
     expect(screen.queryByText("Nature Strip")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Buy 30 days" })).toHaveAttribute("href", "/checkout");
+    expect(screen.getByRole("link", { name: "Restart my subscription" })).toHaveAttribute("href", "/checkout");
   });
 
   describe("aspect ratio (ENG-612)", () => {

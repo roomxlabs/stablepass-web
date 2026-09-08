@@ -183,7 +183,7 @@ describe("ExploreFeed", () => {
 
     expect(await screen.findByText(/your access has paused/i)).toBeInTheDocument();
     expect(screen.queryByText("Mahogany")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Buy 30 days" })).toHaveAttribute("href", "/checkout");
+    expect(screen.getByRole("link", { name: "Restart my subscription" })).toHaveAttribute("href", "/checkout");
   });
 
   it("clicking a reaction button upserts the viewer's own reaction row", async () => {
