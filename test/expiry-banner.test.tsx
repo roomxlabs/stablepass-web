@@ -85,16 +85,21 @@ describe("expiryMessage", () => {
 });
 
 describe("expiryEndsAt", () => {
-  it("returns trial_ends_at for a trial row", () => {
+  // ENG-1029: an active period end is a renewal, not an expiry. The banner
+  // must stay down whatever the date — even inside the last 7 days.
+  it("returns null for an active row, whatever the date", () => {
     const now = Date.now();
-    const trialEndsAt = daysOut(5, now);
-    expect(expiryEndsAt(row({ status: "trial", trial_ends_at: trialEndsAt }), now)).toBe(trialEndsAt);
+    expect(expiryEndsAt(row({ status: "active", current_period_end: daysOut(5, now) }), now)).toBeNull();
+    expect(expiryEndsAt(row({ status: "active", current_period_end: daysOut(1, now) }), now)).toBeNull();
+    expect(expiryEndsAt(row({ status: "active", current_period_end: daysOut(8, now) }), now)).toBeNull();
   });
 
-  it("returns current_period_end for an active row", () => {
+  // A cancelled member keeps access to `current_period_end` (strict, no grace),
+  // and that date really is an ending — so they get the countdown.
+  it("returns current_period_end for a canceled row inside its period", () => {
     const now = Date.now();
     const currentPeriodEnd = daysOut(5, now);
-    expect(expiryEndsAt(row({ status: "active", current_period_end: currentPeriodEnd }), now)).toBe(
+    expect(expiryEndsAt(row({ status: "canceled", current_period_end: currentPeriodEnd }), now)).toBe(
       currentPeriodEnd,
     );
   });
@@ -104,17 +109,21 @@ describe("expiryEndsAt", () => {
   });
 
   it("returns null for status lapsed", () => {
-    expect(expiryEndsAt(row({ status: "lapsed", trial_ends_at: daysOut(5) }))).toBeNull();
+    expect(expiryEndsAt(row({ status: "lapsed", current_period_end: daysOut(5) }))).toBeNull();
   });
 
-  it("returns null for status canceled", () => {
-    expect(expiryEndsAt(row({ status: "canceled", current_period_end: daysOut(5) }))).toBeNull();
-  });
-
-  it("returns null for an EXPIRED trial", () => {
+  it("returns null for a canceled row past its period", () => {
     const now = Date.now();
-    const pastTrialEnd = new Date(now - DAY_MS).toISOString();
-    expect(expiryEndsAt(row({ status: "trial", trial_ends_at: pastTrialEnd }), now)).toBeNull();
+    const pastPeriodEnd = new Date(now - DAY_MS).toISOString();
+    expect(expiryEndsAt(row({ status: "canceled", current_period_end: pastPeriodEnd }), now)).toBeNull();
+  });
+
+  // The trial branch is GONE (ENG-999): a `trial` row is no longer entitled at
+  // all, so even a FUTURE `trial_ends_at` yields no countdown. Asserted
+  // explicitly rather than deleted, so a re-added trial arm goes red.
+  it("returns null for a trial row even with a future trial_ends_at (the trial branch is retired)", () => {
+    const now = Date.now();
+    expect(expiryEndsAt(row({ status: "trial", trial_ends_at: daysOut(5, now) }), now)).toBeNull();
   });
 
   it("returns null for a null row", () => {
@@ -123,42 +132,44 @@ describe("expiryEndsAt", () => {
 });
 
 describe("<ExpiryBanner>", () => {
-  it("renders for a trial at 5 days with a Renew now link to /checkout", async () => {
+  it("renders nothing for an ACTIVE member, whatever the date (a renewal is not an expiry)", async () => {
     const now = Date.now();
-    const sub = row({ status: "trial", trial_ends_at: daysOut(5, now) });
+    for (const days of [1, 3, 5, 8]) {
+      const { unmount } = render(
+        <ExpiryBanner subscription={row({ status: "active", current_period_end: daysOut(days, now) })} />,
+      );
+      await new Promise((r) => setTimeout(r, 0));
+      expect(screen.queryByTestId("expiry-banner")).toBeNull();
+      expect(screen.queryByText(/Your access ends/)).toBeNull();
+      unmount();
+    }
+  });
+
+  it("renders for a CANCELED member inside the last 7 days, with a Renew now link to /checkout", async () => {
+    const now = Date.now();
+    const sub = row({ status: "canceled", current_period_end: daysOut(3, now) });
     render(<ExpiryBanner subscription={sub} />);
 
-    expect(await screen.findByText("Your access ends in 5 days.")).toBeInTheDocument();
+    expect(await screen.findByText("Your access ends in 3 days.")).toBeInTheDocument();
     const link = screen.getByRole("link", { name: "Renew now" });
     expect(link).toHaveAttribute("href", "/checkout");
   });
 
-  it("renders for an ACTIVE member with current_period_end 3 days out", async () => {
+  it("renders nothing for a canceled row 8 days out (outside the warning window)", async () => {
     const now = Date.now();
-    const sub = row({ status: "active", current_period_end: daysOut(3, now) });
-    render(<ExpiryBanner subscription={sub} />);
-
-    expect(await screen.findByText("Your access ends in 3 days.")).toBeInTheDocument();
-  });
-
-  it("renders nothing for a trial at 8 days", async () => {
-    const now = Date.now();
-    const sub = row({ status: "trial", trial_ends_at: daysOut(8, now) });
+    const sub = row({ status: "canceled", current_period_end: daysOut(8, now) });
     render(<ExpiryBanner subscription={sub} />);
 
     await new Promise((r) => setTimeout(r, 0));
     expect(screen.queryByTestId("expiry-banner")).toBeNull();
   });
 
-  // `daysOut(0)` is half a day in the PAST, which is the honest name for this
-  // case: an exactly-zero day count is unreachable through the component,
-  // because `hasAccess()` requires a strictly-future end date, so a member at
-  // 0 has already lost entitlement. This is the "no zero state" rule — the
-  // member is on the 402 path and the banner must stay down rather than nag
+  // `daysOut(0)` is half a day in the PAST. A canceled member is already
+  // gated then (no grace), so the banner must stay down rather than nag
   // them to renew something they have already lost.
-  it("renders nothing once the trial end has passed (the no-zero-state rule)", async () => {
+  it("renders nothing once a canceled period end has passed (the no-zero-state rule)", async () => {
     const now = Date.now();
-    const sub = row({ status: "trial", trial_ends_at: daysOut(0, now) });
+    const sub = row({ status: "canceled", current_period_end: daysOut(0, now) });
     render(<ExpiryBanner subscription={sub} />);
 
     await new Promise((r) => setTimeout(r, 0));
@@ -174,15 +185,23 @@ describe("<ExpiryBanner>", () => {
   });
 
   it("renders nothing for status lapsed", async () => {
-    const sub = row({ status: "lapsed", trial_ends_at: daysOut(5) });
+    const sub = row({ status: "lapsed", current_period_end: daysOut(5) });
     render(<ExpiryBanner subscription={sub} />);
 
     await new Promise((r) => setTimeout(r, 0));
     expect(screen.queryByTestId("expiry-banner")).toBeNull();
   });
 
-  it("renders nothing for status canceled", async () => {
-    const sub = row({ status: "canceled", current_period_end: daysOut(5) });
+  it("renders nothing for a canceled row past its period", async () => {
+    const sub = row({ status: "canceled", current_period_end: new Date(Date.now() - DAY_MS).toISOString() });
+    render(<ExpiryBanner subscription={sub} />);
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByTestId("expiry-banner")).toBeNull();
+  });
+
+  it("renders nothing for a trial row even with a future trial_ends_at (the trial branch is retired)", async () => {
+    const sub = row({ status: "trial", trial_ends_at: daysOut(5) });
     render(<ExpiryBanner subscription={sub} />);
 
     await new Promise((r) => setTimeout(r, 0));
@@ -199,7 +218,7 @@ describe("<ExpiryBanner>", () => {
   it("dismiss hides the banner and stores the endsAt ISO string in sessionStorage", async () => {
     const now = Date.now();
     const endsAt = daysOut(5, now);
-    const sub = row({ status: "trial", trial_ends_at: endsAt });
+    const sub = row({ status: "canceled", current_period_end: endsAt });
     const user = userEvent.setup();
     render(<ExpiryBanner subscription={sub} />);
 
@@ -214,7 +233,7 @@ describe("<ExpiryBanner>", () => {
     const now = Date.now();
     const endsAt = daysOut(5, now);
     window.sessionStorage.setItem(DISMISS_KEY, "2020-01-01T00:00:00.000Z");
-    const sub = row({ status: "trial", trial_ends_at: endsAt });
+    const sub = row({ status: "canceled", current_period_end: endsAt });
     render(<ExpiryBanner subscription={sub} />);
 
     expect(await screen.findByText("Your access ends in 5 days.")).toBeInTheDocument();
@@ -224,7 +243,7 @@ describe("<ExpiryBanner>", () => {
     const now = Date.now();
     const endsAt = daysOut(5, now);
     window.sessionStorage.setItem(DISMISS_KEY, endsAt);
-    const sub = row({ status: "trial", trial_ends_at: endsAt });
+    const sub = row({ status: "canceled", current_period_end: endsAt });
     render(<ExpiryBanner subscription={sub} />);
 
     await new Promise((r) => setTimeout(r, 0));

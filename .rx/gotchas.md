@@ -101,8 +101,12 @@ Against the **old** webhook (be `main`) it breaks two ways, both silent:
 `feature/stripe-trial-v1` integration branch this is the gate ticket's job to sequence.
 
 ## Never hardcode the price — derive it from the Stripe price
+**(Updated ENG-1001, 6 Sep 2026: there are now TWO prices and `STRIPE_PRICE_ID` is
+read NOWHERE. The route picks `STRIPE_PRICE_ID_PROMO` or `STRIPE_PRICE_ID_STANDARD`
+server-side from `subscription.promo_passes_used`. Everything below still holds — it
+just applies to whichever price id was chosen.)**
 The sandbox price is **A$1.00** and production is **A$19.00**. `/api/subscription/checkout`
-retrieves `STRIPE_PRICE_ID` and returns `unitAmount`/`currency`; the FE formats every
+retrieves the chosen price id and returns `unitAmount`/`currency`; the FE formats every
 amount from those. A hardcoded `1900`/`"AU$19.00"`/`1.73` makes the screen claim one
 number while Stripe charges another. GST is display-only: `unitAmount / 11` (AU prices
 are GST-inclusive). `Intl.NumberFormat("en-US", { currency: "AUD" })` renders the
@@ -167,8 +171,9 @@ a silent rename inside a feature slice.
 
 ## Two host env vars, inlined at BUILD time, with working defaults
 `NEXT_PUBLIC_MARKETING_HOST` (default `stablepass.co`) and `NEXT_PUBLIC_APP_HOST`
-(default `app.stablepass.co`), both in `lib/hosts.ts`. There is no `.env.example`
-in this repo, so this is the only place they are written down. Two traps: they
+(default `app.stablepass.co`), both in `lib/hosts.ts` (and reached from
+`app/robots.ts` via `spaceForHost`). ENG-998 added a committed `.env.example`,
+which now documents them too. Two traps: they
 are `NEXT_PUBLIC_*`, so a change needs a REBUILD, not just a redeploy of env; and
 because the defaults are already correct for production, a deployment that never
 sets them works — nobody discovers the knobs exist until a domain changes.
@@ -1353,6 +1358,319 @@ checkout, and `it.skipIf(!MOCKUP)` SKIPS them when it does not resolve. A baseli
 worktree in `/tmp` therefore reports green and looks like your change caused the red.
 Create the baseline under `.claude/worktrees/` so the depth matches. (Both currently
 fail on `main` — mockup byte-drift, ENG-977 territory.)
+
+## `.gitignore`'s `.env*` silently swallows `.env.example`
+The ignore rule is `.env*` (unanchored), so a newly created `.env.example` is
+ignored and `git add` does nothing — the file just never appears in the diff.
+`git check-ignore -v .env.example` is confusing here (it prints the *negation*
+rule once one exists); the reliable signal is `git status --short`, since ignored
+files never show up there at all. Fix is one line **after** the `.env*` rule:
+`!/.env.example` (root-anchored, so it cannot re-include a nested `.env.example`).
+Verify with `git check-ignore -q` on `.env`, `.env.local` and
+`.env.production.local` — all three must stay ignored. Expect any ticket whose
+surface is `.env.example` to need this `.gitignore` line too; it is an
+unavoidable widening, not scope creep.
+
+## `vercel env add <NAME> preview` cannot be completed non-interactively
+Adding a **Preview** var bails with
+`{"status":"action_required","reason":"git_branch_required"}` — and it does this
+*even when you run the exact command its own `next[]` hint tells you to*
+(`vercel env add NAME preview --value <v> --yes`). CLI 50.37.3. `production` and
+`development` take a piped stdin value fine; only `preview` is broken, because it
+wants to know whether the var is branch-scoped or all-branches.
+Workaround — go straight at the REST API with the CLI's own token:
+```
+TOKEN=$(python3 -c "import json;print(json.load(open('$HOME/.local/share/com.vercel.cli/auth.json'))['token'])")
+curl -X POST "https://api.vercel.com/v10/projects/$PROJECT_ID/env?teamId=$TEAM_ID&upsert=true" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"key":"NAME","value":"v","type":"encrypted","target":["preview"]}'
+```
+`projectId` / `orgId` are in `.vercel/project.json`. Also note this CLI takes only
+ONE environment per `env add` — `... production preview development` is an
+"Invalid number of arguments" error, not a multi-target add.
+
+## Stripe: there is no `stripe` CLI on this machine — use the REST API
+Tickets are written against `stripe prices retrieve …` / `stripe prices list`, but
+the CLI is not installed. Use `curl -u "$SK:" https://api.stripe.com/v1/...` with
+the key read out of `.env.local`. Always assert `livemode: false` in the response
+before believing you were in the sandbox — the key prefix (`sk_test_`) and
+`livemode` are the two checks worth making explicit in any ticket comment.
+`tax_behavior` on a price is **immutable once set** to `inclusive`/`exclusive`,
+so set it correctly at creation (AU prices are GST-inclusive) rather than
+planning to fix it later; it does not enable Stripe Tax by itself.
+
+## Preview deploys have NO Stripe env at all
+`STRIPE_SECRET_KEY` and `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` exist for
+Production and Development only. Any preview deployment therefore 502s
+`stripe_unavailable` on `/api/subscription/checkout` no matter which price ids
+are configured. Don't debug a preview checkout as a code bug, and don't assume a
+"set it for Preview + Production" ops ticket made preview functional.
+
+## `e2e/checkout.spec.ts` is RED on `feature/pricing-v1` — all 3 tests, pre-existing (ENG-1001, 6 Sep 2026)
+The reveal-password toggle (commit `7cc153e`, on the base) made `getByLabel("Password")`
+ambiguous, and this spec still uses the bare label. All three ENG-567 tests therefore
+die inside `signIn()` at line 56, **before** ever reaching `/checkout` — so they tell
+you nothing about the checkout screen and must not be read as a regression from a
+checkout change. Use `getByRole("textbox", { name: "Password" })`, as
+`e2e/eng-1001-checkout-pricing.spec.ts` does.
+- **Do this:** before blaming a checkout diff for a red `e2e/checkout.spec.ts`, check
+  whether the failure is at `signIn`. Fixing the spec is a one-line change, but it
+  belongs to whoever owns that file's surface.
+
+## grill-me already committed a `.rx/specs/<date>-<ticket>-design.md` — READ IT BEFORE WRITING (ENG-1001, 6 Sep 2026)
+The per-ticket design spec named in a ticket's surface is frequently ALREADY on the
+base branch (the epic's docs commit lands a short pre-build version). A `Write` to
+that path silently replaces it, and the pre-build reasoning is gone from the diff with
+nothing flagging the loss.
+- **Do this:** `git show origin/<base>:.rx/specs/<file>` first. The as-built spec should
+  supersede and absorb it, not quietly overwrite it — and say so in the PR.
+
+## `promo_passes_used` counts EVERY paid pass, not just discounted ones
+So the promo test is a plain `promoUsed < 6` and the counter keeps climbing past the
+threshold — `promoRemaining` must be clamped with `Math.max(0, …)` or a member on
+their tenth pass reads a negative number. Confirmed in the be migration comment and in
+`.rx/specs/2026-09-05-paid-only-subscription-epic-design.md`.
+
+## `getByLabel("Password")` is AMBIGUOUS in Playwright — every e2e spec uses it
+**(2026-09-06, ENG-1002)** `/signin` gained a show/hide control that is a
+`<button aria-label="Show password">` inside the password field's label, so
+`page.getByLabel("Password")` resolves to TWO elements and Playwright's strict
+mode throws `strict mode violation`. This is not local to one spec: `e2e/`'s
+`screenshots.spec.ts` (5 call sites) and `checkout.spec.ts` all still use the
+ambiguous form, so the sign-in helper of every older spec is broken.
+- **Do this:** `await page.locator("#password").fill(PASSWORD);` (the input
+  carries `id="password"`), and prefer `getByRole("button", { name: "Sign in",
+  exact: true })` for the submit.
+- Only `e2e/eng-1002-cancel.spec.ts` was fixed — repairing the rest is its own
+  ticket, since some of those specs are broken for OTHER reasons too (below).
+
+## ENG-999 retired `trial` — every fixture seeding `status: 'trial'` now 23514s
+**(2026-09-06, ENG-1002)** `20260905120000_paid_only_subscription.sql` narrowed
+the CHECK to `status in ('active','lapsed','canceled')` and made
+`has_content_access()` grant `{active, canceled} + expiry`. Two consequences that
+bite anything written before it:
+- an **e2e seed** of `status: 'trial'` is now a constraint violation, not a
+  fixture (`e2e/eng-585-status-truth.spec.ts` had one; fixed).
+- a **unit fixture** of `status: 'trial'` used to mean "entitled" and now means
+  "walled" — silently, since it is just data. Six suites (`feed-route`,
+  `following-screen`, `horses-route`, `saved-feed`, `shares-browse-segregation`,
+  `trainers-route`) used it as their entitled fixture and went red. Re-point them
+  to `status: 'active'` with the same date on `current_period_end`.
+- `e2e/expiry-banner.spec.ts` and `e2e/trial-start.spec.ts` seed trials through
+  the SIGNUP flow and cannot be fixed this way — they are dead until `/start` is
+  reworked.
+- Still stale afterwards: `components/access-wall.tsx` tells a member who never
+  paid "Your free trial has ended". Needs its own ticket.
+
+## `.rx/mockups.md` is STILL wrong — the real mockups are under `dev-handover/`
+**(2026-09-06, ENG-1002)** The manifest points at
+`<workspace>/06-stage1-design/mockups/web/` and asserts that
+`dev-handover/StablePass-mockups/mockups/web/` "has never existed". As of today
+the opposite is true: `06-stage1-design/` does not exist and
+`/home/reno-fathoni/Documents/rx/stable/dev-handover/StablePass-mockups/mockups/web/screens/`
+holds all eight screens. **`ls` the path before building against it** — this
+manifest has now been wrong three times in three different directions.
+
+## Unit tests live in `test/`, never colocated — grill-me keeps emitting colocated paths
+**(2026-09-06, ENG-1002)** The ticket's Surface asked for
+`app/api/subscription/cancel/route.test.ts` and `lib/api/access.test.ts`. All 70
+test files in this repo live in `test/` and none are colocated; vitest would run
+a colocated file, so this fails silently as a convention drift rather than an
+error. Put them in `test/<area>.test.ts` and note the deviation on the ticket.
+
+## jsdom leaks a controlled `<textarea>`'s value into `textContent`
+**(2026-09-06, ENG-1002)** In a real browser a textarea's `.value` (the dirty
+value) and its `textContent` diverge; in jsdom, once a value is typed via a
+dispatched input event it shows up in `element.textContent`/`innerHTML` too. So a
+guardrail assertion like "the member's comment is not rendered anywhere in the
+DOM" is not meaningful while the field that legitimately holds it is still
+mounted — strip form controls from a DOM clone before asserting, or the test is
+either falsely red or vacuously green depending on phrasing.
+
+## PostgREST returns timestamptz as `+00:00`, not `Z`
+**(2026-09-06, ENG-1002)** A fixture seeded with `new Date().toISOString()`
+(`…761Z`) reads back from PostgREST as `…761+00:00`, so a string `toBe()`
+comparison fails on an identical instant. Compare with `Date.parse()` on both
+sides in any e2e assertion that round-trips a timestamp through the API.
+
+## A loaded box makes `test/marketing-marquee.test.ts` time out (5s, scans `.next`)
+**(2026-09-06, ENG-1002)** Its last test walks the whole 24MB `.next/{server,static}`
+tree under vitest's default 5s timeout. With a sibling worktree's suite running
+concurrently it times out; alone it passes in seconds. Before believing a red
+here, re-run the file on its own — and check whether another worker is running
+(`ps aux | grep vitest` shows the other checkout's path).
+
+## STALE: "there is no cancel route" — ENG-1002 brought it back
+**(2026-09-06, ENG-1002)** An earlier section of this file, `.rx/guardrails.md` #3
+and `CLAUDE.md` all still say the pass has **no cancel route** (true after ENG-567
+deleted it) and that the gate is `status in {trial, active}`. Both stopped being
+true on `feature/pricing-v1`:
+- `POST /api/subscription/cancel` exists again, with different semantics — it
+  calls the `cancel_own_subscription()` RPC, not a table update.
+- the gate is `{active, canceled}` + expiry (`has_content_access()`, ENG-999).
+`CLAUDE.md` and `.rx/guardrails.md` are outside ENG-1002's surface and are left
+for a doc ticket — but do not trust either on subscription state until then.
+
+## Cancelling with a NULL `current_period_end` revokes access immediately
+**(2026-09-06, ENG-1002)** `cancel_own_subscription()` stamps
+`current_period_end = coalesce(current_period_end, now())`, which is deliberate
+(a `canceled` row with a null period would grant access forever and
+`subscription-expiry-sweep` only touches `status='active'`, so nothing could ever
+reclaim it). The UI consequence is easy to miss: `active` + null period is the
+just-paid / webhook-in-flight window and is ENTITLED, so a naive
+`canCancel = entitled && status === "active"` offers the control there — and
+cancelling revokes access on the spot until the late webhook restores it. Any
+future cancel affordance must require a non-null `current_period_end`.
+## RESOLVED by ENG-1003 — signup no longer calls `phone_in_use`
+The "a LEAKED e2e user bricks every later run" entry above is **dead as of ENG-1003**.
+`POST /api/auth/signup` no longer consults the RPC at all (the trial it rationed is
+retired), so a stale `+61 400 000 000` in `app_user` walls nothing and the recovery
+`DELETE` in that entry is chasing a ghost. The RPC and `idx_app_user_phone` still
+exist server-side — ENG-742's backstop still degrades a duplicate phone to NULL — so
+`lib/format/phone.ts` and its parity test stay; they simply have no production caller
+now. A repeat phone signs up normally, by decision.
+
+## `_archive/` does NOT always supersede the live mockup — read the file's own header
+The manifest convention says an archived mockup supersedes the live one. On
+`mockups/web/screens/03-trial-start.html` that is **backwards**: the live file's header
+says *"revised 15 Aug 2026 … Previous version archived at
+`_archive/03-trial-start.2026-08-15.html`"*, and the archive is the older **three-field**
+screen (Your name / Email / Phone) against the live six-field one the app actually
+implements. Building to the archive would have deleted first/last name, postcode and
+password from `/start`. Check the live file's own header before applying the convention —
+it names its predecessor when it has one. (Also still true, verified again 6 Sep 2026:
+`.rx/mockups.md` points at `06-stage1-design/mockups/web/`, which does not exist. The real
+tree is `dev-handover/StablePass-mockups/mockups/web/`, OUTSIDE this repo.)
+
+## A copy-guard test is only as good as its pattern list — mutate it before trusting it
+ENG-1003's `test/no-trial-copy.test.ts` originally banned `/free trial/`, `/30 days free/`
+and `/30 days, on us/` — and the single largest piece of trial copy it was written to keep
+out, the aside quote *"30 days on us — no credit card, no auto-charge"*, matched **none** of
+them (no comma, and "no credit card" is the pitch without ever saying "trial"). It passed
+green while the thing it guarded against could be pasted straight back. Two rules:
+1. **Mutation-test a grep guard**: restore the exact string the ticket deleted and confirm
+   the test goes RED. Green after that mutation means the guard is decorative.
+2. **Never key an allowlist on line numbers** when the scanner strips comments. A plain
+   `raw.replace(/\/\*[\s\S]*?\*\//g, "")` deletes the newlines *inside* the comment, so
+   `i + 1` is an index into the stripped body, not a file line — it drifts the moment
+   anyone adds a multi-line JSX comment, and it silently ALLOWS whatever else lands on the
+   allowed index. Blank the comment out instead — `.replace(/[^\n]/g, "")` inside the
+   callback — and key the allowlist on the offending **text**.
+
+## An absence-only assertion is a tautology once the call site is deleted
+`expect(rpcMock).not.toHaveBeenCalled()` after the RPC call has been removed from the route
+can never fail, and does not prove the acceptance criterion it was written for ("a repeat
+phone now creates an account normally"). Pair every "X is no longer called" assertion with
+the positive control in the same test — assert the 201 as well — or the test file grows
+green assertions that measure nothing. Same for `not.toHaveBeenCalledWith(...)` sitting
+above `not.toHaveBeenCalled()`: the second strictly subsumes the first.
+
+## `active` + PAST `current_period_end` is a ROUTINE state, not corrupt data
+`lib/api/access.ts` `hasAccess()` returns entitlement for `active`/`canceled` purely on
+the date: status is flipped when the be `stripe-webhook` lands, **not** at expiry. So an
+`active` row routinely outlives its `current_period_end` (ENG-585 shipped a user-visible
+bug in exactly that window). Any ticket reasoning about "an active member" must decide
+what it does in that window — do not write it off as an upstream data problem. It bit
+ENG-1007, where it is the difference between a rare edge case and the most motivated
+users of the early-renewal path.
+
+## Checkout Branch B's `newPeriodEnd` fallback is CONTRACTED — do not quantise it
+`test/subscription-routes.test.ts` asserts "a PAST current_period_end falls back to now —
+never extends from a stale date" against the **real clock** with a ±5s tolerance. Rounding
+that fallback onto any grid (e.g. `IDEMPOTENCY_BUCKET_MS`, to stabilise an idempotency
+digest) shifts a money-bearing date and fails that test non-deterministically — it passes
+only when wall-clock happens to sit near a bucket boundary. Related trap: quantising only
+the DIGEST while sending the true params is worse, not better — same key + different params
+is precisely what Stripe rejects (`idempotency_error`), turning a rare double charge into a
+deterministic 502.
+
+## A frozen-clock idempotency test cannot fail
+`vi.setSystemTime()` with no advance makes any deterministic key implementation pass —
+including a broken one that digests `Date.now()` straight in. For "two tabs" races, always
+`vi.advanceTimersByTime(...)` between the two calls, and start **mid-bucket** (e.g.
+`T00:03:00Z`) since a round time like `T00:00:00Z` sits exactly on the 10-minute boundary
+and the advance would straddle it. Caught in ENG-1007 review, not by the green suite.
+
+## `toHaveBeenCalledWith` is arity-exact — adding an options arg breaks callers
+Adding a second argument to a mocked Stripe call (e.g. `paymentIntents.create(params,
+{ idempotencyKey })`) fails every existing `toHaveBeenCalledWith(objectContaining(...))`
+single-arg assertion, even though the first arg still matches. Assertions that index
+`.mock.calls[n][0]` are unaffected. Expect to update a handful of pre-existing tests; it
+is a forced mechanical edit, not a regression.
+## Retiring a shared copy string: grep the REGEX forms, not just the literal
+ENG-1008 renamed `WALL_COPY.trialEnded` → `neverSubscribed` and changed its title.
+Grepping the repo for the literal `"Your free trial has ended"` found two pinning
+tests. The suite then failed on **three more** — `test/explore-feed.test.tsx`,
+`test/following-screen.test.tsx`, `test/saved-feed.test.tsx` — which pinned it as
+`findByText(/your free trial has ended/i)`, lower-cased and slash-delimited, so the
+literal grep missed all three. A fourth form hides in the `it("...")` NAME
+(`"shows the free-trial-ended wall"`), which no assertion grep finds at all.
+Before changing any string rendered by a shared component, grep case-insensitively
+for the phrase with `.` between words (`free.trial.has.ended`) **and** for a
+hyphenated slug of it (`free-trial-ended`), and check test names as well as bodies.
+Better: have the anchor read the constant. Those five call sites used the wall title
+as the positive "the 402 path actually rendered" anchor, which does not need the
+literal at all — they now import `WALL_COPY` and assert
+`WALL_COPY.neverSubscribed.title`, so the next copy change cannot break them.
+
+## Clearing a `PENDING_ROOTS` entry: PROMOTE the root, don't just delete it
+`test/no-trial-copy.test.ts` scans two lists — `FUNNEL_ROOTS` (zero hits allowed) and
+`PENDING_ROOTS` (hits allowed only if they match a named string). A root in **neither**
+list is not scanned at all. So "delete your entry from PENDING_ROOTS when your ticket
+lands" is half an instruction: deleting alone silently drops the root from coverage at
+the exact moment it becomes clean. ENG-1008 moved `components` and `app/onboarding`
+into `FUNNEL_ROOTS` instead, which is what the file's own comment says should happen
+("that root gets the same zero bar as the funnel"). Check the same shape on any other
+allowlist-plus-strict-list guard before assuming a deletion tightened anything.
+
+## `getByLabel("Password")` is ambiguous repo-wide — and NOT because of the markup
+`getByLabel` matches the accessible name as a **case-insensitive substring**, so
+`"Password"` also matches the reveal control's `aria-label="Show password"`
+(`components/password-input.tsx`) → *strict mode violation, resolved to 2 elements*.
+Get the cause right, because it decides the fix: the button is **not** inside the
+`<label>` — in `app/signin/sign-in-form.tsx` the `<label htmlFor="password">` and the
+`<PasswordInput>` are **siblings** inside `.input-group`, and the button lives in
+PasswordInput's own wrapper. So restructuring the markup fixes nothing;
+`getByLabel("Password", { exact: true })` or `page.locator("#password")` both do.
+
+`eng-956`, `eng-1001` and `eng-1002` had each already worked around it locally with
+`page.locator("#password")`, and ENG-1008 did the same for `eng-585`. Still carrying
+the broken form: `checkout`, `expiry-banner`, `trial-start`, `eng-762`,
+`signin-cta-sidebar-email` and `screenshots.spec.ts`.
+Consequence worth noting: a spec that cannot reach its assertions is not a guard, and
+this is why the stale wall string ENG-1002 deliberately pinned in eng-585 never showed
+up as a red run. **Before trusting "this e2e spec would have caught it", run it on the
+base branch.** A repo-wide sweep of the remaining six files wants its own ticket.
+
+## A module-scope `NextResponse` can only be read once (ENG-1028, 6 Sep 2026)
+`fail()` returns a `NextResponse`. Caching one 502 at module scope and returning
+it from two requests works for the first caller and **500s the second** —
+`Response` body/headers are single-consume. Symptom: the first Stripe-down cancel
+is a clean 502, the next is an un-enveloped 500.
+- **Do this:** a helper that calls `fail(...)` each time, never a reused Response.
+
+## Worktree `next start` e2e: lockfile parent + `NEXT_PUBLIC_*` at build (ENG-1028, 6 Sep 2026)
+A worktree under `.claude/worktrees/` has its own `package-lock.json` *and* a
+parent one. Next 16 then infers the workspace root as the parent checkout, so
+`next dev` can blow the OS file-watch limit, and `lsof` cwd on `next start` may
+not equal the worktree — official `playwright.config.ts` then refuses to reuse
+that server (ENG-597). Separately, `NEXT_PUBLIC_SUPABASE_*` is inlined at
+**build**: a `next start` built without them hangs sign-in even if the process
+env is correct.
+- **Do this:** `NEXT_PUBLIC_SUPABASE_URL` + `ANON_KEY` on `npm run build`, then
+  `next start --port <free>`; drive Playwright with `baseURL` only (no
+  `webServer`) if ownership check fails. Do not reuse `:3000`.
+
+## Portal tests must not pin the live `bpc_…` id (ENG-1028, 6 Sep 2026)
+ENG-1023 records the sandbox Billing Portal configuration id on the Linear
+ticket. Putting that id in a unit test is a real object id in git.
+- **Do this:** assert pin-through with a fake (`bpc_test_pin`). Names only in
+  the repo (`.env.example` already).
+
+## Intro change-over is paid invoices, not a calendar month (ENG-1045, 6 Sep 2026)
+- **Symptom:** checkout/account printed “A$19.00 from March 2027”. After cancel → gap → resubscribe that month is a lie. After `confirmPayment`, Explore showed the unpaid wall until a hard refresh — webhook had not written `active` yet.
+- **Cause:** remaining intro months are discounted invoices Stripe still has to issue, not calendar months from today. `confirmPayment` only means the card was charged; `hasAccess` flips when stripe-webhook writes the row.
+- **Do this:** `priceChangesOn` is always `null`. Account “Then” is `A$19.00 per month`. After pay, poll `GET /api/feed?limit=1` until 200, then `location.assign("/explore")`. 3DS `return_url` is `/explore?paid=1` and waits the same way. Timeout still navigates (fail-closed on the URL). Do not invent a change-over date from `current_period_end + remaining`.
 
 ## The marketing copy guardrail sweeps the WHOLE build — comments included (ENG-953, 4 Sep 2026)
 

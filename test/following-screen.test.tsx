@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FollowingScreen } from "@/app/(member)/following/following-screen";
+import { WALL_COPY } from "@/components/access-wall";
 
 const VIEWER_ID = "8f3c1a2b-1234-4abc-9def-0123456789ab";
 
@@ -100,9 +101,10 @@ function fetchImpl() {
 }
 
 beforeEach(() => {
-  // Not-gated default: an in-flight trial (future `trial_ends_at`) — matches the
-  // pre-ENG-585 default of `subStatus = "trial"` under the old status-only check.
-  subRow = { status: "trial", trial_ends_at: "2099-01-01T00:00:00.000Z", current_period_end: null };
+  // Not-gated default: an active row with a future `current_period_end`.
+  // ENG-999 retired the trial (a `trial` row is no longer entitled at all),
+  // so the not-gated default moved from `status: "trial"` to `status: "active"`.
+  subRow = { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00.000Z" };
   horseFollows = HORSE_FOLLOWS;
   trainerFollows = TRAINER_FOLLOWS;
   feedStatus = 200;
@@ -159,12 +161,16 @@ describe("FollowingScreen", () => {
     expect(await screen.findByText("Mahogany")).toBeInTheDocument();
   });
 
-  it("shows the free-trial-ended wall (and never the rails) when the subscription is lapsed and the member never subscribed", async () => {
+  it("shows the no-pass-yet wall (and never the rails) when the subscription is lapsed and the member never subscribed", async () => {
     subRow = { status: "lapsed", trial_ends_at: null, current_period_end: null };
     feedStatus = 402;
     render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
 
-    expect(await screen.findByText(/your free trial has ended/i)).toBeInTheDocument();
+    // ENG-1008: the never-subscribed wall no longer claims a trial ended — that
+    // member never had one. Read the title from WALL_COPY rather than retyping
+    // it; this string had been retyped in five test files and went stale in all
+    // of them the moment the copy was fixed.
+    expect(await screen.findByText(WALL_COPY.neverSubscribed.title)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Get full access" })).toHaveAttribute("href", "/checkout");
     expect(screen.queryByRole("button", { name: "Nature Strip" })).not.toBeInTheDocument();
   });
@@ -346,7 +352,11 @@ describe("FollowingScreen — ENG-613 view model + Follow pill", () => {
     // POSITIVE anchor first — see the note in test/explore-feed.test.tsx. An
     // all-negative assertion on a gated screen passes on a blank page and
     // proves nothing.
-    expect(await screen.findByText("Your free trial has ended")).toBeInTheDocument();
+    // ENG-1008: read the anchor from WALL_COPY rather than retyping it. This
+    // string was retyped across five test files and went stale in every one of
+    // them; the anchor only has to prove the wall RENDERED (i.e. the 402 path
+    // actually ran), and the wall's own copy is pinned in test/access-wall.test.tsx.
+    expect(await screen.findByText(WALL_COPY.neverSubscribed.title)).toBeInTheDocument();
 
     expect(document.querySelector("article.post-web")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Follow / })).not.toBeInTheDocument();

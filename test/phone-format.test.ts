@@ -10,12 +10,14 @@ import { normalizePhone } from "@/lib/format/phone";
 // stablepass-be/test/rls/phone-unique.test.mjs, so that a change to the SQL rule
 // turns both repos red instead of leaving this side to drift quietly.
 //
-// Drift is not cosmetic here. The web route asks the database
-// `phone_in_use(p_phone)` with the number AS TYPED, and uses this helper only to
-// skip the round trip when the value cannot possibly be in use. If this function
-// answers null where the SQL answers a real key, the check is skipped, a repeat
-// signup walks through the wall, and the member silently gets a second trial
-// with their phone dropped to NULL. Nothing else in the stack notices.
+// Drift used to be a live correctness bug: the web route asked the database
+// `phone_in_use(p_phone)` with the number AS TYPED and used this helper only to
+// skip the round trip when the value could not possibly be in use, so a helper
+// answering null where the SQL answered a real key let a repeat signup walk
+// through the wall. ENG-1003 retired the trial and deleted that call, so the
+// consequence is gone — but the SQL rule and `idx_app_user_phone` are still
+// live server-side, so this parity test stays as the thing that keeps the
+// mirror honest for whatever calls it next.
 //
 // If you change a case here, change it in stablepass-be in the same round.
 describe("normalizePhone — mirrors public.normalize_phone (ENG-742)", () => {

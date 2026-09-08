@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ExploreFeed } from "@/app/(member)/explore/explore-feed";
+import { WALL_COPY } from "@/components/access-wall";
 
 const VIEWER_ID = "8f3c1a2b-1234-4abc-9def-0123456789ab";
 
@@ -161,12 +162,16 @@ describe("ExploreFeed", () => {
     });
   });
 
-  it("shows the free-trial-ended wall (no posts) when the feed is gated (402) and the member never subscribed", async () => {
+  it("shows the no-pass-yet wall (no posts) when the feed is gated (402) and the member never subscribed", async () => {
     global.fetch = fetchImpl(402) as unknown as typeof fetch;
 
     render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
 
-    expect(await screen.findByText(/your free trial has ended/i)).toBeInTheDocument();
+    // ENG-1008: the never-subscribed wall no longer claims a trial ended — that
+    // member never had one. Read the title from WALL_COPY rather than retyping
+    // it; this string had been retyped in five test files and went stale in all
+    // of them the moment the copy was fixed.
+    expect(await screen.findByText(WALL_COPY.neverSubscribed.title)).toBeInTheDocument();
     expect(screen.queryByText("Mahogany")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Get full access" })).toHaveAttribute("href", "/checkout");
   });
@@ -485,7 +490,11 @@ describe("ExploreFeed — ENG-613 view model + Follow pill", () => {
     // and would pass on a blank screen — the exact vacuous-on-402 trap this
     // repo has been bitten by. The wall being present is what proves the 402
     // path actually ran.
-    expect(await screen.findByText("Your free trial has ended")).toBeInTheDocument();
+    // ENG-1008: read the anchor from WALL_COPY rather than retyping it. This
+    // string was retyped across five test files and went stale in every one of
+    // them; the anchor only has to prove the wall RENDERED (i.e. the 402 path
+    // actually ran), and the wall's own copy is pinned in test/access-wall.test.tsx.
+    expect(await screen.findByText(WALL_COPY.neverSubscribed.title)).toBeInTheDocument();
 
     expect(document.querySelector("article.post-web")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Follow / })).not.toBeInTheDocument();

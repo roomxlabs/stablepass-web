@@ -75,7 +75,7 @@ test("ENG-571 trial start — a bad postcode is rejected client-side with no req
 
   await page.goto("/start");
   await fillForm(page, { postcode: "123" });
-  await page.getByRole("button", { name: "Start free trial" }).click();
+  await page.getByRole("button", { name: "Create account" }).click();
 
   // .form-error, not getByRole("alert"): Next's own #__next-route-announcer__ is
   // also role=alert, so the role selector is ambiguous in strict mode.
@@ -92,15 +92,15 @@ test("ENG-571 trial start — the button goes busy and disabled while the signup
     await route.fulfill({
       status: 201,
       contentType: "application/json",
-      body: JSON.stringify({ data: { subscriber: null, subscription: { status: "trial", trialEndsAt: null } } }),
+      body: JSON.stringify({ data: { subscriber: null, subscription: { status: "lapsed", trialEndsAt: null } } }),
     });
   });
 
   await page.goto("/start");
   await fillForm(page);
-  await page.getByRole("button", { name: "Start free trial" }).click();
+  await page.getByRole("button", { name: "Create account" }).click();
 
-  const busy = page.getByRole("button", { name: "Starting your trial…" });
+  const busy = page.getByRole("button", { name: "Creating your account…" });
   await expect(busy).toBeVisible();
   await expect(busy).toBeDisabled();
 
@@ -108,7 +108,7 @@ test("ENG-571 trial start — the button goes busy and disabled while the signup
 });
 
 test("ENG-571 trial start — a real signup lands first/last/postcode/phone on app_user", async ({ page }) => {
-  // Real signup + a cold /onboarding compile on `next dev` outruns the 30s default.
+  // Real signup + a cold /checkout compile on `next dev` outruns the 30s default.
   test.setTimeout(120_000);
 
   const email = `eng571-${Date.now()}@stablepass.test`;
@@ -127,11 +127,11 @@ test("ENG-571 trial start — a real signup lands first/last/postcode/phone on a
       phone: " +61 400 000 000 ",
       postcode: "0800",
     });
-    await page.getByRole("button", { name: "Start free trial" }).click();
+    await page.getByRole("button", { name: "Create account" }).click();
 
-    // 201 → /onboarding. Generous timeout: against a cold `next dev` server this
-    // is the first request to /onboarding, so it pays that route's compile.
-    await page.waitForURL("**/onboarding", { timeout: 90_000 });
+    // 201 → /checkout. Generous timeout: against a cold `next dev` server this
+    // is the first request to /checkout, so it pays that route's compile.
+    await page.waitForURL("**/checkout", { timeout: 90_000 });
 
     const { data, error } = await admin()
       .from("app_user")
@@ -155,13 +155,14 @@ test("ENG-571 trial start — a real signup lands first/last/postcode/phone on a
     // Trimmed to four digits, stored as text — 800 would mean the zero was lost.
     expect(data!.postcode).toBe("0800");
 
-    // The 30-day trial is provisioned by the same trigger.
+    // ENG-999: a new subscription is provisioned lapsed, not trial — there is
+    // no trial left to give away.
     const { data: sub } = await admin()
       .from("subscription")
       .select("status,trial_ends_at")
       .eq("user_id", userId!)
       .maybeSingle();
-    expect(sub?.status).toBe("trial");
+    expect(sub?.status).toBe("lapsed");
   } finally {
     if (userId) await admin().auth.admin.deleteUser(userId).catch(() => {});
   }

@@ -71,13 +71,13 @@ The detailed admin flows are **9** (compose → publish), **10** (race entry), *
 
 ```mermaid
 flowchart TD
-    A([Trial start screen: name, email, phone, password]) --> B["POST /api/auth/signup"]
+    A([Account creation screen: name, email, phone, postcode, password]) --> B["POST /api/auth/signup"]
     B --> C{Valid & email free?}
     C -- "400 validation_failed" --> A
-    C -- "409 trial_already_used" --> A2[Repeat-signup wall: join prompt + sign in]
-    C -- Yes --> D["Atomic: create auth user + app_user + subscription(status=trial, trial_ends_at=now+30d); NO card / NO Stripe"]
+    C -- "409 account_exists" --> A[Inline error: you already have an account, sign in]
+    C -- Yes --> D["Atomic: create auth user + app_user + subscription(status=lapsed); NO trial, NO card / NO Stripe"]
     D --> E["201 Created -> session established (revokes any other device's session — one device only)"]
-    E --> F[Go to Onboarding]
+    E --> F[Go to Checkout - the account holds no access until it is paid for]
 ```
 
 ## 2. Social login → bootstrap *(Apple / Google / Facebook)*
@@ -314,7 +314,7 @@ Notes: the admin is a normal `app_user` row with `is_admin = true` — there is 
 
 | Flow | Step | Method · Endpoint | Data touched |
 |---|---|---|---|
-| 1 Sign-up | Create trial account | `POST /api/auth/signup` | `app_user`, `subscription(trial)` |
+| 1 Sign-up | Create account (no trial) | `POST /api/auth/signup` | `app_user`, `subscription(lapsed)` |
 | 2 Social login | First-login bootstrap | `POST /api/auth/bootstrap` *(or DB trigger)* | `app_user`, `subscription(trial)` |
 | — | Profile + gate summary | `GET /api/me` | `app_user`, `subscription`, prefs |
 | — | Edit profile + notif prefs | `PATCH /api/me` | `app_user` (name, phone, pref_*) |

@@ -147,7 +147,7 @@ the required production email-template shape).
 ### 03 · Start trial
 | Action | API | Status | Cov |
 |---|---|---|---|
-| Create trial (name, email, phone, **password**) | `POST /api/auth/signup` | 201 · 400 · 409 · 429 | ✅✳️ (password added) |
+| Create account (name, email, phone, postcode, **password**) | `POST /api/auth/signup` | 201 · 400 · 409 `account_exists` · 429 | ✅✳️ (no trial — ENG-1003) |
 
 ### 04 · Checkout · Stripe (embedded — no redirect)
 | Action | API | Status | Cov |

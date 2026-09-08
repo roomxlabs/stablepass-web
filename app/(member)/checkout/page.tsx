@@ -1,37 +1,37 @@
 // Checkout screen (04-checkout.html) — embedded Stripe Elements, no hosted
-// redirect (.rx/guardrails.md #4). Server component: reads trial_ends_at for the
-// "trial ends in N days" sub-copy.
+// redirect (.rx/guardrails.md #4).
 //
-// An `active` member is deliberately NOT redirected away any more. The pass does
-// not auto-renew, so paying again BEFORE expiry (early renewal) is a first-class
-// flow, not an error — the route returns a renewal PaymentIntent and the screen
-// switches to the extend copy. The old `status === "active" → /account` redirect
-// (and the route's matching 409 already_active) were what made that impossible.
+// There is no free trial any more (ENG-999 retired it). This page therefore
+// does not read `trial_ends_at` and does not pass a `trialDaysLeft` down.
 //
-// The actual Stripe Customer/Subscription/PaymentIntent creation + Elements
-// mount happens client-side in CheckoutForm (POSTs /api/subscription/checkout on
-// mount) — this page never talks to Stripe directly.
+// An already-active member has nothing to buy: the pass now auto-renews, so
+// early renewal is gone. Redirect to /account (R4 owns managing a live sub).
+// Only `status` is read here — the coupon, the list price and the remaining
+// intro months are decided SERVER-SIDE by /api/subscription/checkout from
+// `subscription.intro_months_used` and arrive with the clientSecret. Reading
+// the counter here too would just create a second, drift-prone source of truth
+// for a number that decides what someone is charged.
+//
+// Do not import `lib/api/access.ts` or `readSubscriptionState` — those are
+// R5 / shared entitlement, not this slice. A bare `status === "active"` is
+// the redirect rule; a failed or missing row is treated as "not active" and
+// the route fails closed if the same read later fails.
+import { redirect } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
 import { CheckoutForm } from "./checkout-form";
 
 export const metadata = { title: "Checkout · StablePass" };
 
-function trialDaysLeft(trialEndsAt: string | null): number {
-  if (!trialEndsAt) return 0;
-  const ms = new Date(trialEndsAt).getTime() - Date.now();
-  return Math.max(0, Math.ceil(ms / (24 * 60 * 60 * 1000)));
-}
-
 export default async function CheckoutPage() {
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
-  const userId = user!.id;
-
-  const { data: sub } = await sb
-    .from("subscription")
-    .select("status,trial_ends_at")
-    .eq("user_id", userId)
-    .maybeSingle();
-
-  return <CheckoutForm trialDaysLeft={trialDaysLeft(sub?.trial_ends_at ?? null)} />;
+  if (user) {
+    const { data } = await sb
+      .from("subscription")
+      .select("status")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (data?.status === "active") redirect("/account");
+  }
+  return <CheckoutForm />;
 }

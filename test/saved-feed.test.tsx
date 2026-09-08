@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SavedFeed } from "@/app/(member)/saved/saved-feed";
+import { WALL_COPY } from "@/components/access-wall";
 
 const VIEWER_ID = "8f3c1a2b-1234-4abc-9def-0123456789ab";
 
@@ -71,9 +72,10 @@ function bookmarkBuilder() {
 }
 
 beforeEach(() => {
-  // Not-gated default: an in-flight trial (future `trial_ends_at`) — matches the
-  // pre-ENG-585 default of `subStatus = "trial"` under the old status-only check.
-  subRow = { status: "trial", trial_ends_at: "2099-01-01T00:00:00.000Z", current_period_end: null };
+  // Not-gated default: an active row with a future `current_period_end`.
+  // ENG-999 retired the trial (a `trial` row is no longer entitled at all),
+  // so the not-gated default moved from `status: "trial"` to `status: "active"`.
+  subRow = { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00.000Z" };
   bookmarkData = BOOKMARKS;
   bookmarkError = null;
   bookmarkDeleteError = null;
@@ -175,11 +177,15 @@ describe("SavedFeed", () => {
     expect(screen.queryByText("Nature Strip")).not.toBeInTheDocument();
   });
 
-  it("shows the free-trial-ended wall when the subscription is lapsed (gated) and the member never subscribed", async () => {
+  it("shows the no-pass-yet wall when the subscription is lapsed (gated) and the member never subscribed", async () => {
     subRow = { status: "lapsed", trial_ends_at: null, current_period_end: null };
     render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
 
-    expect(await screen.findByText(/your free trial has ended/i)).toBeInTheDocument();
+    // ENG-1008: the never-subscribed wall no longer claims a trial ended — that
+    // member never had one. Read the title from WALL_COPY rather than retyping
+    // it; this string had been retyped in five test files and went stale in all
+    // of them the moment the copy was fixed.
+    expect(await screen.findByText(WALL_COPY.neverSubscribed.title)).toBeInTheDocument();
     expect(screen.queryByText("Nature Strip")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Get full access" })).toHaveAttribute("href", "/checkout");
   });

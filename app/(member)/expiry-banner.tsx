@@ -1,8 +1,9 @@
 "use client";
 
-// Expiry banner — "Your access ends in N days." with a way to buy more.
+// Expiry banner — "Your access ends in N days." for a CANCELLED member only.
 // Mounted by the (member) shell so it appears on EVERY member screen, not just
-// Account (ENG-570 scope decision 2).
+// Account (ENG-570 scope decision 2). An active auto-renewing member never
+// sees this: `current_period_end` is a renewal, not an ending.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // NO MOCKUP. `.rx/mockups.md` has no banner screen and none was drawn for one.
@@ -83,18 +84,27 @@ export function expiryMessage(days: number): string {
 /**
  * The date this member is counting down to, or null when no banner is due.
  *
- * `endsAt` follows the STATUS, not "whichever date happens to be set": a trial
- * member counts down to `trial_ends_at`, everyone else to `current_period_end`.
- * An `active` member whose period end has not landed yet (the Stripe webhook is
- * in flight) therefore gets NO banner rather than a wrong one — `hasAccess`
- * deliberately treats that null as access-granting, and a null end is not an
- * imminent end.
+ * Returns a date ONLY when `status === "canceled"`. Under auto-renew an
+ * `active` member's `current_period_end` is a renewal, so counting down to it
+ * would tell a paying member "Your access ends in 3 days" every month. There
+ * is no "renewing soon" banner — a renewal is not news.
+ *
+ * A cancelled member inside their paid period DOES get the countdown: their
+ * access really is ending on that date, and "Your access ends in N days" is
+ * exactly right. `hasAccess()` still decides entitlement first — a cancelled
+ * member past `current_period_end` is already gated (no grace on canceled)
+ * and this returns null so the banner never nags the 402 path.
+ *
+ * A member whose period end has not landed yet (the Stripe webhook is in
+ * flight) is `active` + null and gets NO banner — `hasAccess` treats that
+ * null as access-granting, and a null end is not an imminent end.
  */
 export function expiryEndsAt(sub: AccessRow | null, now: number = Date.now()): string | null {
-  // The shared gate decides entitlement — lapsed/canceled/expired all fall out
-  // here, and none of that logic is restated below.
+  // The shared gate decides entitlement — lapsed/expired fall out here, and
+  // none of that logic is restated below.
   if (!hasAccess(sub, now)) return null;
-  return sub!.status === "trial" ? sub!.trial_ends_at : sub!.current_period_end;
+  if (sub!.status !== "canceled") return null;
+  return sub!.current_period_end;
 }
 
 // ── Reading the dismissal without a setState-in-effect ──────────────────────

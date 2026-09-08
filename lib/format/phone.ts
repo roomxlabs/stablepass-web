@@ -10,8 +10,18 @@
 //                    pg_catalog.regexp_replace(coalesce(p_phone,''),'[^0-9]','','g'),
 //                    '^0','61') as d) q
 //
+// ⚠️ NO PRODUCTION CALLER SINCE ENG-1003. The free trial is retired, so there is
+// nothing left to ration one-per-phone and `/api/auth/signup` no longer calls
+// `phone_in_use` at all; a repeat phone now signs up normally. The RPC and
+// `idx_app_user_phone` both still exist server-side (ENG-742's backstop still
+// degrades a duplicate phone to NULL rather than failing the insert), which is
+// why this mirror is kept rather than deleted — but its only importer today is
+// test/phone-format.test.ts, and the paragraph below describes how it USED to
+// be wired. Read it as the rationale for keeping the mirror honest, not as a
+// description of a live call path.
+//
 // WHY A MIRROR EXISTS AT ALL, AND WHY DRIFT IS WORSE THAN HAVING NO MIRROR.
-// The repeat-signup wall (ENG-763) asks the database `phone_in_use(p_phone)`
+// The repeat-signup wall (ENG-763) asked the database `phone_in_use(p_phone)`
 // before creating an account. That RPC normalises IN THE BODY, so the wire call
 // is made with the number exactly as the member typed it and the DB's own rule
 // decides the answer. This helper therefore does NOT decide the wall — it

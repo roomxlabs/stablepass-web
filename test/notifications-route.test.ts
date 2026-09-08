@@ -69,7 +69,11 @@ function req(url: string) {
 
 function entitled() {
   getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-  tableData.subscription = { data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } };
+  // ENG-999 retired the free trial, so `status: "trial"` is no longer entitled
+  // (lib/api/access.ts grants only `active` and `canceled`). This helper means
+  // "a member who can see content", so it is now a paid active row. Left as a
+  // trial it would silently turn every case below into a 402.
+  tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
 }
 
 function row(over: Record<string, unknown>) {
