@@ -2317,3 +2317,46 @@ page whose entire purpose is "a store reviewer can open this URL", that gap matt
 The `DOCUMENTS` loop in `e2e/legal.spec.ts` gives all of it for one array entry —
 but its ALIASES loop hardcodes an `<h1>` of "Terms & Conditions", so only join
 `DOCUMENTS`.
+
+## A seeded e2e member is LAPSED by default — entitle them explicitly (ENG-1057, 10 Sep 2026)
+**Symptom:** a new Playwright spec signs in a freshly-created member, navigates to a gated
+member screen, and every assertion fails on an element that was never rendered — the screen is
+the AccessWall. It reads like a bug in the feature under test.
+**Cause:** the `auth.users` trigger inserts a `subscription` row at the column DEFAULT, which is
+`lapsed`. ENG-999 retired the free trial, so `has_content_access` grants only on `active`
+(within its 3-day renewal grace) or an unexpired `canceled` — `trial` is no longer entitled.
+Several older specs carry a comment claiming "the createUser trigger provisions the trial
+subscription the browse gate reads"; that comment predates ENG-999 and is now wrong.
+**Do this:** after `auth.admin.createUser`, explicitly
+`update subscription set status='active', current_period_end='2099-01-01' where user_id=...`.
+This also matters for Storage: the policy `media gated read` is `authenticated AND
+has_content_access`, so an unentitled member signs nothing and every photo silently falls back
+to initials — a weaker test passing for the wrong reason.
+
+## A supabase mock without `storage.from` throws once a screen signs photos (ENG-1057)
+**Symptom:** unrelated component tests start failing with `sb.storage is undefined` after a
+screen adds a `signPhotoMap`/`signPhoto` call.
+**Cause:** the common mock is `supabaseBrowser: () => ({ from: fromMock })` — no `storage`.
+**Do this:** add a `storage: { from: vi.fn((bucket) => ({ createSignedUrls: async (paths) => ({
+data: paths.map((p) => ({ path: p, signedUrl: `https://.../${bucket}/${p}` })), error: null }) })) }`
+shim. Make it a `vi.fn()`, not a bare object — the guardrail test "a walled member makes ZERO
+Storage calls" needs it to be spyable. Note `createSignedUrl` (singular) and `createSignedUrls`
+(plural) are different methods; a page using `signPhoto` needs the singular one.
+
+## `.select()` projections are invisible to tsc — pin them LITERALLY or they rot (ENG-1057)
+**Symptom:** deleting a column from a `.select(...)` string leaves the whole suite green and
+`tsc --noEmit` clean, and the feature silently reverts in production.
+**Cause:** `sb` is untyped, and the common `chainable()` test helper makes `select` a
+`vi.fn(() => obj)` that IGNORES its argument and returns fixtures which carry the column anyway.
+**Do this:** every changed projection needs an `expect(chain.select).toHaveBeenCalledWith("<the
+exact string>")`. Prove each pin is non-vacuous the same way: delete the column from the source,
+confirm that ONE test reds, restore. A mock shim alone is not coverage.
+
+## Screenshotting /explore on the DEV server catches a StrictMode feed flash (ENG-1057)
+**Symptom:** a Playwright screenshot of `/explore` shows "Couldn't load the feed." beside a
+perfectly correct aside, and it looks like the diff broke the feed.
+**Cause:** React StrictMode double-invokes effects in dev, so the feed's two passes race and the
+error state flips in and out for the first seconds. It reproduces identically on the base branch.
+**Do this:** don't try to wait it out — asserting the text has cleared passes and then the text
+returns on the next pass. Screenshot the surface you actually changed and say so in the PR. If
+you suspect a real regression, A/B it: revert just the one file, re-run the same seeded probe.

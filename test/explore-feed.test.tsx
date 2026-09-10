@@ -47,10 +47,17 @@ function chainable(result: { data: unknown; error: unknown }) {
   return obj;
 }
 
-const { fromMock, upsertMock, insertMock } = vi.hoisted(() => ({
+const { fromMock, upsertMock, insertMock, storageFromMock } = vi.hoisted(() => ({
   fromMock: vi.fn(),
   upsertMock: vi.fn(() => Promise.resolve({ error: null })),
   insertMock: vi.fn(() => Promise.resolve({ error: null })),
+  // A `vi.fn()`, not a bare object literal — ENG-1057 follow-up's guardrail
+  // test needs to assert `storage.from` was NEVER reached for a trainer whose
+  // `follow` embed came back null (RLS-hidden), so this has to be spyable.
+  storageFromMock: vi.fn((_bucket: string) => ({
+    createSignedUrls: (paths: string[]) =>
+      Promise.resolve({ data: paths.map((path) => ({ path, signedUrl: `https://sb.local/signed/${path}` })) }),
+  })),
 }));
 
 // `.storage` is only exercised when a fixture supplies a real `photo_url`
@@ -59,12 +66,7 @@ const { fromMock, upsertMock, insertMock } = vi.hoisted(() => ({
 vi.mock("@/lib/supabase/client", () => ({
   supabaseBrowser: () => ({
     from: fromMock,
-    storage: {
-      from: () => ({
-        createSignedUrls: (paths: string[]) =>
-          Promise.resolve({ data: paths.map((path) => ({ path, signedUrl: `https://sb.local/signed/${path}` })) }),
-      }),
-    },
+    storage: { from: storageFromMock },
   }),
 }));
 
@@ -333,6 +335,7 @@ describe("ExploreFeed — ENG-613 view model + Follow pill", () => {
     fromMock.mockReset();
     followInsert.mockReset();
     followInsert.mockImplementation(() => Promise.resolve({ error: null }));
+    storageFromMock.mockClear();
   });
 
   function mockTables(opts: { follows?: unknown[]; followsError?: { message: string } } = {}) {
@@ -375,6 +378,87 @@ describe("ExploreFeed — ENG-613 view model + Follow pill", () => {
     expect(projection).toBe(
       "id, display_name, photo_url, trainer:trainer_id(id, name, stable_name, location, photo_url)",
     );
+  });
+
+  // ENG-1057 follow-up — same reasoning as the horse projection above, for the
+  // "Trainers you follow" aside's own read. Deleting `photo_url` here leaves
+  // the whole suite green (verified by hand before adding this pin): every
+  // other assertion on this aside reads names/counts off a hand-built fixture,
+  // never the projection string sent to the database.
+  it("pins the follow read's exact projection, including the trainer's photo_url", async () => {
+    mockTables();
+    global.fetch = feedWith([{ id: "p1", horse_id: "h1", type: "photo", title: null, body: "x", media_url: null, poster_url: null, aspect_ratio: null, watermarked: false, like_count: 1, published_at: "2026-07-10T00:00:00.000Z" }]) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    const followCallIndex = fromMock.mock.calls.findIndex((c) => c[0] === "follow");
+    expect(followCallIndex).toBeGreaterThanOrEqual(0);
+    const chain = fromMock.mock.results[followCallIndex].value as { select: ReturnType<typeof vi.fn> };
+    const projection = chain.select.mock.calls[0][0] as string;
+
+    expect(projection).toBe("trainer_id, trainer:trainer_id(id,name,photo_url)");
+  });
+
+  // ENG-1057 follow-up — the aside's own behavioural gap: nothing in this file
+  // asserted that a followed trainer's photo actually reaches the DOM as a
+  // signed <img>.
+  it("ENG-1057: 'Trainers you follow' renders a signed <img class=trainer-avatar-mini-photo>", async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "horse") return chainable({ data: [{ id: "h1", display_name: "Mahogany", trainer: TRAINER }], error: null });
+      if (table === "follow") {
+        return chainable({
+          data: [{ trainer_id: "t1", trainer: { id: "t1", name: "Chris Waller", photo_url: "trainers/waller.jpg" } }],
+          error: null,
+        });
+      }
+      return chainable({ data: [], error: null });
+    });
+    global.fetch = feedWith([{ id: "p1", horse_id: "h1", type: "photo", title: null, body: "x", media_url: null, poster_url: null, aspect_ratio: null, watermarked: false, like_count: 1, published_at: "2026-07-10T00:00:00.000Z" }]) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Trainers you follow");
+
+    // Scoped to the aside row's own class — the feed's post avatars use a
+    // different one, so this is unambiguous even though both are <img alt="">.
+    const asideImg = await waitFor(() => {
+      const el = document.querySelector(".aside-trainer-row .trainer-avatar-mini-photo");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(asideImg).toHaveAttribute("src", "https://sb.local/signed/trainers/waller.jpg");
+  });
+
+  // ENG-1057 follow-up (guardrail hardening) — pins a property that currently
+  // holds only by RLS accident: `trainer_select_sub` hides a lapsed/unentitled
+  // viewer's trainer rows, so the `follow` embed nulls out even though
+  // `trainer_id` itself is still readable. That must never reach Storage.
+  it("GUARDRAIL: a NULL trainer embed on every follow row (RLS-hidden) never touches Storage", async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "horse") return chainable({ data: [{ id: "h1", display_name: "Mahogany", trainer: TRAINER }], error: null });
+      if (table === "follow") {
+        return chainable({
+          data: [
+            { trainer_id: "t1", trainer: null },
+            { trainer_id: "t2", trainer: null },
+          ],
+          error: null,
+        });
+      }
+      return chainable({ data: [], error: null });
+    });
+    global.fetch = feedWith([{ id: "p1", horse_id: "h1", type: "photo", title: null, body: "x", media_url: null, poster_url: null, aspect_ratio: null, watermarked: false, like_count: 1, published_at: "2026-07-10T00:00:00.000Z" }]) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    // Positive anchor that the follow read actually ran and resolved, so the
+    // absence below is real rather than a race against an unsettled effect.
+    await waitFor(() => expect(fromMock.mock.calls.some((c) => c[0] === "follow")).toBe(true));
+    // A NULL embed on every row means the trainerMap stays empty, so the
+    // screen never even reaches the horse-count round trip, let alone signing.
+    expect(screen.queryByText("Trainers you follow")).not.toBeInTheDocument();
+    expect(storageFromMock).not.toHaveBeenCalled();
   });
 
   // ENG-958 — through the REAL mapper, not a hand-built FeedPost: the

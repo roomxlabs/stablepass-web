@@ -593,11 +593,43 @@ a { color: inherit; text-decoration: none; }
   display: flex; flex-direction: column; align-items: stretch;
 }
 .horse-card-web.selected { border-color: var(--brand-green); border-width: 2px; padding: 13px; }
+/* ROUND 8 / ENG-1057 — the browse thumb takes mobile's corner and can hold a
+   photo. `--radius-md` (14px) is mobile's `AVATAR_BOX_RADIUS` (`Radius.md`,
+   src/components/ui/avatar.tsx) to the pixel, and is already this card's own
+   border radius — so bind the token rather than restate the ad-hoc 10px. The
+   client's reason for the box over a circle applies to the corner size too:
+   "with circles it's going to be too difficult to position the horses" — a
+   horse photographed side-on is a long subject and a tight corner keeps it. */
 .horse-card-web .horse-thumb {
-  width: 100%; aspect-ratio: 1; border-radius: 10px; margin-bottom: 12px; overflow: hidden; flex-shrink: 0;
+  width: 100%; aspect-ratio: 1; border-radius: var(--radius-md); margin-bottom: 12px; overflow: hidden; flex-shrink: 0;
   background: linear-gradient(135deg, var(--brand-green-light), var(--brand-green-dark));
   display: flex; align-items: center; justify-content: center;
   color: var(--cream); font-family: var(--font-serif); font-size: 40px; font-weight: 600;
+}
+/* THE PHOTO VARIANT (ENG-1057) — one rule for all three thumb sizes, because
+   the treatment is identical and only the BOX differs. The photo fills its
+   parent box, which already owns the size, the corner and the `overflow:
+   hidden` clip; this element only decides how the bitmap sits in it.
+
+   `cover` because this is PHOTOGRAPHY — the subject is central and the corners
+   are background — the same call `.post-avatar-photo` makes above and the same
+   `contentFit="cover"` mobile's `horse-row.tsx` / `trainer-row.tsx` pass. There
+   is deliberately no `contain` variant here: the stable-LOGO case that needs
+   one (mobile's ENG-754 split) lives on the trainer COVER, not on a browse
+   thumb.
+
+   `--media-ground` is not decoration either. The parent box paints the brand
+   -green gradient for the initials fallback, so without a ground of its own the
+   image area would flash green for the length of the load on every card — and a
+   transparent PNG would sit on brand green permanently. The image's own
+   background covers the gradient the moment the element lays out. */
+.horse-card-web .horse-thumb-photo,
+.trainer-card-web .trainer-thumb-photo,
+.trainer-avatar-mini .trainer-avatar-mini-photo {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+  background: var(--media-ground);
 }
 .horse-card-web .horse-name { font-family: var(--font-serif); font-size: 17px; font-weight: 600; margin: 0 0 2px; line-height: 1.15; min-height: calc(2 * 1.15em); }
 .horse-card-web .horse-trainer { font-size: 12px; color: var(--muted); margin: 0; }
@@ -1078,8 +1110,15 @@ a { color: inherit; text-decoration: none; }
 .aside-race .race-time { font-size: 12px; font-weight: 600; color: var(--brand-green); margin-top: 4px; }
 .aside-trainer-list { display: flex; flex-direction: column; gap: 12px; }
 .aside-trainer-row { display: flex; align-items: center; gap: 10px; }
+/* ROUND 8 / ENG-1057 — a rounded BOX, not a disc (mobile ENG-833: "boxes with
+   curved edge"). `--radius-sm` (8px), NOT the grid thumbs' `--radius-md`: this
+   box is 36px, and a 14px corner on a 36px box is 78% of the way to a circle —
+   it would read as the disc this is meant to stop being. 8px on 36 is visually
+   the same corner-to-box ratio the 14px thumbs get.
+   `overflow: hidden` is new and load-bearing: without it the photo below is a
+   square that overhangs the rounded corners. */
 .trainer-avatar-mini {
-  width: 36px; height: 36px; border-radius: 50%;
+  width: 36px; height: 36px; border-radius: var(--radius-sm); overflow: hidden;
   background: linear-gradient(135deg, var(--brand-green-light), var(--brand-green));
   display: flex; align-items: center; justify-content: center;
   color: var(--cream); font-family: var(--font-serif); font-size: 13px; font-weight: 600; flex-shrink: 0;
@@ -1548,8 +1587,12 @@ a { color: inherit; text-decoration: none; }
   display: flex; flex-direction: column; gap: 12px;
 }
 .trainer-card-web:hover { border-color: var(--brand-green); }
+/* ENG-1057 — same corner as `.horse-card-web .horse-thumb` above, and for the
+   same reason. The two browse thumbs are the same control at the same size on
+   two screens; mobile made them identical in ENG-833 (client, 25 Aug 2026: "the
+   trainers photos need to be exactly the same size as the horses"). */
 .trainer-card-web .trainer-thumb {
-  width: 100%; aspect-ratio: 1; border-radius: 10px; overflow: hidden; flex-shrink: 0;
+  width: 100%; aspect-ratio: 1; border-radius: var(--radius-md); overflow: hidden; flex-shrink: 0;
   background: linear-gradient(135deg, var(--brand-green-light), var(--brand-green-dark));
   display: flex; align-items: center; justify-content: center;
   color: var(--cream); font-family: var(--font-serif); font-size: 40px; font-weight: 600;

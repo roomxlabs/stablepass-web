@@ -67,11 +67,18 @@ vi.mock("@/lib/supabase/server", () => ({
   supabaseServer: vi.fn(async () => ({
     auth: { getUser: vi.fn(async () => ({ data: { user: { id: "user-1" } } })) },
     from: fromMock,
+    // `createSignedUrl` (singular) is what `signPhoto` calls for the trainer's
+    // own cover photo. `createSignedUrls` (plural) is ENG-1057's addition —
+    // `signPhotoMap` batch-signs the roster's `photo_url` column with it.
     storage: {
       from: vi.fn(() => ({
         createSignedUrl: vi.fn(async (p: string) =>
           p ? { data: { signedUrl: `https://sb.local/signed/${p}` } } : { data: null },
         ),
+        createSignedUrls: vi.fn(async (paths: string[]) => ({
+          data: paths.map((p) => ({ path: p, signedUrl: `https://sb.local/signed/${p}` })),
+          error: null,
+        })),
       })),
     },
   })),
@@ -85,15 +92,11 @@ vi.mock("@/lib/api/subscription-state", () => ({
 vi.mock("@/app/(member)/trainers/[id]/follow-notify", () => ({ FollowNotify: () => null }));
 vi.mock("@/app/(member)/trainers/[id]/trainer-posts", () => ({ TrainerPosts: () => null }));
 vi.mock("@/app/(member)/trainers/[id]/website-link", () => ({ WebsiteLink: () => null }));
-vi.mock("@/app/(member)/trainers/[id]/stable-horses", () => ({
-  StableHorses: ({ horses }: { horses: { id: string; name: string }[] }) => (
-    <ul data-testid="stable-horses">
-      {horses.map((h) => (
-        <li key={h.id}>{h.name}</li>
-      ))}
-    </ul>
-  ),
-}));
+// ENG-1057 follow-up: `stable-horses` is left UNMOCKED (the real `<StableHorses>`
+// wraps the real `<HorseCard>`) so a test can assert the roster actually paints
+// a signed photo, not merely that it received a `name`. Nothing else in this
+// file depends on the earlier stub's `data-testid="stable-horses"` — it was
+// only ever read by the mock's own JSX.
 
 import TrainerProfilePage from "@/app/(member)/trainers/[id]/page";
 
@@ -163,5 +166,45 @@ describe("ENG-960 — trainer roster includes for-sale horses", () => {
 
     const winsStat = screen.getByText("Wins").previousSibling;
     expect(winsStat).toHaveTextContent("7");
+  });
+
+  // `sb` is untyped, so `tsc` can never catch a too-narrow `.select()`: deleting
+  // `photo_url` from this projection leaves the whole suite green (verified by
+  // hand before adding this pin — every other assertion here reads `wins` /
+  // `display_name`, never the projection string itself).
+  it("pins the roster read's exact projection, including photo_url", async () => {
+    tableData.trainer = { data: TRAINER };
+    tableData.horse = { data: [{ id: "h1", display_name: "Mahogany", racing_name: null, wins: 0, photo_url: null }] };
+
+    render(await TrainerProfilePage({ params: Promise.resolve({ id: "t1" }) }));
+
+    expect(horseChain.select).toHaveBeenCalledWith("id, display_name, racing_name, wins, photo_url");
+  });
+
+  // ENG-1057 — the roster's own regression: the fixture above (and every other
+  // one in this file) has `photo_url: null`. Add the one row that actually
+  // carries a photo and prove it reaches the DOM as a signed <img>, through the
+  // real (unmocked) <StableHorses> -> <HorseCard>.
+  it("ENG-1057: a horse with a photo_url renders a signed <img class=horse-thumb-photo> in the roster", async () => {
+    tableData.trainer = { data: TRAINER };
+    tableData.horse = {
+      data: [
+        { id: "h1", display_name: "Mahogany", racing_name: null, wins: 2, photo_url: "horses/mahogany.jpg" },
+        { id: "h2", display_name: "Kingston", racing_name: null, wins: 1, photo_url: null },
+      ],
+    };
+
+    render(await TrainerProfilePage({ params: Promise.resolve({ id: "t1" }) }));
+
+    const mahoganyCard = screen.getByText("Mahogany").closest("button")!;
+    const img = mahoganyCard.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img).toHaveClass("horse-thumb-photo");
+    // The `createSignedUrls` echo mock in this file's `supabaseServer` stub.
+    expect(img).toHaveAttribute("src", "https://sb.local/signed/horses/mahogany.jpg");
+
+    // Kingston has no photo — initial only, no <img>, exactly as before.
+    const kingstonCard = screen.getByText("Kingston").closest("button")!;
+    expect(kingstonCard.querySelector("img")).toBeNull();
   });
 });
