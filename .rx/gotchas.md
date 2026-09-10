@@ -2317,3 +2317,29 @@ page whose entire purpose is "a store reviewer can open this URL", that gap matt
 The `DOCUMENTS` loop in `e2e/legal.spec.ts` gives all of it for one array entry —
 but its ALIASES loop hardcodes an `<h1>` of "Terms & Conditions", so only join
 `DOCUMENTS`.
+
+## Playwright's Chromium PLAYS HLS — it cannot prove an hls.js fix (ENG-1056, 10 Sep 2026)
+
+`components/media-player.tsx` handed a Mux `.m3u8?token=` URL to a bare `<video src>` for
+months and every Playwright run was green, because Playwright's bundled Chromium reports
+`canPlayType("application/vnd.apple.mpegurl") === "maybe"` and genuinely plays HLS (its
+build enables the built-in HLS player). Real desktop Chrome, Firefox and Edge report `""`
+and fail the element with `MediaError code 4 "Failed to open media"` — which, with no
+`onError` on the element, was a black box and a spinner forever.
+- **Do this:** for anything HLS, drive the automated negative in **Playwright Firefox**
+  (`npx playwright install firefox`; `test.use({ browserName: "firefox" })` at the TOP
+  level of the spec — `test.use` is rejected inside a `describe`). Firefox is the honest
+  browser here: `canPlayType(HLS)` is `""`, so it exercises the hls.js path and the error
+  path the way a member's browser does. Keep real Chrome/Safari as a manual acceptance
+  step and say so in the PR.
+- The same trap in reverse: asserting "the video element exists" proves nothing about
+  playback. Assert the transport — that `loadSource` got the minted URL, or that a dead
+  stream produces the honest error pill rather than an empty `<video>`.
+
+## `.rx/mockups.md`'s `06-stage1-design/` path does not exist here (ENG-1056, 10 Sep 2026)
+
+Re-checked 10 Sep 2026 from a worktree: `<workspace>/06-stage1-design/` is absent, and the
+readable mockups are back under `<workspace>/dev-handover/StablePass-mockups/mockups/web/screens/`
+(`06-explore.html`, `07-horse-profile.html` both open). This entry has now flipped three
+times in this file. **Do this:** never trust either path from memory — `ls` both before
+building, and cite the one that actually resolved in the ticket you write.
