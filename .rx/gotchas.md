@@ -1251,7 +1251,7 @@ spec reports as a product failure.
   ENG-617's repo-wide "no date arithmetic" guard flags in `e2e/` too. Use an
   absolute year in fixtures.
 
-## `getByLabel("Password")` is AMBIGUOUS since the eye toggle — 10 e2e specs use it (ENG-956, 4 Sep 2026)
+## `getByLabel("Password")` is AMBIGUOUS since the eye toggle (ENG-956, 4 Sep 2026 — swept ENG-1062, 10 Sep 2026)
 
 `7cc153e` (1 Sep) added `components/password-input.tsx`, whose reveal button is
 `<button aria-label="Show password">`. Playwright's `getByLabel` matches it as
@@ -1260,11 +1260,56 @@ well as the `<input id="password">`, so **every** sign-in helper written as
 resolved to 2 elements` — *before* any assertion, so it reads as a product
 failure on whatever screen the spec was testing.
 
-- **Do this:** `page.locator("#password").fill(...)`.
-- Ten specs still carry the ambiguous form (`screenshots`, `checkout`,
-  `trial-start`, `expiry-banner`, `video-poster`, `shell-responsive`,
-  `eng-585`, `eng-772`, `eng-775`, and — now fixed — `eng-956`). They are
-  latently red; fixing them is a sweep, not any one ticket's surface.
+- **Do this:** `import { fillPassword } from "./helpers/sign-in"` and call
+  `await fillPassword(page, pw)`. Never a label query.
+- **SWEPT AND GUARDED (ENG-1062, 10 Sep 2026).** The sweep is done — 22 call
+  sites across 12 specs now go through `e2e/helpers/sign-in.ts`, which targets
+  `#password` and asserts the locator resolved to exactly ONE node before it
+  types. `test/e2e-password-locator-guard.test.ts` fails the vitest suite if any
+  `e2e/**` file reintroduces a label query the reveal toggle could match, so this
+  cannot go dark again in a repo with no CI e2e job.
+- Note `getByLabel("New password", { exact: true })` and
+  `getByLabel("Confirm new password")` in `eng-953-password-reset` are FINE and
+  are deliberately not flagged: neither is a substring of "show password".
+
+## A mass e2e failure is rarely ONE cause — classify by first error line (ENG-1062, 10 Sep 2026)
+
+ENG-1058 reported all 68 Playwright failures as the `getByLabel("Password")`
+strict-mode violation. Grouping the log by first error line showed only **33**
+were: the other 35 were pre-existing failures of five unrelated kinds. Fixing the
+locator took the suite 68 → 55 red, not 68 → 0, because unblocking the login step
+also *revealed* ~20 tests that had been dark behind it and fail for their own
+reasons.
+
+- **Do this:** before scoping a "one root cause" fix, `grep` the run log for the
+  first `Error:` of every failure and count the distinct shapes. A ticket that
+  promises green off one fix is mis-scoped if that count is > 1.
+- Corollary: a fix that unblocks an early step *raises* the visible failure count
+  in the specs behind it. That is progress, not a regression — report
+  passed-count (99 → 112), not just failed-count.
+
+## A seeded e2e member is NOT entitled any more — trials are gone (ENG-1062, 10 Sep 2026)
+
+Most signed-in specs seed a member with `auth.admin.createUser({ email_confirm:
+true })` and assume the trigger provisions an entitled **trial**. It no longer
+does. The local `subscription` table holds **zero** `trialing` rows (99 `lapsed`
+/ 51 `active` / 18 `canceled`) — the pricing epic (ENG-1023…ENG-1029) moved the
+product to a paid, renewing subscription and the trial status went with it.
+
+**Symptom:** the spec signs in fine, then every feed/profile assertion fails with
+`element(s) not found` for `.post-web`, `.post-media-web`, a heading, etc. The
+page actually rendered the access wall — *"You don't have a subscription yet /
+Subscribe to see every update… It renews monthly and you can cancel any time"* →
+`Get full access`. It reads as a UI regression and is not one.
+
+- **Do this:** dump Playwright's `test-results/**/error-context.md` — it carries
+  the full a11y snapshot of the page at failure and names the wall in one line.
+  Then seed the subscription row your spec needs (`status: "active"` with a
+  `current_period_end` in the future; `trial_ends_at` is NOT NULL, so still pass
+  a date) instead of trusting the createUser trigger.
+- This is why `video-poster`, `reaction-save`, `eng-772`, `eng-775`, `eng-762`,
+  `eng-956/957/959/960/961` and the `screenshots` member specs are red on
+  `feature/web-media-v1` — a fixture-contract gap, not a media defect.
 
 ## A PostgREST builder is a THENABLE, not a Promise — `.catch()` is not a function (ENG-956, 4 Sep 2026)
 

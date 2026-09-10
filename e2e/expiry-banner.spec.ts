@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { fillPassword } from "./helpers/sign-in";
 import { createClient } from "@supabase/supabase-js";
 
 // ENG-570 — expiry banner screen evidence (mounted in the (member) shell so it
@@ -46,7 +47,7 @@ async function setTrialEndsAt(userId: string, trialEndsAt: string) {
 async function signIn(page: Page, email: string) {
   await page.goto("/signin");
   await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(PASSWORD);
+  await fillPassword(page, PASSWORD);
   await page.getByRole("button", { name: "Sign in" }).click();
   await page.waitForURL("**/explore");
 }

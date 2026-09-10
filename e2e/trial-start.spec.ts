@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { fillPassword } from "./helpers/sign-in";
 import { createClient } from "@supabase/supabase-js";
 
 // ENG-571 — trial-start screen evidence (empty, validation error, submitting) plus
@@ -46,7 +47,7 @@ async function fillForm(page: Page, f: Fields = {}) {
   await page.getByLabel("Email").fill(f.email ?? "member@stablepass.test");
   await page.getByLabel("Phone").fill(f.phone ?? "+61 400 000 000");
   await page.getByLabel("Postcode").fill(f.postcode ?? "3000");
-  await page.getByLabel("Password").fill(f.password ?? PASSWORD);
+  await fillPassword(page, f.password ?? PASSWORD);
 }
 
 test("ENG-571 trial start — the empty form shows all six fields in order", async ({ page }) => {
