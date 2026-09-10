@@ -10,6 +10,7 @@
 // viewer's own `reaction`/`bookmark` rows (RLS returns only the viewer's own).
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { AccessWall } from "@/components/access-wall";
+import { HlsVideo } from "@/components/hls-video";
 import { PostCard, PostAvatar, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { RaceDayBand } from "@/components/race-day-band";
@@ -494,10 +495,26 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
                         </div>
                       </div>
                       <div {...mediaBoxProps(p.media.aspectRatio, { video: true })}>
-                        <video
-                          controls
-                          autoPlay
+                        <HlsVideo
                           src={playbackUrl}
+                          poster={p.media.posterUrl ?? undefined}
+                          controls
+                          playsInline
+                          // Deliberately NO `autoPlay`: HlsVideo issues its own explicit play()
+                          // once the transport is ready (ENG-1056), which is what Safari honours
+                          // on a freshly-mounted, click-initiated element.
+                          onFatalError={() => {
+                            // A dead transport must not leave a black rectangle. Drop this post
+                            // out of `playing` so the player unmounts, and raise `playError` so
+                            // the card falls back to its poster plus the SAME "Couldn't load the
+                            // video." pill a failed mint already produces (ENG-1059).
+                            setPlaying((prev) => {
+                              const next = { ...prev };
+                              delete next[p.id];
+                              return next;
+                            });
+                            setPlayError((prev) => ({ ...prev, [p.id]: true }));
+                          }}
                         />
                       </div>
                       <ReactionBar

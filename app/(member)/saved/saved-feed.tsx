@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
 import { AccessWall } from "@/components/access-wall";
+import { HlsVideo } from "@/components/hls-video";
 import { PostCard, PostAvatar, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
@@ -277,7 +278,27 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
                       </div>
                     </div>
                     <div {...mediaBoxProps(p.media.aspectRatio, { video: true })}>
-                      <video controls autoPlay src={playbackUrl} />
+                      <HlsVideo
+                        src={playbackUrl}
+                        poster={p.media.posterUrl ?? undefined}
+                        controls
+                        playsInline
+                        // Deliberately NO `autoPlay`: HlsVideo issues its own explicit play()
+                        // once the transport is ready (ENG-1056), which is what Safari honours
+                        // on a freshly-mounted, click-initiated element.
+                        onFatalError={() => {
+                          // A dead transport must not leave a black rectangle. Drop this post
+                          // out of `playing` so the player unmounts, and raise `playError` so
+                          // the card falls back to its poster plus the SAME "Couldn't load the
+                          // video." pill a failed mint already produces (ENG-1059).
+                          setPlaying((prev) => {
+                            const next = { ...prev };
+                            delete next[p.id];
+                            return next;
+                          });
+                          setPlayError((prev) => ({ ...prev, [p.id]: true }));
+                        }}
+                      />
                     </div>
                     <ReactionBar
                       count={p.count}
