@@ -2421,3 +2421,58 @@ error state flips in and out for the first seconds. It reproduces identically on
 **Do this:** don't try to wait it out — asserting the text has cleared passes and then the text
 returns on the next pass. Screenshot the surface you actually changed and say so in the PR. If
 you suspect a real regression, A/B it: revert just the one file, re-run the same seeded probe.
+
+## A worktree resolves `node_modules` from the SHARED checkout — which is on `main` (ENG-1059, 11 Sep 2026)
+
+**Symptom.** You branch a worktree off `origin/feature/web-media-v1`, which has `hls.js` in its
+`package.json` since ENG-1056, and every gate dies at
+`Failed to resolve import "hls.js" from "components/hls-video.tsx"` — vitest, `tsc` AND `next build`.
+M1's own untouched `test/media-player.test.tsx` fails identically, which makes it look like M1
+shipped broken.
+
+**Cause.** `.claude/worktrees/<ticket>/node_modules` starts EMPTY, and Node's directory-walk
+resolution then climbs to `<repo>/node_modules` — the shared checkout's, which sits on whatever
+branch the human left it on (usually `main`). So a worktree silently builds against the DEPENDENCY
+SET OF A DIFFERENT BRANCH. Any dependency a blocking ticket added is invisible, and the failure names
+the *consumer* file, never the missing install.
+
+**Do this.** Run `npm ci` in the worktree before the first gate. Use `ci`, not `install` — it
+installs from the lockfile and leaves `package.json`/`package-lock.json` untouched, which matters
+when both are on the ticket's do-NOT-touch list. It takes ~10s. Corollary: do not "baseline" such a
+failure in a throwaway worktree created OUTSIDE the repo tree — resolution cannot find `vitest` there
+either, and you will confirm the wrong thing. Baseline inside `.claude/worktrees/` (same depth), and
+symlink the populated `node_modules` in.
+
+## `e2e/video-poster.spec.ts` is PRE-EXISTING RED, and it fails BEFORE its real assertion (ENG-1059)
+
+It dies at `page.getByLabel("Password")` — ambiguous since the reveal toggle
+(`<button aria-label="Show password">`) landed, the trap this file already documents twice. It
+therefore never reaches its poster assertions, so **"a video post with a baked poster renders the
+frame" is currently an UNPROVEN claim on this branch**, not a passing guard. Observed alongside it:
+a freshly seeded video post renders the dark empty box at idle, with no poster `<img>` at all.
+- **Do this:** do not cite that spec as evidence the poster seam works, and do not import its red
+  into an unrelated ticket by asserting a visible poster `<img>`. Anchor sign-in on
+  `page.locator("input[type=password]")` in any new spec.
+
+## A source-grep guard reds on the COMMENT that explains the thing it forbids (ENG-1059, recurring)
+
+Third sighting of this class (ENG-960's `shares_for_sale`, ENG-1041, now here). ENG-1059's guard
+asserts no `autoPlay` under `app/(member)/**`; the swap that removes `autoPlay` explains itself with
+`// Deliberately NO \`autoPlay\`: HlsVideo calls play() itself` — so the change reds its own guard.
+- **Do this:** strip comments before matching, and keep a POSITIVE anchor (here: the `HlsVideo`
+  import) asserted against the SAME stripped string, or a file that failed to load satisfies every
+  `not.toContain` vacuously.
+- **The house `strip()` is not string-literal aware.** `.replace(/\/\/.*$/gm, "")` also blanks a line
+  from the `//` inside `https://…` onward, so a forbidden token later on that line escapes.
+  `/(^|[^:])\/\/.*$/gm` → `"$1"` keeps URLs whole. The copies in
+  `test/shares-segregation-guard.test.ts` and `test/media-player.test.tsx` still carry the naive form.
+
+## The pill a feed shows on a video failure is a SIBLING of `.post-web`, not inside it (ENG-1059)
+
+All five member feeds render `<div key={p.id}><PostCard/>{playError && <p role="alert">…}</div>`, so
+`page.locator(".post-web").screenshot()` — the framing every existing spec uses — CROPS THE PILL OUT.
+A screenshot meant as evidence of the error state shows an ordinary card instead.
+- **Do this:** screenshot the wrapper (`card.locator("xpath=..")`). And assert the pill with
+  `getByText("Couldn’t load the video.")`, not `getByRole("alert")` — Next's route announcer is an
+  alert too. Note the TYPOGRAPHIC apostrophe (the source is `Couldn&rsquo;t`) and that this copy
+  ("Couldn’t load the video.") differs from `MediaPlayer`'s ("Couldn’t load video").
