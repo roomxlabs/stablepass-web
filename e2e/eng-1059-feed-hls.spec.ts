@@ -254,5 +254,12 @@ test("a member feed streams through hls.js, and a dead stream shows the feed's p
   } finally {
     if (userData?.user?.id) await admin.auth.admin.deleteUser(userData.user.id).catch(() => {});
     await admin.storage.from("post-media").remove([posterPath]).catch(() => {});
+    // The seeded ROWS too, innermost first — `post` references `horse`, which
+    // references `trainer`. Leaving them behind orphans three rows in the local DB
+    // per run, and a later spec that anchors on `.post-web` first() can silently
+    // pick up this ticket's fixture instead of its own.
+    await admin.from("post").delete().eq("id", post.id).then(undefined, () => {});
+    await admin.from("horse").delete().eq("id", horse.id).then(undefined, () => {});
+    await admin.from("trainer").delete().eq("id", trainer.id).then(undefined, () => {});
   }
 });

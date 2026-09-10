@@ -28,6 +28,14 @@ import { TrainerPosts } from "@/app/(member)/trainers/[id]/trainer-posts";
 const VIEWER_ID = "8f3c1a2b-1234-4abc-9def-0123456789ab";
 const PLAYBACK_URL = "https://stream.mux.com/pb-fixture.m3u8?token=fake.jwt.token";
 const POSTER = "https://storage.test/sign/post-media/posters/p1.jpg";
+
+/**
+ * What `resolvePostDisplayUrls` mints for the list card on mount
+ * (`GET /api/posts/p1/playback?posterOnly=1`), and therefore the value the feed
+ * holds as `p.media.posterUrl` and hands to `HlsVideo`'s `poster`. Every feed case
+ * below seeds its single video row as `p1`.
+ */
+const LIST_POSTER_FOR_P1 = "https://sb.local/posters/p1.jpg";
 const ACTIVE_SUB = { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00.000Z" };
 
 // ---------------------------------------------------------------------------
@@ -356,6 +364,21 @@ describe.each(CASES)("$name — feed HlsVideo wiring (ENG-1059)", (testCase) => 
     const video = utils.container.querySelector("video")!;
     expect(instance.attachMedia).toHaveBeenCalledTimes(1);
     expect(instance.attachMedia).toHaveBeenCalledWith(video);
+
+    // The poster the card ALREADY showed in its idle state is handed through, so a
+    // stream that dies degrades to that frame plus the pill rather than to a black
+    // rectangle. Pinned here because nothing else pins it: the e2e deliberately does
+    // not assert the poster (see its header — `e2e/video-poster.spec.ts` owns that
+    // claim and is pre-existing red), so without this line `poster=` could be dropped
+    // from one of the five call sites and every suite would stay green.
+    //
+    // It must be the LIST poster minted by `resolvePostDisplayUrls`
+    // (`…/playback?posterOnly=1`), NOT the `posterUrl` field the Play mint also
+    // returns — the feeds read their own `p.media.posterUrl` and ignore that field,
+    // exactly as `media-player.tsx` does. Asserting the specific one keeps the two
+    // apart if they ever diverge.
+    expect(video.getAttribute("poster")).toBe(LIST_POSTER_FOR_P1);
+    expect(video.getAttribute("poster")).not.toBe(POSTER);
   });
 
   it("(b) a fatal hls.js ERROR unmounts the video and shows the feed's pill; a non-fatal one does neither", async () => {
