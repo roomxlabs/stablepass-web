@@ -2317,3 +2317,64 @@ page whose entire purpose is "a store reviewer can open this URL", that gap matt
 The `DOCUMENTS` loop in `e2e/legal.spec.ts` gives all of it for one array entry —
 but its ALIASES loop hardcodes an `<h1>` of "Terms & Conditions", so only join
 `DOCUMENTS`.
+
+## Playwright's Chromium PLAYS HLS — it cannot prove an hls.js fix (ENG-1056, 10 Sep 2026)
+
+`components/media-player.tsx` handed a Mux `.m3u8?token=` URL to a bare `<video src>` for
+months and every Playwright run was green, because Playwright's bundled Chromium reports
+`canPlayType("application/vnd.apple.mpegurl") === "maybe"` and genuinely plays HLS (its
+build enables the built-in HLS player). Real desktop Chrome, Firefox and Edge report `""`
+and fail the element with `MediaError code 4 "Failed to open media"` — which, with no
+`onError` on the element, was a black box and a spinner forever.
+- **Do this:** for anything HLS, drive the automated negative in **Playwright Firefox**
+  (`npx playwright install firefox`; `test.use({ browserName: "firefox" })` at the TOP
+  level of the spec — `test.use` is rejected inside a `describe`). Firefox is the honest
+  browser here: `canPlayType(HLS)` is `""`, so it exercises the hls.js path and the error
+  path the way a member's browser does. Keep real Chrome/Safari as a manual acceptance
+  step and say so in the PR.
+- The same trap in reverse: asserting "the video element exists" proves nothing about
+  playback. Assert the transport — that `loadSource` got the minted URL, or that a dead
+  stream produces the honest error pill rather than an empty `<video>`.
+
+## `.rx/mockups.md`'s `06-stage1-design/` path does not exist here (ENG-1056, 10 Sep 2026)
+
+Re-checked 10 Sep 2026 from a worktree: `<workspace>/06-stage1-design/` is absent, and the
+readable mockups are back under `<workspace>/dev-handover/StablePass-mockups/mockups/web/screens/`
+(`06-explore.html`, `07-horse-profile.html` both open). This entry has now flipped three
+times in this file. **Do this:** never trust either path from memory — `ls` both before
+building, and cite the one that actually resolved in the ticket you write.
+
+## `components/media-player.tsx` is NOT what member feeds render (ENG-1056, 10 Sep 2026)
+
+`MediaPlayer` is mounted in exactly ONE place — `app/preview/components/page.tsx`, the
+unlinked no-auth dev gallery. Every real member feed inlines its **own**
+`<video controls autoPlay src={playbackUrl} />` plus its own private
+`async function play(postId)` that mints with a **GET** (`apiFetch(url)`, no `method`):
+`app/(member)/explore/explore-feed.tsx`, `following/following-screen.tsx`,
+`saved/saved-feed.tsx`, `horses/[id]/horse-posts.tsx`, `trainers/[id]/trainer-posts.tsx`.
+`PostCard` only draws the `.media-play` button and calls back through its `onPlay` prop.
+ENG-1056 was grilled on the belief that fixing `MediaPlayer` fixes members; it does not.
+- **Do this:** before ticketing or "fixing" a shared component, `grep -rn "<ComponentName"`
+  for its real mount sites. Five near-identical copies of the mint-and-play block is the
+  actual shape of this code, and any player change has to land in all five at once or they
+  desync. `MediaPlayer` is effectively gallery-only until they are consolidated.
+
+## An e2e that renders a member SCREEN must promote the seeded subscription (ENG-1056)
+
+`auth.admin.createUser` fires a trigger that provisions a `trial` subscription, and ENG-999
+retired `trial` — `lib/api/access.ts` no longer grants it. So a freshly-created e2e user hits
+the `AccessWall` and every profile/browse screen renders **zero cards**, which reads exactly
+like "the feature is broken" and makes card assertions fail for the wrong reason.
+- **Do this:** after `createUser`, `update({ status: "active", current_period_end: <future> })`
+  on `subscription` for that `user_id`. Specs written before ENG-999 (e.g.
+  `e2e/video-poster.spec.ts`) do not do this and cannot render a card any more.
+
+## Proving hls.js is the TRANSPORT: filter the manifest request by resourceType (ENG-1056)
+
+Asserting "the `.m3u8` was requested" proves nothing — a bare `<video src>` requests the
+manifest too. Chunk FILENAMES are opaque hashes in a Next build, so matching `/hls/` in a URL
+finds nothing either (this cost a debug cycle). What works: `page.on("request")` and keep only
+manifest requests whose `req.resourceType()` is `xhr`/`fetch`. hls.js uses XHR; the media
+element uses `media`/`other`. Pair it with a first test that asserts
+`canPlayType("application/vnd.apple.mpegurl") === ""` in the browser under test, so the file
+fails loudly if it ever stops running in Firefox instead of silently proving nothing.
