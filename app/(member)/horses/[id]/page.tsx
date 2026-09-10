@@ -282,7 +282,7 @@ export default async function HorseProfilePage({ params }: { params: Promise<{ i
             {trainer && (
               <div className="aside-card">
                 <h3>Trainer</h3>
-                <TrainerCard trainer={{ id: trainer.id, name: trainer.name, horseCount: trainerHorseCount ?? 0 }} />
+                <TrainerCard trainer={{ id: trainer.id, name: trainer.name, horseCount: trainerHorseCount ?? 0, photoUrl: trainerPhotoUrl }} />
               </div>
             )}
 

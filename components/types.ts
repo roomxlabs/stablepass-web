@@ -111,12 +111,31 @@ export interface HorseSummary {
   trainerName: string;
   subtitle?: string | null; // pedigree / status line
   raceDay?: boolean;
+  /**
+   * `horse.photo_url`, ALREADY SIGNED — the browse/roster card thumb (ENG-1057).
+   *
+   * Same rule as `FeedPost.horsePhotoUrl` above, and for the same reason: this is
+   * a SIGNED url, never the stored value. `photo_url` holds a bare object path in
+   * the PRIVATE `horse-photos` bucket, and a bare path in `<img src>` is a
+   * RELATIVE url — the browser resolves it against the current page and silently
+   * gets HTML back. The screens mint it in their batched `signPhotoMap` read and
+   * hand the result here; the card never signs and never fetches.
+   *
+   * Optional and null-safe: a screen that has not resolved photos gets the
+   * initial the card has always drawn, not a broken image.
+   */
+  photoUrl?: string | null;
 }
 
 export interface TrainerSummary {
   id: string;
   name: string;
   horseCount: number;
+  /**
+   * `trainer.photo_url`, ALREADY SIGNED — the aside row's mini thumb (ENG-1057).
+   * Same signing rule and same initials fallback as `HorseSummary.photoUrl`.
+   */
+  photoUrl?: string | null;
 }
 
 export interface RaceDayEntry {
