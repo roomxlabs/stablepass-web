@@ -49,7 +49,10 @@ type RaceRow = {
   race_horse: RaceHorseRow[] | RaceHorseRow | null;
 };
 
-type FollowTrainer = { id: string; name: string };
+// `photo_url` since ENG-1057 — the aside row's thumb. A bare object path in the
+// private `trainer-photos` bucket; it is signed below before it reaches a view
+// model, never rendered as read.
+type FollowTrainer = { id: string; name: string; photo_url: string | null };
 // `trainer_id` is read RAW alongside the embed on purpose: the embed is what the
 // aside needs (it wants the NAME), but a row whose trainer embed comes back null
 // — RLS hid it, or the join missed — would silently drop that trainer from the
@@ -267,13 +270,15 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
     (async () => {
       const { data: followRows, error: followError } = await sb
         .from("follow")
-        .select("trainer_id, trainer:trainer_id(id,name)")
+        .select("trainer_id, trainer:trainer_id(id,name,photo_url)")
         .not("trainer_id", "is", null);
       const rows = (followRows ?? []) as FollowRow[];
-      const trainerMap = new Map<string, string>();
+      // Holds the whole embed now, not just the name: the row needs the photo
+      // path too, and keeping one map avoids a second keyed by the same ids.
+      const trainerMap = new Map<string, FollowTrainer>();
       for (const row of rows) {
         const t = one(row.trainer);
-        if (t) trainerMap.set(t.id, t.name);
+        if (t) trainerMap.set(t.id, t);
       }
       const trainerIds = [...trainerMap.keys()];
 
@@ -306,7 +311,26 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
       for (const h of (horseRows ?? []) as { trainer_id: string }[]) {
         counts.set(h.trainer_id, (counts.get(h.trainer_id) ?? 0) + 1);
       }
-      setTrainers(trainerIds.map((id) => ({ id, name: trainerMap.get(id) ?? "", horseCount: counts.get(id) ?? 0 })));
+      // ENG-1057 — the aside's thumbs, in the ONE batch this screen already runs
+      // for the followed set (it is past the `trainerIds.length === 0` return,
+      // so a member who follows nobody still makes no Storage call). Minted as
+      // the viewer via `supabaseBrowser`; RLS `media gated read` is the boundary,
+      // so a lapsed member gets an empty map and initials rather than URLs.
+      const signed = await signPhotoMap(
+        sb,
+        TRAINER_PHOTO_BUCKET,
+        trainerIds.map((id) => trainerMap.get(id)?.photo_url),
+      );
+      setTrainers(trainerIds.map((id) => {
+        const t = trainerMap.get(id);
+        return {
+          id,
+          name: t?.name ?? "",
+          horseCount: counts.get(id) ?? 0,
+          // `?? null` — the bare path is the INPUT to signing, never an output.
+          photoUrl: t?.photo_url ? (signed.get(t.photo_url) ?? null) : null,
+        };
+      }));
     })();
   }, []);
 

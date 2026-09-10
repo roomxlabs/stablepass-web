@@ -34,8 +34,24 @@ const ENTITLED_SUB = {
 
 const { fromMock } = vi.hoisted(() => ({ fromMock: vi.fn() }));
 
+// ENG-1057 — both grids batch-sign each page's `photo_url` column via
+// `signPhotoMap`. None of this file's fixtures set `photo_url`, so
+// `signPhotoMap` never actually reaches `.storage` (it returns early on an
+// empty path list) — but the property must exist so a future fixture that DOES
+// set one does not throw `sb.storage is undefined` instead of failing on the
+// real assertion.
 vi.mock("@/lib/supabase/client", () => ({
-  supabaseBrowser: () => ({ from: fromMock }),
+  supabaseBrowser: () => ({
+    from: fromMock,
+    storage: {
+      from: (bucket: string) => ({
+        createSignedUrls: async (paths: string[]) => ({
+          data: paths.map((p) => ({ path: p, signedUrl: `https://sb.test/storage/v1/object/sign/${bucket}/${p}?token=t` })),
+          error: null,
+        }),
+      }),
+    },
+  }),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -118,8 +134,10 @@ describe("ENG-960 browse reversal — for-sale horses fold back into browse", ()
     // The flag is no longer even selected — the second of the three coupled
     // sites. A projection that still fetched it would mean the filter could
     // quietly come back.
+    // ENG-1057 widened the projection with `photo_url` (the browse thumb) —
+    // still not `shares_for_sale` itself.
     expect(trainerChain.select).toHaveBeenCalledWith(
-      "id, name, display_name, stable_name, location, horses:horse!trainer_id(id)",
+      "id, name, display_name, stable_name, location, photo_url, horses:horse!trainer_id(id)",
     );
   });
 

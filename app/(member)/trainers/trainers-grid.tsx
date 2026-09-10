@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
 import { AccessWall } from "@/components/access-wall";
 import { supabaseBrowser } from "@/lib/supabase/client";
+import { signPhotoMap, TRAINER_PHOTO_BUCKET } from "@/lib/storage/photos";
 import { browseRange, splitBrowsePage } from "@/lib/browse";
 
 type TrainerRow = {
@@ -18,14 +19,44 @@ type TrainerRow = {
   display_name: string | null;
   stable_name: string | null;
   location: string | null;
+  photo_url: string | null;
   // ENG-960 / R8: every active horse counts. `shares_for_sale` is no longer
   // selected or filtered here — see the note on the query below.
   horses: { id: string }[] | null;
 };
-type TrainerCardVM = { id: string; title: string; subtitle: string; horseCount: number };
+type TrainerCardVM = { id: string; title: string; subtitle: string; horseCount: number; photoUrl: string | null };
 
 function initials(title: string): string {
   return title.split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() ?? "").join("") || "?";
+}
+
+/**
+ * The `.trainer-thumb` box — photo when this trainer has one, initials when they
+ * do not (ENG-1057). Mobile parity: `src/components/trainer-row.tsx` draws the
+ * same rounded box with `contentFit="cover"` and the same monogram fallback.
+ *
+ * A COMPONENT rather than an inline ternary in the grid, only because the
+ * `onError` fallback needs state and it has to be PER CARD: one dead signed URL
+ * must knock out one thumb, not every thumb on the screen. Same never-retry-the
+ * -same-url rule as <HorseCard>.
+ *
+ * This grid renders its card inline (it is a `.trainer-card-web` button, not the
+ * aside's `.aside-trainer-row`), which is why it cannot just reuse <TrainerCard>.
+ */
+function TrainerThumb({ photoUrl, initial }: { photoUrl: string | null; initial: string }) {
+  // Keyed on the failed url, not a bare boolean — see components/horse-card.tsx.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const src = photoUrl && photoUrl !== failedUrl ? photoUrl : null;
+  return (
+    <div className="trainer-thumb" aria-hidden="true">
+      {src ? (
+        // eslint-disable-next-line @next/next/no-img-element -- arbitrary signed Storage URL, cover-fit
+        <img className="trainer-thumb-photo" src={src} alt="" onError={() => setFailedUrl(photoUrl)} />
+      ) : (
+        initial
+      )}
+    </div>
+  );
 }
 
 // `everSubscribed` — see the note in ../explore/explore-feed.tsx (server-resolved
@@ -110,7 +141,7 @@ export function TrainersGrid({ viewerId, everSubscribed }: { viewerId: string; e
       // trainers stayed listed here. All four web trainer reads carry it now.
       const { data, error: fetchError } = await sb
         .from("trainer")
-        .select("id, name, display_name, stable_name, location, horses:horse!trainer_id(id)")
+        .select("id, name, display_name, stable_name, location, photo_url, horses:horse!trainer_id(id)")
         .eq("status", "active")
         // TOTAL order (`id` tiebreaker) — a `name` tie ordered differently
         // between two requests would drop or duplicate a trainer across the
@@ -124,11 +155,20 @@ export function TrainersGrid({ viewerId, everSubscribed }: { viewerId: string; e
       if (fetchError) { failPage(offset); return; }
 
       const { page, hasMore: more } = splitBrowsePage((data ?? []) as TrainerRow[]);
+
+      // ENG-1057 — one signing batch per page, as the viewer, AFTER the
+      // `hasAccess` gate and inside the same `live()` guard as the read. See
+      // the fuller note in ../horses/horses-grid.tsx; the rules are identical.
+      const signed = await signPhotoMap(sb, TRAINER_PHOTO_BUCKET, page.map((t) => t.photo_url));
+      if (!live()) return;
+
       const mapped: TrainerCardVM[] = page.map((t) => ({
         id: t.id,
         title: t.display_name || t.name,
         subtitle: [t.stable_name, t.location].filter(Boolean).join(" · "),
         horseCount: (t.horses ?? []).length,
+        // `?? null`, never the bare path — an unsigned path is never painted.
+        photoUrl: t.photo_url ? (signed.get(t.photo_url) ?? null) : null,
       }));
       setTrainers((prev) => (offset === 0 ? mapped : [...prev, ...mapped]));
       setHasMore(more);
@@ -159,7 +199,7 @@ export function TrainersGrid({ viewerId, everSubscribed }: { viewerId: string; e
           <div className="onboarding-grid-web">
             {trainers.map((t) => (
               <button key={t.id} type="button" className="trainer-card-web" onClick={() => router.push(`/trainers/${t.id}`)}>
-                <div className="trainer-thumb" aria-hidden="true">{initials(t.title)}</div>
+                <TrainerThumb photoUrl={t.photoUrl} initial={initials(t.title)} />
                 <div>
                   <p className="trainer-name">{t.title}</p>
                   {t.subtitle && <p className="trainer-sub">{t.subtitle}</p>}

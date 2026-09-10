@@ -9,7 +9,7 @@
 // A hidden/unknown trainer → notFound() (404, never 403).
 import { notFound } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
-import { signPhoto, TRAINER_PHOTO_BUCKET } from "@/lib/storage/photos";
+import { signPhoto, signPhotoMap, HORSE_PHOTO_BUCKET, TRAINER_PHOTO_BUCKET } from "@/lib/storage/photos";
 import { readSubscriptionState } from "@/lib/api/subscription-state";
 import { AccessWall } from "@/components/access-wall";
 import type { HorseSummary } from "@/components/types";
@@ -29,7 +29,7 @@ type TrainerRow = {
   photo_url: string | null;
   website_url: string | null;
 };
-type HorseRow = { id: string; display_name: string; racing_name: string | null; wins: number };
+type HorseRow = { id: string; display_name: string; racing_name: string | null; wins: number; photo_url: string | null };
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -86,7 +86,7 @@ export default async function TrainerProfilePage({ params }: { params: Promise<{
     // `lib/profiles.ts` `getTrainerHorses` fixed in the same round ("Liam Ruddy,
     // found live"). A trainer's own roster is not the *list of for-sale horses
     // as such*; the Shares tab is.
-    sb.from("horse").select("id, display_name, racing_name, wins").eq("trainer_id", id).eq("status", "active").order("display_name"),
+    sb.from("horse").select("id, display_name, racing_name, wins, photo_url").eq("trainer_id", id).eq("status", "active").order("display_name"),
     sb.from("post").select("id", { count: "exact", head: true }).eq("source_trainer_id", id).eq("status", "published"),
     sb.from("follow").select("id").eq("user_id", userId).eq("trainer_id", id).maybeSingle(),
     sb.from("notify_optin").select("id").eq("user_id", userId).eq("trainer_id", id).maybeSingle(),
@@ -94,12 +94,22 @@ export default async function TrainerProfilePage({ params }: { params: Promise<{
 
   const horses = (horseRows ?? []) as HorseRow[];
   const wins = horses.reduce((sum, h) => sum + (h.wins ?? 0), 0);
+  // ENG-1057 — the roster's thumbs. Signed SERVER-side here (this is a Server
+  // Component, so `sb` is `supabaseServer` — the viewer's session, never a
+  // service role), in ONE batch for the whole roster rather than per card.
+  //
+  // It sits below the `entitled` early-return above, so a lapsed member gets the
+  // AccessWall and this line is never reached: no Storage call for a walled
+  // member, exactly as on the two grids.
+  const horseSigned = await signPhotoMap(sb, HORSE_PHOTO_BUCKET, horses.map((h) => h.photo_url));
   const stableHorses: HorseSummary[] = horses.map((h) => ({
     id: h.id,
     // Formatted per side of the `||` so a `racing_name` of just "(AUS)" falls
     // through to the display name (ENG-761 item 6).
     name: displayHorseNameOrEmpty(h.racing_name) || displayHorseNameOrEmpty(h.display_name),
     trainerName: displayName,
+    // `?? null` — an unsigned path never enters the view model.
+    photoUrl: h.photo_url ? (horseSigned.get(h.photo_url) ?? null) : null,
   }));
 
   return (
