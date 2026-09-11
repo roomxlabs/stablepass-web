@@ -11,6 +11,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { AccessWall } from "@/components/access-wall";
 import { HlsVideo } from "@/components/hls-video";
+import { useFeedVideoFailure } from "@/lib/feed/use-feed-video-failure";
 import { PostCard, PostAvatar, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { RaceDayBand } from "@/components/race-day-band";
@@ -116,6 +117,10 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
   const [followedTrainerIds, setFollowedTrainerIds] = useState<Set<string> | null>(null);
   const [playing, setPlaying] = useState<Record<string, string>>({});
   const [playError, setPlayError] = useState<Record<string, boolean>>({});
+  // The ONE fatal-transport handler, shared by all five feeds (ENG-1063).
+  // It was copy-pasted verbatim into each of them; see the hook for why that
+  // mattered even though nothing was wrong with the behaviour.
+  const onFatalVideo = useFeedVideoFailure(setPlaying, setPlayError);
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   // Trainer ids with a follow write in flight — see follow() below.
@@ -503,18 +508,7 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
                           // Deliberately NO `autoPlay`: HlsVideo issues its own explicit play()
                           // once the transport is ready (ENG-1056), which is what Safari honours
                           // on a freshly-mounted, click-initiated element.
-                          onFatalError={() => {
-                            // A dead transport must not leave a black rectangle. Drop this post
-                            // out of `playing` so the player unmounts, and raise `playError` so
-                            // the card falls back to its poster plus the SAME "Couldn't load the
-                            // video." pill a failed mint already produces (ENG-1059).
-                            setPlaying((prev) => {
-                              const next = { ...prev };
-                              delete next[p.id];
-                              return next;
-                            });
-                            setPlayError((prev) => ({ ...prev, [p.id]: true }));
-                          }}
+                          onFatalError={() => onFatalVideo(p.id)}
                         />
                       </div>
                       <ReactionBar

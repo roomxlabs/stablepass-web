@@ -18,7 +18,7 @@ import { render, cleanup, waitFor, act, within } from "@testing-library/react";
 import type { RenderResult } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { ExploreFeed } from "@/app/(member)/explore/explore-feed";
 import { FollowingScreen } from "@/app/(member)/following/following-screen";
 import { SavedFeed } from "@/app/(member)/saved/saved-feed";
@@ -492,14 +492,58 @@ describe("(e) GUARDRAIL — no member screen renders a bare <video> any more", (
     return stripComments(readFileSync(path, "utf8")).replace(/\s+/g, " ");
   }
 
-  const files = sourceFiles(join(process.cwd(), "app/(member)"));
+  // ENG-1063 (LOW-2) — `components/` is scanned too.
+  //
+  // Scanning only `app/(member)` left the exact hole this whole epic came
+  // through: a SHARED component carrying a bare `<video>` is invisible to the
+  // guard, and that is literally how `components/media-player.tsx` came to
+  // hold one before ENG-1056. A screen is not the only place an element can
+  // hide.
+  const SCANNED_ROOTS = ["app/(member)", "components"];
+
+  // The one legitimate `<video>` in the codebase: HlsVideo IS the element, so
+  // it cannot be expressed in terms of itself. Kept as an explicit, single-
+  // entry allowlist rather than a directory exclusion — a second entry here is
+  // a reviewable event, and the anchor test below proves this path is really
+  // being scanned (a typo would otherwise turn the allowlist into a silent
+  // no-op that also hides nothing).
+  const ALLOWED_BARE_VIDEO = ["components/hls-video.tsx"];
+
+  const root = process.cwd();
+  const rel = (abs: string) => relative(root, abs).split(sep).join("/");
+  const files = SCANNED_ROOTS.flatMap((dir) => sourceFiles(join(root, dir)));
 
   it("actually scanned a non-trivial set of files (the guard must not pass vacuously)", () => {
     expect(files.length).toBeGreaterThan(20);
   });
 
-  it("contains the literal `<video` in NO file under app/(member)", () => {
-    const offenders = files.filter((f) => collapsed(f).includes("<video"));
+  it("scans components/ as well as app/(member)", () => {
+    const scanned = files.map(rel);
+    // Both roots contributed — a `flatMap` over a mistyped directory name
+    // would throw, but one that silently yielded nothing must not pass either.
+    expect(scanned.some((f) => f.startsWith("app/(member)/"))).toBe(true);
+    expect(scanned.some((f) => f.startsWith("components/"))).toBe(true);
+    // And the allowlisted file is genuinely in the scanned set, so the
+    // exemption below is exempting something real.
+    for (const allowed of ALLOWED_BARE_VIDEO) {
+      expect(scanned).toContain(allowed);
+    }
+  });
+
+  it("the allowlisted file is allowlisted because it really does hold the element", () => {
+    // If HlsVideo ever stops rendering a `<video>` this entry is dead weight
+    // and must be deleted — an allowlist nobody prunes is how the next bare
+    // element gets waved through.
+    for (const allowed of ALLOWED_BARE_VIDEO) {
+      expect(collapsed(join(root, allowed))).toContain("<video");
+    }
+  });
+
+  it("contains the literal `<video` in NO scanned file but the allowlisted one", () => {
+    const offenders = files
+      .filter((f) => collapsed(f).includes("<video"))
+      .map(rel)
+      .filter((f) => !ALLOWED_BARE_VIDEO.includes(f));
     expect(offenders).toEqual([]);
   });
 });

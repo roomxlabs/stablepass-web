@@ -3,6 +3,10 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ExploreFeed } from "@/app/(member)/explore/explore-feed";
 import { WALL_COPY } from "@/components/access-wall";
+// The real bucket constant, not a retyped string: ENG-1063's guard asserts
+// `storage.from` was called with it (and, in the lapsed case, not at all), and
+// a stale literal here would quietly weaken both.
+import { TRAINER_PHOTO_BUCKET } from "@/lib/storage/photos";
 
 const VIEWER_ID = "8f3c1a2b-1234-4abc-9def-0123456789ab";
 
@@ -897,5 +901,143 @@ describe("ExploreFeed — ENG-762 multi-photo carousel", () => {
 
     expect(screen.queryByTestId("photo-dots")).toBeNull();
     expect(screen.queryByTestId("photo-track")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ENG-1063 (MEDIUM-1) — GUARDRAIL 3, Explore's "Trainers you follow" aside.
+//
+// Explore is the one signing site with NO front-end gate. `horses-grid.tsx`
+// and `trainers-grid.tsx` read `subscription` themselves and sign only after
+// `hasAccess`, which `test/browse-grid-paging.test.tsx` pins ("a lapsed
+// subscription renders the AccessWall and never touches storage"). Explore
+// cannot do that: `gated` is only known once the `/api/feed` 402 resolves, and
+// the aside's effect fires in parallel on mount.
+//
+// So this block mirrors that browse-grid guard at the level that IS
+// observable — a lapsed session makes zero `/storage/v1/object/sign` calls —
+// rather than at the level of the mechanism that currently delivers it. That
+// distinction is the whole point of the ticket: the property holds today only
+// because the BE policy `trainer_select_sub` (stablepass-be
+// 20260704120002_rls_policies.sql:45) nulls a lapsed viewer's trainer embed,
+// so `trainerIds.length === 0` returns before `signPhotoMap`. A test written
+// against the null embed would pin the accident. A test written against the
+// call count keeps meaning the right thing if the mechanism changes.
+//
+// The last case in this block is the honest other half: it pins, as an
+// executable fact rather than a paragraph somebody deletes, that the FE does
+// NOT yet hold this on its own. See the PR for why the restructure was left.
+describe("ExploreFeed — ENG-1063 GUARDRAIL 3: a lapsed viewer signs nothing", () => {
+  const FOLLOWED_TRAINER = { id: "t1", name: "Chris Waller", photo_url: "trainers/waller.jpg" };
+  const HORSE_ROW = { id: "h1", display_name: "Mahogany", trainer: { id: "t1", name: "Chris Waller" } };
+
+  // A top-level SIBLING describe, so no other block's `beforeEach` runs here —
+  // same reasoning (and same hazard) the ENG-613 block documents: without its
+  // own reset, both the implementation and the call HISTORY leak in from the
+  // previous describe, and `expect(storageFromMock).not.toHaveBeenCalled()`
+  // would be reading somebody else's calls.
+  beforeEach(() => {
+    fromMock.mockReset();
+    storageFromMock.mockClear();
+  });
+
+  /** `follow` answers with `rows`; every other table is empty. */
+  function mockFollowRows(rows: unknown[]) {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "horse") return chainable({ data: [HORSE_ROW], error: null });
+      if (table === "follow") return chainable({ data: rows, error: null });
+      return chainable({ data: [], error: null });
+    });
+  }
+
+  /** Every signed URL this file's storage mock hands out starts with this. */
+  const SIGNED_PREFIX = "https://sb.local/signed/";
+
+  function renderedSignedUrls(): string[] {
+    return Array.from(document.querySelectorAll("img"))
+      .map((img) => img.getAttribute("src") ?? "")
+      .filter((src) => src.startsWith(SIGNED_PREFIX));
+  }
+
+  // THE POSITIVE CONTROL. `not.toHaveBeenCalled()` is only evidence if the
+  // spy would have fired, and this pair of tests differs by ONE thing: the
+  // feed's status code and the RLS-shaped embed that comes with it. Without
+  // this case, a mis-wired mock (or a `supabaseBrowser` stub that stopped
+  // exposing `.storage`) would make the guard below pass on nothing at all.
+  it("CONTROL — an entitled viewer with the same fixture DOES sign the aside's thumb", async () => {
+    mockFollowRows([{ trainer_id: "t1", trainer: FOLLOWED_TRAINER }]);
+    global.fetch = fetchImpl(200) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Trainers you follow");
+
+    await waitFor(() => expect(storageFromMock).toHaveBeenCalled());
+    expect(storageFromMock).toHaveBeenCalledWith(TRAINER_PHOTO_BUCKET);
+    await waitFor(() => expect(renderedSignedUrls()).toContain(`${SIGNED_PREFIX}trainers/waller.jpg`));
+  });
+
+  it("GUARDRAIL: a lapsed session renders the wall and makes ZERO storage sign calls", async () => {
+    // The lapsed session as it really arrives: `/api/feed` 402, and a `follow`
+    // read whose `trainer` embed is NULL on every row because
+    // `trainer_select_sub` hid the trainer table from this viewer. `trainer_id`
+    // itself stays readable — that is what makes the embed null rather than the
+    // rows absent.
+    mockFollowRows([
+      { trainer_id: "t1", trainer: null },
+      { trainer_id: "t2", trainer: null },
+    ]);
+    global.fetch = fetchImpl(402) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed />);
+
+    // Two positive anchors before any absence is asserted. An all-negative
+    // assertion set on a 402 screen passes vacuously — this file and
+    // `.rx/gotchas.md` both record being bitten by exactly that.
+    //   (1) the lapsed path really ran and the wall is what is on screen;
+    expect(await screen.findByText(WALL_COPY.paused.title)).toBeInTheDocument();
+    expect(screen.getAllByTestId("access-wall").length).toBeGreaterThan(0);
+    //   (2) the aside's own effect really ran and its read really resolved, so
+    //       the absence below is a settled answer, not an unawaited effect.
+    await waitFor(() => expect(fromMock.mock.calls.some((c) => c[0] === "follow")).toBe(true));
+
+    // THE PROPERTY, stated as the observable it is: no `/storage/v1/object/sign`
+    // request was issued for this viewer. `sb.storage.from(bucket)` is the only
+    // door to `createSignedUrls`, so never reaching it is exactly zero sign
+    // calls — and this says nothing about WHY, which is the point.
+    expect(storageFromMock).not.toHaveBeenCalled();
+    // And the same property read off the DOM instead of the spy, so it still
+    // means something if the mock is ever reshaped.
+    expect(renderedSignedUrls()).toEqual([]);
+    // Nor did the raw stored path leak in signing's place (guardrail 3 fails
+    // just as badly if the bare object path reaches an <img src>).
+    for (const img of Array.from(document.querySelectorAll("img"))) {
+      expect(img.getAttribute("src") ?? "").not.toContain("trainers/waller.jpg");
+    }
+  });
+
+  // A CHARACTERIZATION test: it pins what the code does today, which is NOT
+  // what we would want it to do. Keeping it green is not the goal — the day
+  // somebody restructures Explore so signing waits for the gate to resolve,
+  // this case goes red, and the correct edit is to flip it to
+  // `expect(storageFromMock).not.toHaveBeenCalled()` and delete this comment.
+  //
+  // Why it is worth having: the guard above passes because the BE hid the
+  // trainers. This one removes that help and shows the FE has nothing of its
+  // own left — relax `trainer_select_sub` for a lapsed teaser and Explore
+  // starts issuing sign calls for walled members. (The member still sees no
+  // photo: storage RLS `media gated read` is the second, independent BE
+  // boundary and returns an empty map. The leak this pins is the REQUEST, not
+  // the image.) Written down as a failing-when-fixed test, that gap cannot
+  // quietly evaporate the way the prose in ENG-1058's review would have.
+  it("LIMITATION (pinned, not endorsed): with the embed visible, a lapsed viewer still reaches Storage", async () => {
+    mockFollowRows([{ trainer_id: "t1", trainer: FOLLOWED_TRAINER }]);
+    global.fetch = fetchImpl(402) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed />);
+
+    expect(await screen.findByText(WALL_COPY.paused.title)).toBeInTheDocument();
+    // The effect signs even though the screen is walled — the FE never consults
+    // `gated`, which is only known once the /api/feed 402 has resolved.
+    await waitFor(() => expect(storageFromMock).toHaveBeenCalledWith(TRAINER_PHOTO_BUCKET));
   });
 });

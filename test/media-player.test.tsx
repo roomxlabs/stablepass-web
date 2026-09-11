@@ -47,6 +47,13 @@ const state = vi.hoisted(() => ({
 }));
 
 interface FakeHlsInstance {
+  /**
+   * The config object the component passed to `new Hls(...)`. Captured
+   * verbatim (ENG-1063) so `debug: false` — the one thing standing between
+   * hls.js's logger and the Mux token in the manifest URL (guardrail 1) — is
+   * an asserted argument rather than a line someone can delete silently.
+   */
+  config: unknown;
   handlers: Map<string, (...args: unknown[]) => void>;
   loadSource: ReturnType<typeof vi.fn>;
   attachMedia: ReturnType<typeof vi.fn>;
@@ -66,7 +73,9 @@ class FakeHls implements FakeHlsInstance {
   on = vi.fn((event: string, cb: (...args: unknown[]) => void) => {
     this.handlers.set(event, cb);
   });
-  constructor() {
+  config: unknown;
+  constructor(config?: unknown) {
+    this.config = config;
     state.instances.push(this);
   }
 }
@@ -122,6 +131,11 @@ beforeEach(() => {
   state.instances = [];
   state.isSupported = true;
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+  // Like `play`, jsdom leaves `load` unimplemented — it reports a jsdomError
+  // rather than throwing, so an unstubbed call would only pollute the output.
+  // HlsVideo's native-path teardown calls it (ENG-1063), and two tests below
+  // assert on this spy, so stub it here for every test rather than per-case.
+  vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -251,6 +265,63 @@ describe("(e) unmount while the hls.js path is live", () => {
     unmount();
 
     expect(instance.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  // ENG-1063 (LOW-1) — the MSE path's teardown must stay exactly as it was.
+  // `destroy()` owns the MediaSource (and the blob: URL hls.js put on the
+  // element), so the new native-path release below must NOT also fire here:
+  // clearing `src` out from under `destroy()` would be reaching into hls.js's
+  // own teardown.
+  it("does NOT release the element itself — destroy() owns the MSE path", async () => {
+    const { unmount } = await mountAndPlay("");
+    const loadSpy = vi.mocked(HTMLMediaElement.prototype.load);
+    loadSpy.mockClear();
+
+    unmount();
+
+    expect(loadSpy).not.toHaveBeenCalled();
+  });
+});
+
+// (e2) --------------------------------------------------------------------
+describe("(e2) unmount on the NATIVE path releases the media resource (ENG-1063)", () => {
+  // The leak this closes: `hls.destroy()` aborts in-flight segment requests,
+  // but only on the MSE path. On Safari/iOS the element owns the load, so an
+  // unmounted-but-still-buffering <video> kept its fetch alive — one live
+  // download per card ever played, while scrolling a feed.
+  it("drops the src attribute and re-runs the load algorithm", async () => {
+    const { container, unmount } = await mountAndPlay("maybe");
+    const video = container.querySelector("video")!;
+    // Positive anchor: the native path really did load the minted URL, so the
+    // release asserted below is releasing something rather than passing on an
+    // element that was never loaded.
+    expect(video.getAttribute("src")).toBe(PLAYBACK_URL);
+    const loadSpy = vi.mocked(HTMLMediaElement.prototype.load);
+    loadSpy.mockClear();
+
+    unmount();
+
+    expect(video.hasAttribute("src")).toBe(false);
+    expect(loadSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // The `isSupported() === false` fallback reaches the OTHER cleanup (the one
+  // that also calls `hls?.destroy()`), having loaded natively. It must release
+  // too — the guard is "did the element load it", not "which return ran".
+  it("also releases when hls.js imported but was unsupported", async () => {
+    state.isSupported = false;
+    const { container, unmount } = await mountAndPlay("");
+    const video = container.querySelector("video")!;
+    expect(state.imported).toBe(1);
+    expect(state.instances).toHaveLength(0);
+    expect(video.getAttribute("src")).toBe(PLAYBACK_URL);
+    const loadSpy = vi.mocked(HTMLMediaElement.prototype.load);
+    loadSpy.mockClear();
+
+    unmount();
+
+    expect(video.hasAttribute("src")).toBe(false);
+    expect(loadSpy).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -439,5 +510,126 @@ describe("(j) a rejected play() is only fatal when it is really a transport fail
 
     await waitFor(() => expect(utils.container.querySelector("video")).toBeNull());
     expect(utils.getByRole("alert")).toHaveTextContent("Couldn’t load video");
+  });
+});
+
+// (k) ---------------------------------------------------------------------
+// ENG-1063 (MEDIUM-2). Guardrail 1 says the signed URL must never reach the
+// browser console, and `hls-video.tsx` satisfies it with one word: `debug:
+// false` in the hls.js constructor config. hls.js's debug mode logs the
+// manifest URL, and that URL carries the Mux token.
+//
+// Until now NOTHING in test/ looked at either half — not the constructor
+// argument, not the console. A one-character edit (`false` → `true`) re-opened
+// the guardrail with a fully green suite. These two cases close that: the
+// first pins the intent, the second pins the OBSERVABLE consequence, so the
+// guard survives hls.js changing how it spells the option.
+describe("(k) GUARDRAIL 1 — `debug: false`, and the minted URL never reaches the console", () => {
+  const CONSOLE_METHODS = ["log", "info", "warn", "error", "debug", "trace"] as const;
+
+  /** Every console sink, silenced and recording. `vi.restoreAllMocks()` in `afterEach` undoes it. */
+  function spyOnConsole() {
+    return CONSOLE_METHODS.map((method) => vi.spyOn(console, method).mockImplementation(() => {}));
+  }
+
+  /**
+   * Flatten what was logged into strings.
+   *
+   * NOT a bare `String(arg)`: an object stringifies to "[object Object]",
+   * which would hide a `{ url }` payload and make every assertion below pass
+   * vacuously — exactly the failure mode this file's other guards warn about.
+   */
+  function loggedText(spies: ReturnType<typeof spyOnConsole>): string[] {
+    return spies
+      .flatMap((spy) => spy.mock.calls)
+      .flat()
+      .map((arg) => {
+        if (typeof arg === "string") return arg;
+        if (arg instanceof Error) return `${arg.name} ${arg.message} ${arg.stack ?? ""}`;
+        try {
+          return JSON.stringify(arg) ?? String(arg);
+        } catch {
+          return String(arg);
+        }
+      });
+  }
+
+  it("passes `debug: false` to the hls.js constructor", async () => {
+    await mountAndPlay("");
+
+    expect(state.instances).toHaveLength(1);
+    const config = state.instances[0].config as Record<string, unknown> | undefined;
+    // The config must EXIST — `new Hls()` with no argument would leave the
+    // property assertion below reading `undefined` and is not what this
+    // component may do.
+    expect(config).toBeDefined();
+    // Pinned to the literal `false`, not merely "falsy". Per the ticket's read
+    // of hls.js 1.7.2 (node_modules/hls.js/dist/hls.js:2110-2138) only `true`
+    // or an object enables the logger — but writing the intent down exactly is
+    // the point: a reviewer seeing this line red knows the guardrail moved.
+    expect(config!.debug).toBe(false);
+    expect(config!.debug).not.toBe(true);
+    expect(typeof config!.debug).not.toBe("object");
+  });
+
+  it("hls.js path: logs nothing containing the minted URL — not even when a fatal ERROR carries it", async () => {
+    const spies = spyOnConsole();
+    const { container, unmount } = await mountAndPlay("");
+    const instance = state.instances[0];
+
+    await act(async () => {
+      instance.handlers.get("hlsManifestParsed")?.();
+    });
+
+    // The real hls.js ERROR payload carries `url` and `networkDetails`, both
+    // of which hold the token-bearing manifest URL. This is the single most
+    // likely place a future edit reaches for "just log the error" — so hand
+    // the handler the loaded gun and assert it never fires.
+    await act(async () => {
+      instance.handlers.get("hlsError")?.("hlsError", {
+        fatal: true,
+        type: "networkError",
+        details: "manifestLoadError",
+        url: PLAYBACK_URL,
+        networkDetails: { responseURL: PLAYBACK_URL },
+      });
+    });
+    await waitFor(() => expect(container.querySelector("video")).toBeNull());
+
+    unmount();
+
+    const text = loggedText(spies);
+    for (const line of text) {
+      expect(line).not.toContain(PLAYBACK_URL);
+      // The token alone is the secret; catch it even if the URL were split,
+      // re-encoded or logged as a bare query string.
+      expect(line).not.toContain("fake.jwt.token");
+      expect(line).not.toContain("pb-fixture");
+    }
+  });
+
+  it("native path: logs nothing containing the minted URL through load, failure and unmount", async () => {
+    const spies = spyOnConsole();
+    const { container, unmount } = await mountAndPlay("maybe");
+    const video = container.querySelector("video")!;
+    // Positive anchor — the URL really was in play on this render, so the
+    // absence asserted below is meaningful.
+    expect(video.src).toBe(PLAYBACK_URL);
+
+    await act(async () => {
+      fireEvent.loadedMetadata(video);
+    });
+    await act(async () => {
+      fireEvent.error(video);
+    });
+    await waitFor(() => expect(container.querySelector("video")).toBeNull());
+
+    unmount();
+
+    for (const line of loggedText(spies)) {
+      expect(line).not.toContain(PLAYBACK_URL);
+      expect(line).not.toContain("fake.jwt.token");
+      expect(line).not.toContain("pb-fixture");
+    }
   });
 });

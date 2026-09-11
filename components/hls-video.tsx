@@ -122,7 +122,14 @@ export function HlsVideo({ src, onFatalError, ...rest }: HlsVideoProps) {
     // recovers from plenty of element-level errors itself, so treating a raw
     // `error` event there as fatal would tear down a stream that was about to
     // heal (the same reason non-fatal `Hls.Events.ERROR` is ignored below).
+    // Set by `playNatively` alone. It is the teardown's proof that the ELEMENT
+    // owns the load rather than hls.js, which decides whether the cleanup below
+    // may release the source — the two paths need opposite treatment and both
+    // returns can be reached after a native load (see `releaseNativeSource`).
+    let loadedNatively = false;
+
     const playNatively = () => {
+      loadedNatively = true;
       video.addEventListener("error", fail);
       video.src = src;
       if (video.readyState >= 1 /* HAVE_METADATA */) {
@@ -137,11 +144,36 @@ export function HlsVideo({ src, onFatalError, ...rest }: HlsVideoProps) {
       video.removeEventListener("error", fail);
     };
 
+    /**
+     * Release the media resource on the NATIVE path (ENG-1063).
+     *
+     * `hls.destroy()` tears down the MediaSource and aborts every in-flight
+     * segment request for us — but only on the MSE path. On the native path
+     * (Safari/iOS, and the `isSupported() === false` fallback) nothing does:
+     * the element keeps its own fetch alive after React has unmounted it, so
+     * scrolling a feed leaks one live download per card ever played. That is
+     * the leak the cleanup's comment already claimed to cover and didn't.
+     *
+     * Dropping the attribute and re-running the load algorithm against an
+     * element with no source is the spec's way to say "abandon it": the fetch
+     * is aborted and `networkState` returns to `NETWORK_EMPTY`.
+     *
+     * Guarded, because it must NOT run on the MSE path — there `video.src` is
+     * the blob: URL hls.js attached, and clearing it out from under
+     * `destroy()` would be reaching into hls.js's own teardown.
+     */
+    const releaseNativeSource = () => {
+      if (!loadedNatively) return;
+      video.removeAttribute("src");
+      video.load();
+    };
+
     if (!isHlsSrc(src) || video.canPlayType("application/vnd.apple.mpegurl") !== "") {
       playNatively();
       return () => {
         cancelled = true;
         detachNativeListeners();
+        releaseNativeSource();
       };
     }
 
@@ -171,6 +203,9 @@ export function HlsVideo({ src, onFatalError, ...rest }: HlsVideoProps) {
       // Attached only if the isSupported() fallback took the native path, but
       // removing a listener that was never added is a no-op.
       detachNativeListeners();
+      // Likewise a no-op unless that fallback ran — on the MSE path taken
+      // above, `destroy()` releases the source and this must not touch it.
+      releaseNativeSource();
       // Destroys the MediaSource, aborts every in-flight segment request and
       // drops hls.js's own listeners. Without it, scrolling a feed leaks a
       // player (and its network activity) per card ever played.
