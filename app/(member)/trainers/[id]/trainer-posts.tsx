@@ -7,6 +7,8 @@
 // the horse version, a trainer's updates span their whole stable, so each post
 // carries its OWN horse name for the byline. Mirrors W7 HorsePosts otherwise.
 import { useEffect, useState } from "react";
+import { HlsVideo } from "@/components/hls-video";
+import { useFeedVideoFailure } from "@/lib/feed/use-feed-video-failure";
 import { PostCard, PostAvatar, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
@@ -49,6 +51,10 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
   const [error, setError] = useState(false);
   const [playing, setPlaying] = useState<Record<string, string>>({});
   const [playError, setPlayError] = useState<Record<string, boolean>>({});
+  // The ONE fatal-transport handler, shared by all five feeds (ENG-1063).
+  // It was copy-pasted verbatim into each of them; see the hook for why that
+  // mattered even though nothing was wrong with the behaviour.
+  const onFatalVideo = useFeedVideoFailure(setPlaying, setPlayError);
 
   useEffect(() => {
     let cancelled = false;
@@ -212,7 +218,16 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
                 </div>
               </div>
               <div {...mediaBoxProps(p.media.aspectRatio, { video: true })}>
-                <video controls autoPlay src={playbackUrl} />
+                <HlsVideo
+                  src={playbackUrl}
+                  poster={p.media.posterUrl ?? undefined}
+                  controls
+                  playsInline
+                  // Deliberately NO `autoPlay`: HlsVideo issues its own explicit play()
+                  // once the transport is ready (ENG-1056), which is what Safari honours
+                  // on a freshly-mounted, click-initiated element.
+                  onFatalError={() => onFatalVideo(p.id)}
+                />
               </div>
               <ReactionBar
                 count={p.count}

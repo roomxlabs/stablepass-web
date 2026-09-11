@@ -3,6 +3,10 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ExploreFeed } from "@/app/(member)/explore/explore-feed";
 import { WALL_COPY } from "@/components/access-wall";
+// The real bucket constant, not a retyped string: ENG-1063's guard asserts
+// `storage.from` was called with it (and, in the lapsed case, not at all), and
+// a stale literal here would quietly weaken both.
+import { TRAINER_PHOTO_BUCKET } from "@/lib/storage/photos";
 
 const VIEWER_ID = "8f3c1a2b-1234-4abc-9def-0123456789ab";
 
@@ -47,10 +51,17 @@ function chainable(result: { data: unknown; error: unknown }) {
   return obj;
 }
 
-const { fromMock, upsertMock, insertMock } = vi.hoisted(() => ({
+const { fromMock, upsertMock, insertMock, storageFromMock } = vi.hoisted(() => ({
   fromMock: vi.fn(),
   upsertMock: vi.fn(() => Promise.resolve({ error: null })),
   insertMock: vi.fn(() => Promise.resolve({ error: null })),
+  // A `vi.fn()`, not a bare object literal — ENG-1057 follow-up's guardrail
+  // test needs to assert `storage.from` was NEVER reached for a trainer whose
+  // `follow` embed came back null (RLS-hidden), so this has to be spyable.
+  storageFromMock: vi.fn((_bucket: string) => ({
+    createSignedUrls: (paths: string[]) =>
+      Promise.resolve({ data: paths.map((path) => ({ path, signedUrl: `https://sb.local/signed/${path}` })) }),
+  })),
 }));
 
 // `.storage` is only exercised when a fixture supplies a real `photo_url`
@@ -59,12 +70,7 @@ const { fromMock, upsertMock, insertMock } = vi.hoisted(() => ({
 vi.mock("@/lib/supabase/client", () => ({
   supabaseBrowser: () => ({
     from: fromMock,
-    storage: {
-      from: () => ({
-        createSignedUrls: (paths: string[]) =>
-          Promise.resolve({ data: paths.map((path) => ({ path, signedUrl: `https://sb.local/signed/${path}` })) }),
-      }),
-    },
+    storage: { from: storageFromMock },
   }),
 }));
 
@@ -333,6 +339,7 @@ describe("ExploreFeed — ENG-613 view model + Follow pill", () => {
     fromMock.mockReset();
     followInsert.mockReset();
     followInsert.mockImplementation(() => Promise.resolve({ error: null }));
+    storageFromMock.mockClear();
   });
 
   function mockTables(opts: { follows?: unknown[]; followsError?: { message: string } } = {}) {
@@ -375,6 +382,87 @@ describe("ExploreFeed — ENG-613 view model + Follow pill", () => {
     expect(projection).toBe(
       "id, display_name, photo_url, trainer:trainer_id(id, name, stable_name, location, photo_url)",
     );
+  });
+
+  // ENG-1057 follow-up — same reasoning as the horse projection above, for the
+  // "Trainers you follow" aside's own read. Deleting `photo_url` here leaves
+  // the whole suite green (verified by hand before adding this pin): every
+  // other assertion on this aside reads names/counts off a hand-built fixture,
+  // never the projection string sent to the database.
+  it("pins the follow read's exact projection, including the trainer's photo_url", async () => {
+    mockTables();
+    global.fetch = feedWith([{ id: "p1", horse_id: "h1", type: "photo", title: null, body: "x", media_url: null, poster_url: null, aspect_ratio: null, watermarked: false, like_count: 1, published_at: "2026-07-10T00:00:00.000Z" }]) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    const followCallIndex = fromMock.mock.calls.findIndex((c) => c[0] === "follow");
+    expect(followCallIndex).toBeGreaterThanOrEqual(0);
+    const chain = fromMock.mock.results[followCallIndex].value as { select: ReturnType<typeof vi.fn> };
+    const projection = chain.select.mock.calls[0][0] as string;
+
+    expect(projection).toBe("trainer_id, trainer:trainer_id(id,name,photo_url)");
+  });
+
+  // ENG-1057 follow-up — the aside's own behavioural gap: nothing in this file
+  // asserted that a followed trainer's photo actually reaches the DOM as a
+  // signed <img>.
+  it("ENG-1057: 'Trainers you follow' renders a signed <img class=trainer-avatar-mini-photo>", async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "horse") return chainable({ data: [{ id: "h1", display_name: "Mahogany", trainer: TRAINER }], error: null });
+      if (table === "follow") {
+        return chainable({
+          data: [{ trainer_id: "t1", trainer: { id: "t1", name: "Chris Waller", photo_url: "trainers/waller.jpg" } }],
+          error: null,
+        });
+      }
+      return chainable({ data: [], error: null });
+    });
+    global.fetch = feedWith([{ id: "p1", horse_id: "h1", type: "photo", title: null, body: "x", media_url: null, poster_url: null, aspect_ratio: null, watermarked: false, like_count: 1, published_at: "2026-07-10T00:00:00.000Z" }]) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Trainers you follow");
+
+    // Scoped to the aside row's own class — the feed's post avatars use a
+    // different one, so this is unambiguous even though both are <img alt="">.
+    const asideImg = await waitFor(() => {
+      const el = document.querySelector(".aside-trainer-row .trainer-avatar-mini-photo");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(asideImg).toHaveAttribute("src", "https://sb.local/signed/trainers/waller.jpg");
+  });
+
+  // ENG-1057 follow-up (guardrail hardening) — pins a property that currently
+  // holds only by RLS accident: `trainer_select_sub` hides a lapsed/unentitled
+  // viewer's trainer rows, so the `follow` embed nulls out even though
+  // `trainer_id` itself is still readable. That must never reach Storage.
+  it("GUARDRAIL: a NULL trainer embed on every follow row (RLS-hidden) never touches Storage", async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "horse") return chainable({ data: [{ id: "h1", display_name: "Mahogany", trainer: TRAINER }], error: null });
+      if (table === "follow") {
+        return chainable({
+          data: [
+            { trainer_id: "t1", trainer: null },
+            { trainer_id: "t2", trainer: null },
+          ],
+          error: null,
+        });
+      }
+      return chainable({ data: [], error: null });
+    });
+    global.fetch = feedWith([{ id: "p1", horse_id: "h1", type: "photo", title: null, body: "x", media_url: null, poster_url: null, aspect_ratio: null, watermarked: false, like_count: 1, published_at: "2026-07-10T00:00:00.000Z" }]) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Mahogany");
+
+    // Positive anchor that the follow read actually ran and resolved, so the
+    // absence below is real rather than a race against an unsettled effect.
+    await waitFor(() => expect(fromMock.mock.calls.some((c) => c[0] === "follow")).toBe(true));
+    // A NULL embed on every row means the trainerMap stays empty, so the
+    // screen never even reaches the horse-count round trip, let alone signing.
+    expect(screen.queryByText("Trainers you follow")).not.toBeInTheDocument();
+    expect(storageFromMock).not.toHaveBeenCalled();
   });
 
   // ENG-958 — through the REAL mapper, not a hand-built FeedPost: the
@@ -813,5 +901,157 @@ describe("ExploreFeed — ENG-762 multi-photo carousel", () => {
 
     expect(screen.queryByTestId("photo-dots")).toBeNull();
     expect(screen.queryByTestId("photo-track")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ENG-1063 (MEDIUM-1) — GUARDRAIL 3, Explore's "Trainers you follow" aside.
+//
+// READ THIS BEFORE ADDING A "lapsed viewer signs nothing" TEST HERE. The
+// ticket asked for a guard pinning the OBSERVABLE property (zero
+// `/storage/v1/object/sign` calls for a lapsed viewer) rather than the
+// mechanism that currently delivers it. That guard CANNOT be written against
+// today's code, and the first attempt at it was removed for claiming to be one.
+// The reason is worth writing down, because it will be re-attempted:
+//
+//   Explore has no front-end gate. `horses-grid.tsx` / `trainers-grid.tsx`
+//   read `subscription` themselves and sign only after `hasAccess`, which
+//   `test/browse-grid-paging.test.tsx` pins. Explore cannot: `gated` is only
+//   known once the `/api/feed` 402 resolves, and the aside's effect fires in
+//   parallel on mount with `[]` deps.
+//
+//   So a lapsed fixture has to choose. With the trainer embed NULL (what
+//   `trainer_select_sub` really returns for a lapsed viewer) the zero-sign
+//   result is over-determined three times over — `trainerMap` is empty, the
+//   `trainerIds.length === 0` early return fires, and `signPhotoMap` itself
+//   returns at `lib/storage/photos.ts` before touching `storage.from`. VERIFIED:
+//   deleting the early return from explore-feed.tsx leaves all of this file
+//   green. A test on that fixture pins nothing about Explore, whatever its
+//   title says, and duplicates the existing guard above at "a NULL trainer
+//   embed on every follow row (RLS-hidden) never touches Storage".
+//
+//   With the embed VISIBLE, Explore signs — for a lapsed viewer, today. That
+//   is the real gap, and it is pinned as a LIMITATION at the bottom of this
+//   block rather than papered over.
+//
+// What is left that IS worth pinning is narrow and honestly titled: the walled
+// render path reaches the same no-signing outcome. The observable-property
+// guard arrives with the restructure, not before.
+describe("ExploreFeed — ENG-1063 GUARDRAIL 3: the aside's signing, on the walled path", () => {
+  const FOLLOWED_TRAINER = { id: "t1", name: "Chris Waller", photo_url: "trainers/waller.jpg" };
+  const HORSE_ROW = { id: "h1", display_name: "Mahogany", trainer: { id: "t1", name: "Chris Waller" } };
+
+  // A top-level SIBLING describe, so no other block's `beforeEach` runs here —
+  // same reasoning (and same hazard) the ENG-613 block documents: without its
+  // own reset, both the implementation and the call HISTORY leak in from the
+  // previous describe, and `expect(storageFromMock).not.toHaveBeenCalled()`
+  // would be reading somebody else's calls.
+  beforeEach(() => {
+    fromMock.mockReset();
+    storageFromMock.mockClear();
+  });
+
+  /** `follow` answers with `rows`; every other table is empty. */
+  function mockFollowRows(rows: unknown[]) {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "horse") return chainable({ data: [HORSE_ROW], error: null });
+      if (table === "follow") return chainable({ data: rows, error: null });
+      return chainable({ data: [], error: null });
+    });
+  }
+
+  /** Every signed URL this file's storage mock hands out starts with this. */
+  const SIGNED_PREFIX = "https://sb.local/signed/";
+
+  function renderedSignedUrls(): string[] {
+    return Array.from(document.querySelectorAll("img"))
+      .map((img) => img.getAttribute("src") ?? "")
+      .filter((src) => src.startsWith(SIGNED_PREFIX));
+  }
+
+  // THE POSITIVE CONTROL. `not.toHaveBeenCalled()` is only evidence if the spy
+  // would have fired, and this pins that the mock really is wired end to end:
+  // `supabaseBrowser().storage.from` is reachable, and a signed URL really does
+  // reach the DOM. Without it a stub that stopped exposing `.storage` would
+  // make every negative in this block pass on nothing at all.
+  it("CONTROL — an entitled viewer signs the aside's thumb and renders it", async () => {
+    mockFollowRows([{ trainer_id: "t1", trainer: FOLLOWED_TRAINER }]);
+    global.fetch = fetchImpl(200) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+    await screen.findByText("Trainers you follow");
+
+    await waitFor(() => expect(storageFromMock).toHaveBeenCalledWith(TRAINER_PHOTO_BUCKET));
+    await waitFor(() => expect(renderedSignedUrls()).toContain(`${SIGNED_PREFIX}trainers/waller.jpg`));
+  });
+
+  // Deliberately NOT titled "a lapsed session signs nothing" — see the block
+  // comment. The 402 is what is under test here (the wall renders and the aside
+  // still settles to its no-signing terminal state); the NULL embed is what
+  // makes the outcome zero, and that half is already pinned above.
+  it("a NULL embed still signs nothing when the feed came back 402 and the wall is on screen", async () => {
+    mockFollowRows([
+      { trainer_id: "t1", trainer: null },
+      { trainer_id: "t2", trainer: null },
+    ]);
+    global.fetch = fetchImpl(402) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed />);
+
+    // Positive anchors before any absence. An all-negative set on a 402 screen
+    // passes vacuously — this file and `.rx/gotchas.md` both record being
+    // bitten by exactly that.
+    //   (1) the lapsed path ran and the wall is what is on screen;
+    expect(await screen.findByText(WALL_COPY.paused.title)).toBeInTheDocument();
+    expect(screen.getAllByTestId("access-wall").length).toBeGreaterThan(0);
+    //   (2) the aside's effect reached its TERMINAL state, not merely its first
+    //       await. `setTrainers([])` having landed is what makes the absence a
+    //       settled answer rather than a race — the same anchor the sibling
+    //       NULL-embed guard above uses.
+    await waitFor(() => expect(fromMock.mock.calls.some((c) => c[0] === "follow")).toBe(true));
+    expect(screen.queryByText("Trainers you follow")).not.toBeInTheDocument();
+
+    // `sb.storage.from(bucket)` is the only door to `createSignedUrls`, so
+    // never reaching it is exactly zero sign calls.
+    expect(storageFromMock).not.toHaveBeenCalled();
+    // NOTE: no DOM-side assertion here. The walled render paints no <img> at
+    // all (measured: `document.querySelectorAll("img").length === 0`), so
+    // `expect(renderedSignedUrls()).toEqual([])` would iterate an empty list
+    // and assert nothing. The spy above is the assertion that has force.
+  });
+
+  // A CHARACTERIZATION test: it pins what the code does today, which is NOT
+  // what we want it to do. Keeping it green is not the goal — when Explore is
+  // restructured so signing waits for the gate to resolve, this goes red, and
+  // the correct edit is to invert it (`not.toHaveBeenCalled()`, no signed
+  // <img>) and delete this comment.
+  //
+  // This is the ticket's real finding, stated as an executable fact so it
+  // cannot evaporate the way ENG-1058's review prose would have: relax
+  // `trainer_select_sub` for a lapsed teaser and Explore issues sign calls for
+  // walled members, with nothing else in the front end to stop it.
+  it("LIMITATION (pinned, not endorsed): with the embed visible, a lapsed viewer signs AND renders the photo", async () => {
+    mockFollowRows([{ trainer_id: "t1", trainer: FOLLOWED_TRAINER }]);
+    global.fetch = fetchImpl(402) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed />);
+
+    expect(await screen.findByText(WALL_COPY.paused.title)).toBeInTheDocument();
+    // The effect signs even though the screen is walled — the front end never
+    // consults `gated`, which is only known once the /api/feed 402 resolved.
+    await waitFor(() => expect(storageFromMock).toHaveBeenCalledWith(TRAINER_PHOTO_BUCKET));
+    // And it is not merely a request: the signed URL is painted into the
+    // aside, BEHIND the wall. Asserting the render rather than just the call
+    // keeps this test honest about how far the gap actually goes.
+    await waitFor(() => expect(renderedSignedUrls()).toContain(`${SIGNED_PREFIX}trainers/waller.jpg`));
+    expect(screen.getByText("Trainers you follow")).toBeInTheDocument();
+    // In production the member would still see no photo: storage RLS
+    // `media gated read` is a second, independent BE boundary that returns an
+    // empty map for a lapsed viewer, so `signed.get(...)` yields null and the
+    // row falls back to initials. That mitigation lives in
+    // stablepass-be (`20260704120002_rls_policies.sql`) and is NOT verified by
+    // this suite — this harness's storage mock signs unconditionally. Do not
+    // read the assertions above as proof the image reaches a real member; read
+    // them as proof the front end asks, which is the part we own.
   });
 });

@@ -1251,7 +1251,7 @@ spec reports as a product failure.
   ENG-617's repo-wide "no date arithmetic" guard flags in `e2e/` too. Use an
   absolute year in fixtures.
 
-## `getByLabel("Password")` is AMBIGUOUS since the eye toggle — 10 e2e specs use it (ENG-956, 4 Sep 2026)
+## `getByLabel("Password")` is AMBIGUOUS since the eye toggle (ENG-956, 4 Sep 2026 — swept ENG-1062, 10 Sep 2026)
 
 `7cc153e` (1 Sep) added `components/password-input.tsx`, whose reveal button is
 `<button aria-label="Show password">`. Playwright's `getByLabel` matches it as
@@ -1260,11 +1260,56 @@ well as the `<input id="password">`, so **every** sign-in helper written as
 resolved to 2 elements` — *before* any assertion, so it reads as a product
 failure on whatever screen the spec was testing.
 
-- **Do this:** `page.locator("#password").fill(...)`.
-- Ten specs still carry the ambiguous form (`screenshots`, `checkout`,
-  `trial-start`, `expiry-banner`, `video-poster`, `shell-responsive`,
-  `eng-585`, `eng-772`, `eng-775`, and — now fixed — `eng-956`). They are
-  latently red; fixing them is a sweep, not any one ticket's surface.
+- **Do this:** `import { fillPassword } from "./helpers/sign-in"` and call
+  `await fillPassword(page, pw)`. Never a label query.
+- **SWEPT AND GUARDED (ENG-1062, 10 Sep 2026).** The sweep is done — 22 call
+  sites across 12 specs now go through `e2e/helpers/sign-in.ts`, which targets
+  `#password` and asserts the locator resolved to exactly ONE node before it
+  types. `test/e2e-password-locator-guard.test.ts` fails the vitest suite if any
+  `e2e/**` file reintroduces a label query the reveal toggle could match, so this
+  cannot go dark again in a repo with no CI e2e job.
+- Note `getByLabel("New password", { exact: true })` and
+  `getByLabel("Confirm new password")` in `eng-953-password-reset` are FINE and
+  are deliberately not flagged: neither is a substring of "show password".
+
+## A mass e2e failure is rarely ONE cause — classify by first error line (ENG-1062, 10 Sep 2026)
+
+ENG-1058 reported all 68 Playwright failures as the `getByLabel("Password")`
+strict-mode violation. Grouping the log by first error line showed only **33**
+were: the other 35 were pre-existing failures of five unrelated kinds. Fixing the
+locator took the suite 68 → 55 red, not 68 → 0, because unblocking the login step
+also *revealed* ~20 tests that had been dark behind it and fail for their own
+reasons.
+
+- **Do this:** before scoping a "one root cause" fix, `grep` the run log for the
+  first `Error:` of every failure and count the distinct shapes. A ticket that
+  promises green off one fix is mis-scoped if that count is > 1.
+- Corollary: a fix that unblocks an early step *raises* the visible failure count
+  in the specs behind it. That is progress, not a regression — report
+  passed-count (99 → 112), not just failed-count.
+
+## A seeded e2e member is NOT entitled any more — trials are gone (ENG-1062, 10 Sep 2026)
+
+Most signed-in specs seed a member with `auth.admin.createUser({ email_confirm:
+true })` and assume the trigger provisions an entitled **trial**. It no longer
+does. The local `subscription` table holds **zero** `trialing` rows (99 `lapsed`
+/ 51 `active` / 18 `canceled`) — the pricing epic (ENG-1023…ENG-1029) moved the
+product to a paid, renewing subscription and the trial status went with it.
+
+**Symptom:** the spec signs in fine, then every feed/profile assertion fails with
+`element(s) not found` for `.post-web`, `.post-media-web`, a heading, etc. The
+page actually rendered the access wall — *"You don't have a subscription yet /
+Subscribe to see every update… It renews monthly and you can cancel any time"* →
+`Get full access`. It reads as a UI regression and is not one.
+
+- **Do this:** dump Playwright's `test-results/**/error-context.md` — it carries
+  the full a11y snapshot of the page at failure and names the wall in one line.
+  Then seed the subscription row your spec needs (`status: "active"` with a
+  `current_period_end` in the future; `trial_ends_at` is NOT NULL, so still pass
+  a date) instead of trusting the createUser trigger.
+- This is why `video-poster`, `reaction-save`, `eng-772`, `eng-775`, `eng-762`,
+  `eng-956/957/959/960/961` and the `screenshots` member specs are red on
+  `feature/web-media-v1` — a fixture-contract gap, not a media defect.
 
 ## A PostgREST builder is a THENABLE, not a Promise — `.catch()` is not a function (ENG-956, 4 Sep 2026)
 
@@ -2317,3 +2362,196 @@ page whose entire purpose is "a store reviewer can open this URL", that gap matt
 The `DOCUMENTS` loop in `e2e/legal.spec.ts` gives all of it for one array entry —
 but its ALIASES loop hardcodes an `<h1>` of "Terms & Conditions", so only join
 `DOCUMENTS`.
+
+## Playwright's Chromium PLAYS HLS — it cannot prove an hls.js fix (ENG-1056, 10 Sep 2026)
+
+`components/media-player.tsx` handed a Mux `.m3u8?token=` URL to a bare `<video src>` for
+months and every Playwright run was green, because Playwright's bundled Chromium reports
+`canPlayType("application/vnd.apple.mpegurl") === "maybe"` and genuinely plays HLS (its
+build enables the built-in HLS player). Real desktop Chrome, Firefox and Edge report `""`
+and fail the element with `MediaError code 4 "Failed to open media"` — which, with no
+`onError` on the element, was a black box and a spinner forever.
+- **Do this:** for anything HLS, drive the automated negative in **Playwright Firefox**
+  (`npx playwright install firefox`; `test.use({ browserName: "firefox" })` at the TOP
+  level of the spec — `test.use` is rejected inside a `describe`). Firefox is the honest
+  browser here: `canPlayType(HLS)` is `""`, so it exercises the hls.js path and the error
+  path the way a member's browser does. Keep real Chrome/Safari as a manual acceptance
+  step and say so in the PR.
+- The same trap in reverse: asserting "the video element exists" proves nothing about
+  playback. Assert the transport — that `loadSource` got the minted URL, or that a dead
+  stream produces the honest error pill rather than an empty `<video>`.
+
+## `.rx/mockups.md`'s `06-stage1-design/` path does not exist here (ENG-1056, 10 Sep 2026)
+
+Re-checked 10 Sep 2026 from a worktree: `<workspace>/06-stage1-design/` is absent, and the
+readable mockups are back under `<workspace>/dev-handover/StablePass-mockups/mockups/web/screens/`
+(`06-explore.html`, `07-horse-profile.html` both open). This entry has now flipped three
+times in this file. **Do this:** never trust either path from memory — `ls` both before
+building, and cite the one that actually resolved in the ticket you write.
+
+## `components/media-player.tsx` is NOT what member feeds render (ENG-1056, 10 Sep 2026)
+
+`MediaPlayer` is mounted in exactly ONE place — `app/preview/components/page.tsx`, the
+unlinked no-auth dev gallery. Every real member feed inlines its **own**
+`<video controls autoPlay src={playbackUrl} />` plus its own private
+`async function play(postId)` that mints with a **GET** (`apiFetch(url)`, no `method`):
+`app/(member)/explore/explore-feed.tsx`, `following/following-screen.tsx`,
+`saved/saved-feed.tsx`, `horses/[id]/horse-posts.tsx`, `trainers/[id]/trainer-posts.tsx`.
+`PostCard` only draws the `.media-play` button and calls back through its `onPlay` prop.
+ENG-1056 was grilled on the belief that fixing `MediaPlayer` fixes members; it does not.
+- **Do this:** before ticketing or "fixing" a shared component, `grep -rn "<ComponentName"`
+  for its real mount sites. Five near-identical copies of the mint-and-play block is the
+  actual shape of this code, and any player change has to land in all five at once or they
+  desync. `MediaPlayer` is effectively gallery-only until they are consolidated.
+
+## An e2e that renders a member SCREEN must promote the seeded subscription (ENG-1056)
+
+`auth.admin.createUser` fires a trigger that provisions a `trial` subscription, and ENG-999
+retired `trial` — `lib/api/access.ts` no longer grants it. So a freshly-created e2e user hits
+the `AccessWall` and every profile/browse screen renders **zero cards**, which reads exactly
+like "the feature is broken" and makes card assertions fail for the wrong reason.
+- **Do this:** after `createUser`, `update({ status: "active", current_period_end: <future> })`
+  on `subscription` for that `user_id`. Specs written before ENG-999 (e.g.
+  `e2e/video-poster.spec.ts`) do not do this and cannot render a card any more.
+
+## Proving hls.js is the TRANSPORT: filter the manifest request by resourceType (ENG-1056)
+
+Asserting "the `.m3u8` was requested" proves nothing — a bare `<video src>` requests the
+manifest too. Chunk FILENAMES are opaque hashes in a Next build, so matching `/hls/` in a URL
+finds nothing either (this cost a debug cycle). What works: `page.on("request")` and keep only
+manifest requests whose `req.resourceType()` is `xhr`/`fetch`. hls.js uses XHR; the media
+element uses `media`/`other`. Pair it with a first test that asserts
+`canPlayType("application/vnd.apple.mpegurl") === ""` in the browser under test, so the file
+fails loudly if it ever stops running in Firefox instead of silently proving nothing.
+
+## A seeded e2e member is LAPSED by default — entitle them explicitly (ENG-1057, 10 Sep 2026)
+**Symptom:** a new Playwright spec signs in a freshly-created member, navigates to a gated
+member screen, and every assertion fails on an element that was never rendered — the screen is
+the AccessWall. It reads like a bug in the feature under test.
+**Cause:** the `auth.users` trigger inserts a `subscription` row at the column DEFAULT, which is
+`lapsed`. ENG-999 retired the free trial, so `has_content_access` grants only on `active`
+(within its 3-day renewal grace) or an unexpired `canceled` — `trial` is no longer entitled.
+Several older specs carry a comment claiming "the createUser trigger provisions the trial
+subscription the browse gate reads"; that comment predates ENG-999 and is now wrong.
+**Do this:** after `auth.admin.createUser`, explicitly
+`update subscription set status='active', current_period_end='2099-01-01' where user_id=...`.
+This also matters for Storage: the policy `media gated read` is `authenticated AND
+has_content_access`, so an unentitled member signs nothing and every photo silently falls back
+to initials — a weaker test passing for the wrong reason.
+
+## A supabase mock without `storage.from` throws once a screen signs photos (ENG-1057)
+**Symptom:** unrelated component tests start failing with `sb.storage is undefined` after a
+screen adds a `signPhotoMap`/`signPhoto` call.
+**Cause:** the common mock is `supabaseBrowser: () => ({ from: fromMock })` — no `storage`.
+**Do this:** add a `storage: { from: vi.fn((bucket) => ({ createSignedUrls: async (paths) => ({
+data: paths.map((p) => ({ path: p, signedUrl: `https://.../${bucket}/${p}` })), error: null }) })) }`
+shim. Make it a `vi.fn()`, not a bare object — the guardrail test "a walled member makes ZERO
+Storage calls" needs it to be spyable. Note `createSignedUrl` (singular) and `createSignedUrls`
+(plural) are different methods; a page using `signPhoto` needs the singular one.
+
+## `.select()` projections are invisible to tsc — pin them LITERALLY or they rot (ENG-1057)
+**Symptom:** deleting a column from a `.select(...)` string leaves the whole suite green and
+`tsc --noEmit` clean, and the feature silently reverts in production.
+**Cause:** `sb` is untyped, and the common `chainable()` test helper makes `select` a
+`vi.fn(() => obj)` that IGNORES its argument and returns fixtures which carry the column anyway.
+**Do this:** every changed projection needs an `expect(chain.select).toHaveBeenCalledWith("<the
+exact string>")`. Prove each pin is non-vacuous the same way: delete the column from the source,
+confirm that ONE test reds, restore. A mock shim alone is not coverage.
+
+## Screenshotting /explore on the DEV server catches a StrictMode feed flash (ENG-1057)
+**Symptom:** a Playwright screenshot of `/explore` shows "Couldn't load the feed." beside a
+perfectly correct aside, and it looks like the diff broke the feed.
+**Cause:** React StrictMode double-invokes effects in dev, so the feed's two passes race and the
+error state flips in and out for the first seconds. It reproduces identically on the base branch.
+**Do this:** don't try to wait it out — asserting the text has cleared passes and then the text
+returns on the next pass. Screenshot the surface you actually changed and say so in the PR. If
+you suspect a real regression, A/B it: revert just the one file, re-run the same seeded probe.
+
+## A worktree resolves `node_modules` from the SHARED checkout — which is on `main` (ENG-1059, 11 Sep 2026)
+
+**Symptom.** You branch a worktree off `origin/feature/web-media-v1`, which has `hls.js` in its
+`package.json` since ENG-1056, and every gate dies at
+`Failed to resolve import "hls.js" from "components/hls-video.tsx"` — vitest, `tsc` AND `next build`.
+M1's own untouched `test/media-player.test.tsx` fails identically, which makes it look like M1
+shipped broken.
+
+**Cause.** `.claude/worktrees/<ticket>/node_modules` starts EMPTY, and Node's directory-walk
+resolution then climbs to `<repo>/node_modules` — the shared checkout's, which sits on whatever
+branch the human left it on (usually `main`). So a worktree silently builds against the DEPENDENCY
+SET OF A DIFFERENT BRANCH. Any dependency a blocking ticket added is invisible, and the failure names
+the *consumer* file, never the missing install.
+
+**Do this.** Run `npm ci` in the worktree before the first gate. Use `ci`, not `install` — it
+installs from the lockfile and leaves `package.json`/`package-lock.json` untouched, which matters
+when both are on the ticket's do-NOT-touch list. It takes ~10s. Corollary: do not "baseline" such a
+failure in a throwaway worktree created OUTSIDE the repo tree — resolution cannot find `vitest` there
+either, and you will confirm the wrong thing. Baseline inside `.claude/worktrees/` (same depth), and
+symlink the populated `node_modules` in.
+
+## `e2e/video-poster.spec.ts` is PRE-EXISTING RED, and it fails BEFORE its real assertion (ENG-1059)
+
+It dies at `page.getByLabel("Password")` — ambiguous since the reveal toggle
+(`<button aria-label="Show password">`) landed, the trap this file already documents twice. It
+therefore never reaches its poster assertions, so **"a video post with a baked poster renders the
+frame" is currently an UNPROVEN claim on this branch**, not a passing guard. Observed alongside it:
+a freshly seeded video post renders the dark empty box at idle, with no poster `<img>` at all.
+- **Do this:** do not cite that spec as evidence the poster seam works, and do not import its red
+  into an unrelated ticket by asserting a visible poster `<img>`. Anchor sign-in on
+  `page.locator("input[type=password]")` in any new spec.
+
+## A source-grep guard reds on the COMMENT that explains the thing it forbids (ENG-1059, recurring)
+
+Third sighting of this class (ENG-960's `shares_for_sale`, ENG-1041, now here). ENG-1059's guard
+asserts no `autoPlay` under `app/(member)/**`; the swap that removes `autoPlay` explains itself with
+`// Deliberately NO \`autoPlay\`: HlsVideo calls play() itself` — so the change reds its own guard.
+- **Do this:** strip comments before matching, and keep a POSITIVE anchor (here: the `HlsVideo`
+  import) asserted against the SAME stripped string, or a file that failed to load satisfies every
+  `not.toContain` vacuously.
+- **The house `strip()` is not string-literal aware.** `.replace(/\/\/.*$/gm, "")` also blanks a line
+  from the `//` inside `https://…` onward, so a forbidden token later on that line escapes.
+  `/(^|[^:])\/\/.*$/gm` → `"$1"` keeps URLs whole. The copies in
+  `test/shares-segregation-guard.test.ts` and `test/media-player.test.tsx` still carry the naive form.
+
+## The pill a feed shows on a video failure is a SIBLING of `.post-web`, not inside it (ENG-1059)
+
+All five member feeds render `<div key={p.id}><PostCard/>{playError && <p role="alert">…}</div>`, so
+`page.locator(".post-web").screenshot()` — the framing every existing spec uses — CROPS THE PILL OUT.
+A screenshot meant as evidence of the error state shows an ordinary card instead.
+- **Do this:** screenshot the wrapper (`card.locator("xpath=..")`). And assert the pill with
+  `getByText("Couldn’t load the video.")`, not `getByRole("alert")` — Next's route announcer is an
+  alert too. Note the TYPOGRAPHIC apostrophe (the source is `Couldn&rsquo;t`) and that this copy
+  ("Couldn’t load the video.") differs from `MediaPlayer`'s ("Couldn’t load video").
+
+## A grep guard that collapses whitespace is STILL defeated by `<\n video`
+**(11 Sep 2026, ENG-1063.)** `test/feed-hls-video.test.tsx`'s bare-`<video>` guard
+collapsed `\s+` → `" "` and then asked `.includes("<video")`. That handles a wrap
+*inside* the tag but not one between `<` and the tag name: `<\n video src=... />`
+collapses to `"< video"` and sails through. It is shippable source — `tsc --noEmit`
+exits 0 and esbuild parses it — so this was a real hole, not a curiosity.
+→ Match `/<\s*video\b/`, never a substring. Same applies to any other
+element-grep guard in this repo.
+
+## An anchor written against the constant it guards is a tautology
+**(11 Sep 2026, ENG-1063.)** To stop a console-spy guard going vacuous I added
+`expect(spies).toHaveLength(CONSOLE_METHODS.length)`. Emptying `CONSOLE_METHODS`
+— the exact mutation it was meant to catch — left the file 26/26 GREEN, because
+the assertion degrades to `0 === 0`. The positive-control loop
+`for (const m of CONSOLE_METHODS) console[m](x)` was tautological the same way.
+→ Anchor against a LITERAL (`toBeGreaterThanOrEqual(6)`, `toContain("log")`) and
+drive the control through named sinks (`console.log(...)` directly), not through
+the array under test. And always run the mutation to confirm the anchor bites —
+this one was only caught by doing so.
+
+## Explore cannot hold guardrail 3 on its own — don't write a test that claims it does
+**(11 Sep 2026, ENG-1063.)** `app/(member)/explore/explore-feed.tsx`'s aside signs
+trainer photos from an effect with `[]` deps; `gated` is only known once the
+`/api/feed` 402 resolves, so there is no FE gate to assert. A "lapsed viewer signs
+nothing" test written with the realistic NULL-embed fixture is over-determined
+three times (empty `trainerMap` → `trainerIds.length === 0` early return →
+`signPhotoMap`'s own `paths.length === 0` return in `lib/storage/photos.ts`).
+VERIFIED: deleting the early return leaves the whole file green, and the same test
+passes for an entitled viewer. The property rests on the BE policy
+`trainer_select_sub`, which the FE does not own.
+→ Don't title such a test a lapsed-session guard. Pin the gap as an explicit
+characterization test instead, and treat the signing-order restructure as the
+only thing that can make the observable property real.
