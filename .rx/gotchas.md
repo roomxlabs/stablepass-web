@@ -2521,3 +2521,37 @@ A screenshot meant as evidence of the error state shows an ordinary card instead
   `getByText("Couldn’t load the video.")`, not `getByRole("alert")` — Next's route announcer is an
   alert too. Note the TYPOGRAPHIC apostrophe (the source is `Couldn&rsquo;t`) and that this copy
   ("Couldn’t load the video.") differs from `MediaPlayer`'s ("Couldn’t load video").
+
+## A grep guard that collapses whitespace is STILL defeated by `<\n video`
+**(11 Sep 2026, ENG-1063.)** `test/feed-hls-video.test.tsx`'s bare-`<video>` guard
+collapsed `\s+` → `" "` and then asked `.includes("<video")`. That handles a wrap
+*inside* the tag but not one between `<` and the tag name: `<\n video src=... />`
+collapses to `"< video"` and sails through. It is shippable source — `tsc --noEmit`
+exits 0 and esbuild parses it — so this was a real hole, not a curiosity.
+→ Match `/<\s*video\b/`, never a substring. Same applies to any other
+element-grep guard in this repo.
+
+## An anchor written against the constant it guards is a tautology
+**(11 Sep 2026, ENG-1063.)** To stop a console-spy guard going vacuous I added
+`expect(spies).toHaveLength(CONSOLE_METHODS.length)`. Emptying `CONSOLE_METHODS`
+— the exact mutation it was meant to catch — left the file 26/26 GREEN, because
+the assertion degrades to `0 === 0`. The positive-control loop
+`for (const m of CONSOLE_METHODS) console[m](x)` was tautological the same way.
+→ Anchor against a LITERAL (`toBeGreaterThanOrEqual(6)`, `toContain("log")`) and
+drive the control through named sinks (`console.log(...)` directly), not through
+the array under test. And always run the mutation to confirm the anchor bites —
+this one was only caught by doing so.
+
+## Explore cannot hold guardrail 3 on its own — don't write a test that claims it does
+**(11 Sep 2026, ENG-1063.)** `app/(member)/explore/explore-feed.tsx`'s aside signs
+trainer photos from an effect with `[]` deps; `gated` is only known once the
+`/api/feed` 402 resolves, so there is no FE gate to assert. A "lapsed viewer signs
+nothing" test written with the realistic NULL-embed fixture is over-determined
+three times (empty `trainerMap` → `trainerIds.length === 0` early return →
+`signPhotoMap`'s own `paths.length === 0` return in `lib/storage/photos.ts`).
+VERIFIED: deleting the early return leaves the whole file green, and the same test
+passes for an entitled viewer. The property rests on the BE policy
+`trainer_select_sub`, which the FE does not own.
+→ Don't title such a test a lapsed-session guard. Pin the gap as an explicit
+characterization test instead, and treat the signing-order restructure as the
+only thing that can make the observable property real.
