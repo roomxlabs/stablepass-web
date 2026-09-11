@@ -521,15 +521,68 @@ describe("(j) a rejected play() is only fatal when it is really a transport fail
 //
 // Until now NOTHING in test/ looked at either half — not the constructor
 // argument, not the console. A one-character edit (`false` → `true`) re-opened
-// the guardrail with a fully green suite. These two cases close that: the
-// first pins the intent, the second pins the OBSERVABLE consequence, so the
-// guard survives hls.js changing how it spells the option.
+// the guardrail with a fully green suite.
+//
+// SCOPE, precisely — the two halves guard DIFFERENT things and neither covers
+// the other:
+//   - the constructor test is the ONLY guard on hls.js's own logger, and it is
+//     a mock-level assertion. `hls.js` is `vi.mock`ed with `FakeHls`, which has
+//     no logger, so no test here can observe the real library logging. If hls.js
+//     ever renames `debug`, this assertion is what must be updated; nothing
+//     else will notice.
+//   - the console tests guard OUR OWN source against logging the URL. Verified
+//     by mutation: a `console.log(src)` in the effect, or a
+//     `console.error(data)` in the ERROR handler, reds them. Flipping
+//     `debug: false` to `true` does NOT red them, and cannot.
+// Do not read the pair as "the guard survives hls.js changing how it spells the
+// option" — an earlier draft of this comment said that, and it is false.
 describe("(k) GUARDRAIL 1 — `debug: false`, and the minted URL never reaches the console", () => {
   const CONSOLE_METHODS = ["log", "info", "warn", "error", "debug", "trace"] as const;
 
   /** Every console sink, silenced and recording. `vi.restoreAllMocks()` in `afterEach` undoes it. */
   function spyOnConsole() {
-    return CONSOLE_METHODS.map((method) => vi.spyOn(console, method).mockImplementation(() => {}));
+    const spies = CONSOLE_METHODS.map((method) => vi.spyOn(console, method).mockImplementation(() => {}));
+    // Both tests below assert over `loggedText(spies)`, which in a passing run
+    // is EMPTY — so their `for` loops run zero assertions and would stay green
+    // if the spies were never installed. (Proven: emptying CONSOLE_METHODS left
+    // the file 26/26 green.)
+    //
+    // Anchored against a LITERAL, deliberately. The obvious
+    // `expect(spies).toHaveLength(CONSOLE_METHODS.length)` is a tautology — it
+    // is `0 === 0` once the list is emptied, and it duly failed to catch that
+    // exact mutation. The count and the sink names have to be asserted against
+    // something the mutation cannot move with them.
+    expect(spies.length).toBeGreaterThanOrEqual(6);
+    expect(CONSOLE_METHODS).toContain("log");
+    expect(CONSOLE_METHODS).toContain("warn");
+    expect(CONSOLE_METHODS).toContain("error");
+    return spies;
+  }
+
+  /**
+   * The positive control for the console pair.
+   *
+   * Writes a sentinel through EVERY spied sink and asserts it was captured,
+   * then clears the record so the negative assertions that follow see only
+   * what the component itself logged. Without this, a future vitest reshape or
+   * a `restoreMocks: true` in vitest.config.ts turns both tests into permanent,
+   * invisible no-ops.
+   */
+  function assertSpiesAreLive(spies: ReturnType<typeof spyOnConsole>) {
+    const SENTINEL = "zz-console-spy-control";
+    // Called by NAME, not by iterating CONSOLE_METHODS — the point is to prove
+    // capture actually happens, and a loop over the same array that built the
+    // spies proves only that the array agrees with itself.
+    console.log(SENTINEL);
+    console.warn(SENTINEL);
+    console.error(SENTINEL);
+    const captured = loggedText(spies);
+    expect(captured).toHaveLength(3);
+    for (const line of captured) expect(line).toBe(SENTINEL);
+    // Clear, so the negative assertions that follow see only what the
+    // component itself logged.
+    for (const spy of spies) spy.mockClear();
+    expect(loggedText(spies)).toEqual([]);
   }
 
   /**
@@ -574,6 +627,7 @@ describe("(k) GUARDRAIL 1 — `debug: false`, and the minted URL never reaches t
 
   it("hls.js path: logs nothing containing the minted URL — not even when a fatal ERROR carries it", async () => {
     const spies = spyOnConsole();
+    assertSpiesAreLive(spies);
     const { container, unmount } = await mountAndPlay("");
     const instance = state.instances[0];
 
@@ -610,6 +664,7 @@ describe("(k) GUARDRAIL 1 — `debug: false`, and the minted URL never reaches t
 
   it("native path: logs nothing containing the minted URL through load, failure and unmount", async () => {
     const spies = spyOnConsole();
+    assertSpiesAreLive(spies);
     const { container, unmount } = await mountAndPlay("maybe");
     const video = container.querySelector("video")!;
     // Positive anchor — the URL really was in play on this render, so the
