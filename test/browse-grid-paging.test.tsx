@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { HorsesGrid } from "@/app/(member)/horses/horses-grid";
 import { TrainersGrid } from "@/app/(member)/trainers/trainers-grid";
 import { BROWSE_PAGE_SIZE, BROWSE_FETCH_LIMIT, browseRange, splitBrowsePage } from "@/lib/browse";
+import { HORSE_PHOTO_BUCKET, TRAINER_PHOTO_BUCKET } from "@/lib/storage/photos";
 
 // ENG-960 — the "Show more" pager. The ticket said "web perf PR #81 pages at 60
 // with Show more; KEEP THAT MECHANISM", and an earlier revision of this PR
@@ -25,6 +26,29 @@ const ENTITLED_SUB = {
   data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" },
   error: null,
 };
+
+// A real ending, not a grace window — `lib/api/access.ts` `hasAccess()` walls
+// a `canceled` row whose `current_period_end` has already passed, with no
+// 3-day grace (that grace is `active`-only).
+const LAPSED_SUB = {
+  data: { status: "canceled", trial_ends_at: null, current_period_end: "2020-01-01T00:00:00Z" },
+  error: null,
+};
+
+// The default signing echo (`.rx` shape from the ticket spec): every path
+// comes back signed, keyed by bucket, so a test can assert the exact URL a
+// card's `<img src>` should carry without hand-rolling this per test.
+function echoSignedUrls(bucket: string) {
+  return {
+    createSignedUrls: vi.fn(async (paths: string[], _ttl: number) => ({
+      data: paths.map((p) => ({ path: p, signedUrl: `https://sb.test/storage/v1/object/sign/${bucket}/${p}?token=t` })),
+      error: null,
+    })),
+  };
+}
+function signedUrlFor(bucket: string, path: string) {
+  return `https://sb.test/storage/v1/object/sign/${bucket}/${path}?token=t`;
+}
 
 function chainable(result: { data: unknown; error: unknown }) {
   const obj: Record<string, unknown> = {};
@@ -57,8 +81,16 @@ function pagedChain(allRows: unknown[]) {
   return obj;
 }
 
-const { fromMock } = vi.hoisted(() => ({ fromMock: vi.fn() }));
-vi.mock("@/lib/supabase/client", () => ({ supabaseBrowser: () => ({ from: fromMock }) }));
+// ENG-1057 — both grids batch-sign each page's `photo_url` column via
+// `signPhotoMap` (`sb.storage.from(bucket).createSignedUrls(paths, ttl)`). The
+// existing mock had no `.storage` at all, so every test below would throw the
+// moment a fixture carried a `photo_url`. `storageFromMock` is a `vi.fn()`
+// (not a bare object) so the GUARDRAIL tests can assert it was never called
+// for a lapsed member.
+const { fromMock, storageFromMock } = vi.hoisted(() => ({ fromMock: vi.fn(), storageFromMock: vi.fn() }));
+vi.mock("@/lib/supabase/client", () => ({
+  supabaseBrowser: () => ({ from: fromMock, storage: { from: storageFromMock } }),
+}));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 // Zero-padded so the fixture's own order matches the A-Z order the grid asks
@@ -82,7 +114,11 @@ const trainerRows = (n: number) =>
   }));
 
 describe("ENG-960 browse paging — the cap bounds the read, the pager keeps every row reachable", () => {
-  beforeEach(() => { fromMock.mockReset(); });
+  beforeEach(() => {
+    fromMock.mockReset();
+    storageFromMock.mockReset();
+    storageFromMock.mockImplementation(echoSignedUrls);
+  });
 
   it("splitBrowsePage renders a page and answers hasMore EXACTLY at the boundary", () => {
     // The off-by-one #81 has and this does not: at an exact multiple of the
@@ -474,4 +510,170 @@ describe("ENG-960 browse paging — the cap bounds the read, the pager keeps eve
     await waitFor(() => expect(screen.getByText("Trainer 101")).toBeInTheDocument());
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   }, 30000);
+});
+
+describe("ENG-1057 — browse cards render SIGNED photo urls, never a bare stored path", () => {
+  beforeEach(() => {
+    fromMock.mockReset();
+    storageFromMock.mockReset();
+    storageFromMock.mockImplementation(echoSignedUrls);
+  });
+
+  it("Horses: each card's <img src> is the mocked signed URL for that row's photo_url", async () => {
+    const rows = [
+      { id: "h-1", display_name: "Mahogany", racing_name: null, photo_url: "horses/mahogany.jpg", trainer: { name: "Waller" } },
+      { id: "h-2", display_name: "Kingston", racing_name: null, photo_url: null, trainer: { name: "Waller" } },
+    ];
+    fromMock.mockImplementation((table: string) => {
+      if (table === "subscription") return chainable(ENTITLED_SUB);
+      if (table === "horse") return chainable({ data: rows, error: null });
+      return chainable({ data: null, error: null });
+    });
+
+    render(<HorsesGrid viewerId={VIEWER_ID} everSubscribed={false} />);
+    await waitFor(() => expect(screen.getByText("Mahogany")).toBeInTheDocument());
+
+    const mahoganyCard = screen.getByText("Mahogany").closest("button")!;
+    const mahoganyImg = mahoganyCard.querySelector("img")!;
+    expect(mahoganyImg).toHaveAttribute("src", signedUrlFor(HORSE_PHOTO_BUCKET, "horses/mahogany.jpg"));
+    expect(mahoganyImg).toHaveClass("horse-thumb-photo");
+
+    // Kingston has no photo_url at all — the initial, no <img>.
+    const kingstonCard = screen.getByText("Kingston").closest("button")!;
+    expect(kingstonCard.querySelector("img")).toBeNull();
+    expect(kingstonCard.querySelector(".horse-thumb")!.textContent).toBe("K");
+  });
+
+  // `sb` is untyped, so `tsc` can never catch a too-narrow `.select()`: deleting
+  // `photo_url` from the horses read leaves the whole suite green (verified by
+  // hand before adding this — every other assertion in this file only inspects
+  // the SIGNED map, never the projection string sent to the database).
+  it("pins the horses-grid read's exact projection, including photo_url", async () => {
+    const rows = [{ id: "h-1", display_name: "Mahogany", racing_name: null, photo_url: null, trainer: { name: "Waller" } }];
+    const horseChain = chainable({ data: rows, error: null });
+    fromMock.mockImplementation((table: string) => {
+      if (table === "subscription") return chainable(ENTITLED_SUB);
+      if (table === "horse") return horseChain;
+      return chainable({ data: null, error: null });
+    });
+
+    render(<HorsesGrid viewerId={VIEWER_ID} everSubscribed={false} />);
+    await waitFor(() => expect(screen.getByText("Mahogany")).toBeInTheDocument());
+
+    expect(horseChain.select).toHaveBeenCalledWith(
+      "id, display_name, racing_name, photo_url, trainer:trainer_id(name)",
+    );
+  });
+
+  it("Trainers: each card's <img src> is the mocked signed URL for that row's photo_url", async () => {
+    const rows = [
+      { id: "t-1", name: "Chris Waller", display_name: null, stable_name: null, location: null, photo_url: "trainers/waller.jpg", horses: [{ id: "x" }] },
+      { id: "t-2", name: "Gai Waterhouse", display_name: null, stable_name: null, location: null, photo_url: null, horses: [{ id: "y" }] },
+    ];
+    fromMock.mockImplementation((table: string) => {
+      if (table === "subscription") return chainable(ENTITLED_SUB);
+      if (table === "trainer") return chainable({ data: rows, error: null });
+      return chainable({ data: null, error: null });
+    });
+
+    render(<TrainersGrid viewerId={VIEWER_ID} everSubscribed={false} />);
+    await waitFor(() => expect(screen.getByText("Chris Waller")).toBeInTheDocument());
+
+    const wallerCard = screen.getByText("Chris Waller").closest("button")!;
+    const wallerImg = wallerCard.querySelector("img")!;
+    expect(wallerImg).toHaveAttribute("src", signedUrlFor(TRAINER_PHOTO_BUCKET, "trainers/waller.jpg"));
+    expect(wallerImg).toHaveClass("trainer-thumb-photo");
+
+    // Gai Waterhouse has no photo_url at all — the initials, no <img>.
+    const gaiCard = screen.getByText("Gai Waterhouse").closest("button")!;
+    expect(gaiCard.querySelector("img")).toBeNull();
+    expect(gaiCard.querySelector(".trainer-thumb")!.textContent).toBe("GW");
+  });
+
+  it("a row whose photo_url is ABSENT from the signer's response renders the INITIAL and no <img>", async () => {
+    const rows = [
+      { id: "h-1", display_name: "Present", racing_name: null, photo_url: "horses/present.jpg", trainer: { name: "Waller" } },
+      { id: "h-2", display_name: "Missing", racing_name: null, photo_url: "horses/missing.jpg", trainer: { name: "Waller" } },
+    ];
+    fromMock.mockImplementation((table: string) => {
+      if (table === "subscription") return chainable(ENTITLED_SUB);
+      if (table === "horse") return chainable({ data: rows, error: null });
+      return chainable({ data: null, error: null });
+    });
+    // The signer answers for "present.jpg" only — models a denied/missing
+    // Storage object for "missing.jpg", exactly what `signPhotoMap` treats as
+    // "no photo" (it never throws on a per-path gap).
+    storageFromMock.mockImplementation((bucket: string) => ({
+      createSignedUrls: vi.fn(async (paths: string[]) => ({
+        data: paths
+          .filter((p) => p !== "horses/missing.jpg")
+          .map((p) => ({ path: p, signedUrl: signedUrlFor(bucket, p) })),
+        error: null,
+      })),
+    }));
+
+    render(<HorsesGrid viewerId={VIEWER_ID} everSubscribed={false} />);
+    await waitFor(() => expect(screen.getByText("Present")).toBeInTheDocument());
+
+    const presentCard = screen.getByText("Present").closest("button")!;
+    expect(presentCard.querySelector("img")).toHaveAttribute("src", signedUrlFor(HORSE_PHOTO_BUCKET, "horses/present.jpg"));
+
+    const missingCard = screen.getByText("Missing").closest("button")!;
+    expect(missingCard.querySelector("img")).toBeNull();
+    expect(missingCard.querySelector(".horse-thumb")!.textContent).toBe("M");
+  });
+
+  it("GUARDRAIL: a signer returning no rows never lets the bare stored path reach <img src>", async () => {
+    const rows = [
+      { id: "h-1", display_name: "Guarded", racing_name: null, photo_url: "abc.jpg", trainer: { name: "Waller" } },
+    ];
+    fromMock.mockImplementation((table: string) => {
+      if (table === "subscription") return chainable(ENTITLED_SUB);
+      if (table === "horse") return chainable({ data: rows, error: null });
+      return chainable({ data: null, error: null });
+    });
+    // The signer refuses every path — models a wholesale RLS denial rather
+    // than one bad object.
+    storageFromMock.mockImplementation(() => ({
+      createSignedUrls: vi.fn(async () => ({ data: [], error: null })),
+    }));
+
+    const { container } = render(<HorsesGrid viewerId={VIEWER_ID} everSubscribed={false} />);
+    await waitFor(() => expect(screen.getByText("Guarded")).toBeInTheDocument());
+
+    for (const img of Array.from(container.querySelectorAll("img"))) {
+      const src = img.getAttribute("src") ?? "";
+      expect(src).not.toBe("abc.jpg");
+      expect(src.endsWith("abc.jpg")).toBe(false);
+    }
+    // In fact there is no <img> at all — the row falls all the way back to
+    // its initial.
+    expect(container.querySelectorAll("img")).toHaveLength(0);
+    const guardedCard = screen.getByText("Guarded").closest("button")!;
+    expect(guardedCard.querySelector(".horse-thumb")!.textContent).toBe("G");
+  });
+
+  it("GUARDRAIL (horses): a lapsed subscription renders the AccessWall and never touches storage", async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "subscription") return chainable(LAPSED_SUB);
+      return chainable({ data: null, error: null });
+    });
+
+    render(<HorsesGrid viewerId={VIEWER_ID} everSubscribed />);
+
+    await waitFor(() => expect(screen.getByTestId("access-wall")).toBeInTheDocument());
+    expect(storageFromMock).not.toHaveBeenCalled();
+  });
+
+  it("GUARDRAIL (trainers): a lapsed subscription renders the AccessWall and never touches storage", async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "subscription") return chainable(LAPSED_SUB);
+      return chainable({ data: null, error: null });
+    });
+
+    render(<TrainersGrid viewerId={VIEWER_ID} everSubscribed />);
+
+    await waitFor(() => expect(screen.getByTestId("access-wall")).toBeInTheDocument());
+    expect(storageFromMock).not.toHaveBeenCalled();
+  });
 });

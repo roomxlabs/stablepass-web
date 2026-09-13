@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { fillPassword } from "./helpers/sign-in";
 import { createClient } from "@supabase/supabase-js";
 
 // ENG-761 (R20) — member card parity evidence.
@@ -133,7 +134,7 @@ test("ENG-761 PRIZEMONEY holds one line at 360px and (AUS) is stripped from the 
   try {
     await page.goto("/signin");
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
+    await fillPassword(page, password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL("**/explore");
 

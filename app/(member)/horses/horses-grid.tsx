@@ -11,13 +11,14 @@ import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
 import { AccessWall } from "@/components/access-wall";
 import { HorseCard } from "@/components/horse-card";
 import { supabaseBrowser } from "@/lib/supabase/client";
+import { signPhotoMap, HORSE_PHOTO_BUCKET } from "@/lib/storage/photos";
 import type { HorseSummary } from "@/components/types";
 import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 import { BrowseFilter, type BrowseFilterValue } from "@/components/browse-filter";
 import { browseRange, splitBrowsePage } from "@/lib/browse";
 
 type Trainer = { name: string };
-type HorseRow = { id: string; display_name: string; racing_name: string | null; trainer: Trainer | Trainer[] | null };
+type HorseRow = { id: string; display_name: string; racing_name: string | null; photo_url: string | null; trainer: Trainer | Trainer[] | null };
 
 function one<T>(v: T | T[] | null): T | null {
   return Array.isArray(v) ? (v[0] ?? null) : v;
@@ -161,7 +162,7 @@ export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; eve
 
       let query = sb
         .from("horse")
-        .select("id, display_name, racing_name, trainer:trainer_id(name)")
+        .select("id, display_name, racing_name, photo_url, trainer:trainer_id(name)")
         .eq("status", "active");
 
       // ENG-960 / R8: the ENG-831 `.eq("shares_for_sale", false)` exclusion is
@@ -191,11 +192,38 @@ export function HorsesGrid({ viewerId, everSubscribed }: { viewerId: string; eve
       if (fetchError) { failPage(offset); return; }
 
       const { page, hasMore: more } = splitBrowsePage((data ?? []) as HorseRow[]);
+
+      // ENG-1057 — one signing batch per PAGE, minted as the VIEWER. Three
+      // things about where this sits are deliberate:
+      //
+      // 1. AFTER the `hasAccess` gate above. A lapsed member returns at the
+      //    wall and reaches no Storage call at all. (RLS `media gated read`
+      //    would deny them anyway — this is the belt to that braces.)
+      // 2. Inside the same `live()`-guarded block as the read, with its own
+      //    check after the await. Without it a page that lands late — the
+      //    member flipped All -> Following mid-flight — would append its rows
+      //    under the other pill.
+      // 3. Only the page's own paths. Earlier pages keep the URLs they were
+      //    minted with; nothing is re-signed on "Show more".
+      //
+      // `signPhotoMap` never throws on a per-path failure: a denied or missing
+      // object is simply absent from the map, so that one card falls back to
+      // its initial and the other 99 still get photos.
+      const signed = await signPhotoMap(sb, HORSE_PHOTO_BUCKET, page.map((h) => h.photo_url));
+      if (!live()) return;
+
       const mapped: HorseSummary[] = page.map((h) => {
         const trainer = one(h.trainer);
         // Formatted per side of the `||` so a `racing_name` of just "(AUS)"
         // falls through to the display name (ENG-761 item 6).
-        return { id: h.id, name: displayHorseNameOrEmpty(h.racing_name) || displayHorseNameOrEmpty(h.display_name), trainerName: trainer?.name ?? "Stablepass" };
+        return {
+          id: h.id,
+          name: displayHorseNameOrEmpty(h.racing_name) || displayHorseNameOrEmpty(h.display_name),
+          trainerName: trainer?.name ?? "Stablepass",
+          // `?? null`, never `?? h.photo_url`: an unsigned path must never reach
+          // the view model, let alone `<img src>`. Unsigned means no photo.
+          photoUrl: h.photo_url ? (signed.get(h.photo_url) ?? null) : null,
+        };
       });
       setHorses((prev) => (offset === 0 ? mapped : [...prev, ...mapped]));
       setHasMore(more);

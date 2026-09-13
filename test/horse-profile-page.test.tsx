@@ -264,6 +264,25 @@ describe("horse profile page — age + description come from the database (ENG-6
     expect(props.trainerPhotoUrl).not.toBe("trainers/waller.jpg");
   });
 
+  // ENG-1057 follow-up — the above only checked the prop handed to HorsePosts.
+  // Nothing asserted the aside "Trainer" card (a real, unmocked <TrainerCard>)
+  // actually paints that same signed url as an <img>.
+  it("ENG-1057: the aside Trainer card renders a signed <img class=trainer-avatar-mini-photo>", async () => {
+    tableData.horse = horseRow({
+      photo_url: "horses/mahogany.jpg",
+      trainer: { id: "t1", name: "Chris Waller", stable_name: "Waller Racing", location: "Rosehill", photo_url: "trainers/waller.jpg" },
+    });
+
+    const { container } = await renderProfile();
+
+    const trainerCard = container.querySelector(".aside-trainer-row")!;
+    expect(trainerCard).toBeTruthy();
+    const img = trainerCard.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img).toHaveClass("trainer-avatar-mini-photo");
+    expect(img).toHaveAttribute("src", "https://sb.local/signed/trainers/waller.jpg");
+  });
+
   it("GUARDRAIL: a hidden horse notFound()s — never a partial render", async () => {
     // The route asserts 404 for hidden content; this is the direct-read half,
     // which has its own copy of that branch. It matters during the ENG-619

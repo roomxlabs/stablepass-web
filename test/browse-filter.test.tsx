@@ -31,8 +31,24 @@ const ENTITLED_SUB = {
 
 const { fromMock } = vi.hoisted(() => ({ fromMock: vi.fn() }));
 
+// ENG-1057 — `HorsesGrid` batch-signs each page's `photo_url` column via
+// `signPhotoMap`. None of this file's fixtures set `photo_url`, so
+// `signPhotoMap` never actually reaches `.storage` (it returns early on an
+// empty path list) — but the property must exist so a future fixture that DOES
+// set one does not throw `sb.storage is undefined` instead of failing on the
+// real assertion.
 vi.mock("@/lib/supabase/client", () => ({
-  supabaseBrowser: () => ({ from: fromMock }),
+  supabaseBrowser: () => ({
+    from: fromMock,
+    storage: {
+      from: (bucket: string) => ({
+        createSignedUrls: async (paths: string[]) => ({
+          data: paths.map((p) => ({ path: p, signedUrl: `https://sb.test/storage/v1/object/sign/${bucket}/${p}?token=t` })),
+          error: null,
+        }),
+      }),
+    },
+  }),
 }));
 
 vi.mock("next/navigation", () => ({

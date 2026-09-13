@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { fillPassword } from "./helpers/sign-in";
 import { createClient } from "@supabase/supabase-js";
 
 // ENG-772 — the green `post.label` pill on the HORSE and TRAINER profile feeds.
@@ -98,7 +99,7 @@ test("ENG-772 the label pill renders on the horse AND trainer profile feeds", as
   try {
     await page.goto("/signin");
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
+    await fillPassword(page, password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL("**/explore");
 

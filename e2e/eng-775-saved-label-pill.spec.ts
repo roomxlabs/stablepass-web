@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { fillPassword } from "./helpers/sign-in";
 import { createClient } from "@supabase/supabase-js";
 
 // ENG-775 — the green `post.label` pill on the SAVED (bookmarks) screen.
@@ -91,7 +92,7 @@ test("ENG-775 the label pill renders on a saved card", async ({ page }) => {
   try {
     await page.goto("/signin");
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
+    await fillPassword(page, password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL("**/explore");
 

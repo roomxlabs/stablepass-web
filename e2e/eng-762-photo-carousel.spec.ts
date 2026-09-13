@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { fillPassword } from "./helpers/sign-in";
 import { createClient } from "@supabase/supabase-js";
 
 // ENG-762 — the multi-photo carousel, driven END TO END against local Postgres
@@ -181,7 +182,7 @@ test("ENG-762 a 3-photo post renders dots + an n/m count on the horse profile fe
   try {
     await page.goto("/signin");
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
+    await fillPassword(page, password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL("**/explore");
 
@@ -356,7 +357,7 @@ test("ENG-762 a single-photo post keeps the plain chip and draws no dots", async
   try {
     await page.goto("/signin");
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
+    await fillPassword(page, password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL("**/explore");
 

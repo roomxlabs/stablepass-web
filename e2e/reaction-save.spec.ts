@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { fillPassword } from "./helpers/sign-in";
 import { createClient } from "@supabase/supabase-js";
 
 // Evidence for the reaction / save states and the captionless-post spacing.
@@ -101,7 +102,7 @@ test("saving confirms itself, and a captionless post still separates its actions
   try {
     await page.goto("/signin");
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
+    await fillPassword(page, password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL("**/explore");
 

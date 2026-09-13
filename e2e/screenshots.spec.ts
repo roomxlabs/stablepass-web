@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { fillPassword } from "./helpers/sign-in";
 import { createClient } from "@supabase/supabase-js";
 
 // See .rx/fe-harness.md for the full harness convention.
@@ -36,7 +37,7 @@ test("signed-in member shell renders", async ({ page }) => {
 
   await page.goto("/signin");
   await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(password);
+  await fillPassword(page, password);
   await page.getByRole("button", { name: "Sign in" }).click();
 
   await page.waitForURL("**/explore");
@@ -76,7 +77,7 @@ test("onboarding screen renders", async ({ page }) => {
   try {
     await page.goto("/signin");
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
+    await fillPassword(page, password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL("**/explore");
 
@@ -180,7 +181,7 @@ test("W6 explore feed renders real posts", async ({ page }) => {
   try {
     await page.goto("/signin");
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
+    await fillPassword(page, password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL("**/explore");
 
@@ -307,7 +308,7 @@ test("W7 horse profile renders the real horse (Mahogany, stats, posts)", async (
   try {
     await page.goto("/signin");
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
+    await fillPassword(page, password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL("**/explore");
 
@@ -340,7 +341,7 @@ test("W9 account screen renders (Subscription + Profile + Notifications, no Devi
   try {
     await page.goto("/signin");
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
+    await fillPassword(page, password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL("**/explore");
 
@@ -376,7 +377,7 @@ test("W10 checkout screen renders (order summary + graceful no-Stripe-keys place
   try {
     await page.goto("/signin");
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
+    await fillPassword(page, password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL("**/explore");
 
@@ -423,7 +424,7 @@ test("W7 horses browse list renders", async ({ page }) => {
   try {
     await page.goto("/signin");
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
+    await fillPassword(page, password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL("**/explore");
 
@@ -478,7 +479,7 @@ test("A2 trainer profile Website link renders, opens in a new tab, and logs a cl
   try {
     await page.goto("/signin");
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
+    await fillPassword(page, password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL("**/explore");
 
@@ -634,7 +635,7 @@ test("ENG-612 post media takes the asset's real aspect ratio on a neutral ground
   try {
     await page.goto("/signin");
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
+    await fillPassword(page, password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL("**/explore");
 
@@ -905,7 +906,7 @@ test("ENG-613 both profile feeds show the same card anatomy", async ({ page }) =
   try {
     await page.goto("/signin");
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
+    await fillPassword(page, password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL("**/explore");
 
