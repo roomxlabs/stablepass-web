@@ -3,9 +3,13 @@ import {
   ACCOUNT_SUB_COLUMNS,
   addCalendarMonthsSydney,
   formatMoney,
+  isComplimentary,
   isFailedRenewal,
+  isStoreManaged,
   nextChargeAmount,
+  providerLabel,
   remainingIntroMonths,
+  storeManageCopy,
 } from "@/app/(member)/account/billing";
 
 describe("remainingIntroMonths", () => {
@@ -73,10 +77,20 @@ describe("isFailedRenewal", () => {
     intro_months_used: 2,
     stripe_customer_id: "cus_1",
     canceled_at: null,
+    provider: "stripe" as string | null,
   };
   it("lapsed + customer + no canceled_at → failed renewal", () => {
     expect(isFailedRenewal(base)).toBe(true);
   });
+  it("a pre-migration null provider is treated as Stripe → still a failed renewal", () => {
+    expect(isFailedRenewal({ ...base, provider: null })).toBe(true);
+  });
+  it.each(["app_store", "play_store", "promotional"])(
+    "ENG-1192 — a %s row is never a failed card, even with a leftover Stripe customer",
+    (provider) => {
+      expect(isFailedRenewal({ ...base, provider })).toBe(false);
+    },
+  );
   it("lapsed without a customer is the never-subscribed funnel, not a failed card", () => {
     expect(isFailedRenewal({ ...base, stripe_customer_id: null })).toBe(false);
   });
@@ -94,7 +108,43 @@ describe("isFailedRenewal", () => {
 describe("ACCOUNT_SUB_COLUMNS", () => {
   it("pins the exact projection the page selects (42703 / silent-drop)", () => {
     expect(ACCOUNT_SUB_COLUMNS).toBe(
-      "status,trial_ends_at,current_period_end,intro_months_used,stripe_customer_id,canceled_at",
+      "status,trial_ends_at,current_period_end,intro_months_used,stripe_customer_id,canceled_at,provider",
+    );
+  });
+});
+
+describe("provider helpers (ENG-1192)", () => {
+  it("isStoreManaged is true for app_store and play_store only", () => {
+    expect(isStoreManaged({ provider: "app_store" })).toBe(true);
+    expect(isStoreManaged({ provider: "play_store" })).toBe(true);
+    expect(isStoreManaged({ provider: "stripe" })).toBe(false);
+    expect(isStoreManaged({ provider: "promotional" })).toBe(false);
+    expect(isStoreManaged({ provider: null })).toBe(false);
+    expect(isStoreManaged(null)).toBe(false);
+  });
+
+  it("isComplimentary is true for promotional only", () => {
+    expect(isComplimentary({ provider: "promotional" })).toBe(true);
+    expect(isComplimentary({ provider: "app_store" })).toBe(false);
+    expect(isComplimentary({ provider: "stripe" })).toBe(false);
+    expect(isComplimentary({ provider: null })).toBe(false);
+    expect(isComplimentary(null)).toBe(false);
+  });
+
+  it("providerLabel names the biller; stripe and null read as Web", () => {
+    expect(providerLabel("app_store")).toBe("App Store");
+    expect(providerLabel("play_store")).toBe("Google Play");
+    expect(providerLabel("promotional")).toBe("Complimentary");
+    expect(providerLabel("stripe")).toBe("Web");
+    expect(providerLabel(null)).toBe("Web");
+  });
+
+  it("storeManageCopy points at the right store", () => {
+    expect(storeManageCopy("app_store")).toBe(
+      "To change your payment method or cancel, open Subscriptions in your iPhone Settings.",
+    );
+    expect(storeManageCopy("play_store")).toBe(
+      "To change your payment method or cancel, open Subscriptions in the Google Play app.",
     );
   });
 });

@@ -1,6 +1,6 @@
 ---
 title: Subscription, Refund & Cancellation Policy
-lastUpdated: 2026-08-30
+lastUpdated: 2026-09-17
 ---
 
 These Terms & Conditions (“Terms”) govern your use of the Stablepass website (Stablepass.co), the Stablepass mobile application (“App”), and all related subscription services (“Services”). By creating an account, accessing the Services, or purchasing a subscription, you agree to be bound by these Terms.
@@ -35,6 +35,14 @@ When you cancel:
 - You will not be charged again unless you reactivate your subscription.
 - No pro-rata or partial-month refund is provided for a change of mind.
 - Access to the Services continues until the end of the paid billing period.
+
+### 2.2 Subscribed through the App Store or Google Play
+
+If you subscribed to Stablepass inside the App on an iPhone or iPad, or on an Android device, your subscription is billed and managed by Apple or Google, not by Stablepass.
+
+- To cancel, open Subscriptions in your iPhone Settings, or Subscriptions in the Google Play app. You cannot cancel a store subscription from your Stablepass account settings.
+- Refund requests for a store subscription are handled by Apple or Google under their own policies. Stablepass cannot issue a refund for a payment it did not take.
+- When you cancel, your access continues until the end of the period you have already paid for.
 
 ## 3. Refunds
 

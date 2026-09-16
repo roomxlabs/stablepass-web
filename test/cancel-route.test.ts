@@ -312,6 +312,51 @@ describe("POST /api/subscription/cancel", () => {
     expect(rpcMock).toHaveBeenCalled();
   });
 
+  it("pins the subscription projection it reads (stripe id + provider)", async () => {
+    rpcMock.mockResolvedValue({ data: HAPPY_RPC_ROW, error: null });
+
+    const res = await POST(req({}));
+
+    expect(res.status).toBe(200);
+    const chain = fromMock.mock.results[0]?.value as { select: ReturnType<typeof vi.fn> };
+    expect(fromMock).toHaveBeenCalledWith("subscription");
+    expect(chain.select).toHaveBeenCalledWith("stripe_subscription_id,provider");
+  });
+
+  // GUARDRAIL 4 (ENG-1192): a store-billed row never reaches Stripe or the RPC.
+  it.each(["app_store", "play_store"])(
+    "GUARDRAIL — a %s row is 409 managed_by_store; neither Stripe nor the RPC is called, nothing written",
+    async (provider) => {
+      tableData.subscription = { data: { stripe_subscription_id: "sub_leftover", provider } };
+      rpcMock.mockResolvedValue({ data: HAPPY_RPC_ROW, error: null });
+
+      const res = await POST(req({ reason: "switching" }));
+      const body = await res.json();
+
+      expect(res.status).toBe(409);
+      expect(body).toEqual({
+        error: {
+          code: "managed_by_store",
+          message: "This subscription is managed through the App Store or Google Play.",
+        },
+      });
+      expect(subscriptionsUpdate).not.toHaveBeenCalled();
+      expect(rpcMock).not.toHaveBeenCalled();
+      expect(updateMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("a stripe row is unchanged by ENG-1192 — Stripe then the RPC, 200", async () => {
+    tableData.subscription = { data: { stripe_subscription_id: "sub_1", provider: "stripe" } };
+    rpcMock.mockResolvedValue({ data: HAPPY_RPC_ROW, error: null });
+
+    const res = await POST(req({}));
+
+    expect(res.status).toBe(200);
+    expect(subscriptionsUpdate).toHaveBeenCalledWith("sub_1", { cancel_at_period_end: true });
+    expect(rpcMock).toHaveBeenCalledWith("cancel_own_subscription", { p_reason: null });
+  });
+
   it("an over-long reason is 400 before Stripe OR the RPC is touched", async () => {
     const res = await POST(req({ reason: "a".repeat(501) }));
 

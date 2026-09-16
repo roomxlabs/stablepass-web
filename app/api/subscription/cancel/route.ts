@@ -34,12 +34,18 @@
 // the same state (R2). That duplication is intended; do not remove either
 // writer.
 //
+// STORE ROWS NEVER GET HERE (ENG-1192). A subscription billed by the App Store
+// or Google Play is cancelled in the store; `cancel_own_subscription()` would
+// mark our row cancelled while Apple / Google bill on. So a store row answers
+// `409 managed_by_store` BEFORE Stripe and BEFORE the RPC — nothing is written.
+//
 // `cancel_reason` is UNTRUSTED MEMBER TEXT. It is validated for length here,
 // stored as text by the RPC, and never rendered — not by this response (which
 // deliberately does not echo it back) and not anywhere in this app.
 import { getStripe } from "@/lib/stripe";
 import { supabaseServer } from "@/lib/supabase/server";
 import { ok, UNAUTH, fail } from "@/lib/api/envelope";
+import { isStoreManaged, MANAGED_BY_STORE_MESSAGE } from "@/app/(member)/account/billing";
 
 /**
  * Mirrors `subscription_cancel_reason_len` on the column. The DB CHECK is the
@@ -71,6 +77,11 @@ function stripeCancelFailed() {
     "Couldn't cancel your subscription. Please try again.",
     502,
   );
+}
+
+/** A fresh Response per call; the message is shared with the portal route. */
+function managedByStore() {
+  return fail("managed_by_store", MANAGED_BY_STORE_MESSAGE, 409);
 }
 
 export async function POST(req: Request) {
@@ -112,7 +123,7 @@ export async function POST(req: Request) {
   // close. Fail closed; nothing has been written yet.
   const { data: subData, error: subReadError } = await sb
     .from("subscription")
-    .select("stripe_subscription_id")
+    .select("stripe_subscription_id,provider")
     .eq("user_id", user.id)
     .maybeSingle();
   if (subReadError && subReadError.code !== "PGRST116") {
@@ -123,8 +134,13 @@ export async function POST(req: Request) {
     );
     return fail("cancel_failed", "Couldn't cancel your subscription. Please try again.", 500);
   }
-  const stripeSubscriptionId =
-    (subData as { stripe_subscription_id: string | null } | null)?.stripe_subscription_id ?? null;
+  const subRow = subData as
+    | { stripe_subscription_id: string | null; provider: string | null }
+    | null;
+  if (isStoreManaged(subRow)) {
+    return managedByStore();
+  }
+  const stripeSubscriptionId = subRow?.stripe_subscription_id ?? null;
 
   if (stripeSubscriptionId) {
     const stripe = getStripe();

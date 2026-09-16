@@ -60,6 +60,7 @@ describe("GET /api/subscription/portal", () => {
     fromMock.mockClear();
     selectMock.mockClear();
     sessionsCreate.mockReset();
+    getStripeMock.mockClear();
     for (const key of Object.keys(tableData)) delete tableData[key];
     process.env = {
       ...ORIGINAL_ENV,
@@ -92,7 +93,52 @@ describe("GET /api/subscription/portal", () => {
     // SELECT only — a table write from this client is the ENG-582 silent no-op.
     const chain = fromMock.mock.results[0]?.value as { update: ReturnType<typeof vi.fn> };
     expect(chain.update).not.toHaveBeenCalled();
-    expect(selectMock).toHaveBeenCalledWith("subscription", "stripe_customer_id");
+    expect(selectMock).toHaveBeenCalledWith("subscription", "stripe_customer_id,provider");
+  });
+
+  // GUARDRAIL 4 (ENG-1192): a store-billed row has no portal of ours.
+  it.each(["app_store", "play_store"])(
+    "GUARDRAIL — a %s row is a JSON 409 managed_by_store (not a redirect); no portal session",
+    async (provider) => {
+      tableData.subscription = { data: { stripe_customer_id: "cus_leftover", provider } };
+
+      const res = await GET(req());
+      const body = await res.json();
+
+      expect(res.status).toBe(409);
+      expect(res.headers.get("location")).toBeNull();
+      expect(body).toEqual({
+        error: {
+          code: "managed_by_store",
+          message: "This subscription is managed through the App Store or Google Play.",
+        },
+      });
+      expect(sessionsCreate).not.toHaveBeenCalled();
+      expect(selectMock).toHaveBeenCalledWith("subscription", "stripe_customer_id,provider");
+    },
+  );
+
+  it("a store row answers 409 managed_by_store even when Stripe is unconfigured (never consults Stripe)", async () => {
+    tableData.subscription = { data: { stripe_customer_id: null, provider: "app_store" } };
+    getStripeMock.mockReturnValue(null);
+
+    const res = await GET(req());
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.error.code).toBe("managed_by_store");
+    expect(getStripeMock).not.toHaveBeenCalled();
+  });
+
+  it("a promotional row with no customer keeps the existing no_stripe_customer 409", async () => {
+    tableData.subscription = { data: { stripe_customer_id: null, provider: "promotional" } };
+
+    const res = await GET(req());
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.error.code).toBe("no_stripe_customer");
+    expect(sessionsCreate).not.toHaveBeenCalled();
   });
 
   it("401 when there is no session — Stripe is never called", async () => {

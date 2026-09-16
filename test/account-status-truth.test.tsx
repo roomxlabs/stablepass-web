@@ -22,6 +22,7 @@ type Sub = {
   intro_months_used?: number | null;
   stripe_customer_id?: string | null;
   canceled_at?: string | null;
+  provider?: string | null;
 } | null;
 
 const { fromMock, setSub, pricesRetrieve, couponsRetrieve } = vi.hoisted(() => {
@@ -115,6 +116,7 @@ function activeSub(overrides: Partial<Exclude<Sub, null>> = {}): Exclude<Sub, nu
     intro_months_used: 1,
     stripe_customer_id: "cus_1",
     canceled_at: null,
+    provider: "stripe",
     ...overrides,
   };
 }
@@ -302,6 +304,117 @@ describe("Cancel control visibility", () => {
   it("absent for a null subscription row", async () => {
     await renderAccount(null);
     expect(screen.queryByTestId("cancel-open")).not.toBeInTheDocument();
+  });
+});
+
+// ENG-1192 — the card branches on `provider`, AFTER entitlement is decided.
+// Each case asserts what IS on screen before what is not (ENG-1016 vacuity).
+describe("Provider branching (ENG-1192)", () => {
+  it("app_store + active + future → managed by the App Store, date-only renewal, no card/cancel/Stripe", async () => {
+    await renderAccount(activeSub({ provider: "app_store", stripe_customer_id: null }));
+
+    expect(statusValue()).toBe("Active");
+    expect(screen.getByText("Monthly membership")).toBeInTheDocument();
+    expect(screen.getByTestId("managed-by-store")).toHaveTextContent("Managed through the App Store");
+    expect(document.body.textContent).toMatch(/Your membership is billed by Apple\./);
+    expect(document.body.textContent).toMatch(/open Subscriptions in your iPhone Settings\./);
+    expect(screen.getByTestId("next-charge").querySelector(".value")?.textContent).toMatch(
+      /^Renews on \d{1,2} \w+ \d{4}$/,
+    );
+
+    expect(screen.getByTestId("next-charge").textContent).not.toMatch(/A\$/);
+    expect(screen.queryByTestId("change-over")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Manage card" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Subscribe" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("cancel-open")).not.toBeInTheDocument();
+    expect(pricesRetrieve).not.toHaveBeenCalled();
+    expect(couponsRetrieve).not.toHaveBeenCalled();
+  });
+
+  it("a store row with a leftover Stripe customer still gets no Manage card", async () => {
+    await renderAccount(activeSub({ provider: "play_store", stripe_customer_id: "cus_old_web" }));
+
+    expect(screen.getByTestId("managed-by-store")).toHaveTextContent("Managed through Google Play");
+    expect(document.body.textContent).toMatch(/billed by Google\./);
+    expect(document.body.textContent).toMatch(/in the Google Play app\./);
+    expect(screen.queryByRole("link", { name: "Manage card" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("cancel-open")).not.toBeInTheDocument();
+  });
+
+  it("app_store + canceled + future → Access ending, cancelled copy + store copy, no cancel control", async () => {
+    await renderAccount(
+      activeSub({ provider: "app_store", status: "canceled", canceled_at: "2026-09-01T00:00:00Z" }),
+    );
+
+    expect(statusValue()).toBe("Access ending");
+    expect(screen.getByTestId("managed-by-store")).toHaveTextContent("Managed through the App Store");
+    expect(document.body.textContent).toMatch(/You've cancelled\. Your access continues until /);
+    expect(document.body.textContent).toMatch(/open Subscriptions in your iPhone Settings/);
+    expect(screen.queryByTestId("cancel-open")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("next-charge")).not.toBeInTheDocument();
+    expect(pricesRetrieve).not.toHaveBeenCalled();
+  });
+
+  it("play_store + lapsed + canceled_at null → ended store copy + Subscribe, never payment-failed", async () => {
+    await renderAccount(
+      activeSub({
+        provider: "play_store",
+        status: "lapsed",
+        current_period_end: past,
+        stripe_customer_id: "cus_old_web",
+        canceled_at: null,
+      }),
+    );
+
+    expect(statusValue()).toBe("Ended");
+    expect(screen.getByText("No active subscription")).toBeInTheDocument();
+    expect(document.body.textContent).toMatch(/Your store subscription has ended\./);
+    expect(screen.getByRole("link", { name: "Subscribe" })).toHaveAttribute("href", "/checkout");
+
+    expect(screen.queryByTestId("payment-failed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Payment failed")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Update your card" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("managed-by-store")).not.toBeInTheDocument();
+  });
+
+  it("promotional + active + future → Complimentary access, no CTA/cancel/next charge", async () => {
+    await renderAccount(activeSub({ provider: "promotional", stripe_customer_id: null }));
+
+    expect(statusValue()).toBe("Active");
+    expect(screen.getByText("Complimentary access")).toBeInTheDocument();
+    expect(screen.getByTestId("complimentary")).toHaveTextContent(/^Access until \d{1,2} \w+ \d{4}$/);
+    expect(document.body.textContent).toMatch(/complimentary access until .*nothing to pay/);
+
+    expect(screen.queryByText("Monthly membership")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("next-charge")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("change-over")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Manage card" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Subscribe" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("cancel-open")).not.toBeInTheDocument();
+    expect(pricesRetrieve).not.toHaveBeenCalled();
+    expect(couponsRetrieve).not.toHaveBeenCalled();
+  });
+
+  it("provider null (pre-migration row) → treated as Stripe: Manage card, Cancel, Stripe amounts", async () => {
+    await renderAccount(activeSub({ provider: null }));
+
+    expect(statusValue()).toBe("Active");
+    expect(screen.getByRole("link", { name: "Manage card" })).toHaveAttribute(
+      "href",
+      "/api/subscription/portal",
+    );
+    expect(screen.getByTestId("cancel-open")).toBeInTheDocument();
+    expect(screen.getByTestId("next-charge").textContent).toMatch(/A\$9\.00 on /);
+    expect(pricesRetrieve).toHaveBeenCalledWith("price_standard");
+    expect(screen.queryByTestId("managed-by-store")).not.toBeInTheDocument();
+  });
+
+  it("entitlement still decides first: app_store + active + PAST period → Ended, not managed", async () => {
+    await renderAccount(activeSub({ provider: "app_store", current_period_end: past }));
+
+    expect(statusValue()).toBe("Ended");
+    expect(screen.getByRole("link", { name: "Subscribe" })).toBeInTheDocument();
+    expect(screen.queryByTestId("managed-by-store")).not.toBeInTheDocument();
   });
 });
 
