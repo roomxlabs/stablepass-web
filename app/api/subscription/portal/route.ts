@@ -20,7 +20,7 @@ import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { supabaseServer } from "@/lib/supabase/server";
 import { UNAUTH, fail } from "@/lib/api/envelope";
-import { isStoreManaged } from "@/app/(member)/account/billing";
+import { isStoreManaged, MANAGED_BY_STORE_MESSAGE } from "@/app/(member)/account/billing";
 
 function returnUrl(req: Request): string {
   const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
@@ -53,11 +53,7 @@ export async function GET(req: Request) {
 
   const row = data as { stripe_customer_id: string | null; provider: string | null } | null;
   if (isStoreManaged(row)) {
-    return fail(
-      "managed_by_store",
-      "This subscription is managed through the App Store or Google Play.",
-      409,
-    );
+    return fail("managed_by_store", MANAGED_BY_STORE_MESSAGE, 409);
   }
 
   const stripe = getStripe();

@@ -109,6 +109,10 @@ export function isFailedRenewal(sub: AccountSubRow | null): boolean {
   );
 }
 
+/** The `409 managed_by_store` message — one copy, used by the cancel AND portal routes. */
+export const MANAGED_BY_STORE_MESSAGE =
+  "This subscription is managed through the App Store or Google Play.";
+
 type ProviderRow = { provider?: string | null } | null | undefined;
 
 /**

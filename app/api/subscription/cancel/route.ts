@@ -45,7 +45,7 @@
 import { getStripe } from "@/lib/stripe";
 import { supabaseServer } from "@/lib/supabase/server";
 import { ok, UNAUTH, fail } from "@/lib/api/envelope";
-import { isStoreManaged } from "@/app/(member)/account/billing";
+import { isStoreManaged, MANAGED_BY_STORE_MESSAGE } from "@/app/(member)/account/billing";
 
 /**
  * Mirrors `subscription_cancel_reason_len` on the column. The DB CHECK is the
@@ -79,13 +79,9 @@ function stripeCancelFailed() {
   );
 }
 
-/** Shared with the portal route's wording; a fresh Response per call. */
+/** A fresh Response per call; the message is shared with the portal route. */
 function managedByStore() {
-  return fail(
-    "managed_by_store",
-    "This subscription is managed through the App Store or Google Play.",
-    409,
-  );
+  return fail("managed_by_store", MANAGED_BY_STORE_MESSAGE, 409);
 }
 
 export async function POST(req: Request) {
