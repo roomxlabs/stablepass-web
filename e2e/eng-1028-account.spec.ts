@@ -19,6 +19,8 @@ type SubPatch = {
   stripe_customer_id?: string | null;
   canceled_at?: string | null;
   intro_months_used?: number;
+  // ENG-1192 — `app_store` | `play_store` | `promotional` | `stripe` (ENG-1185 column).
+  provider?: string;
 };
 
 async function seedMember(slug: string, patch: SubPatch) {
@@ -33,16 +35,20 @@ async function seedMember(slug: string, patch: SubPatch) {
   const userId = created.user.id;
 
   const { error: subError } = await sb.from("subscription").update(patch).eq("user_id", userId);
+  let providerApplied = patch.provider !== undefined;
   if (subError) {
     // Local DB may still have `promo_passes_used` if the R1 migration is not
-    // applied. Retry without the renamed column so the three visual states
-    // remain screenshotable.
-    const { intro_months_used: _dropped, ...rest } = patch;
+    // applied, or lack `provider` if ENG-1185's migration is not. Retry without
+    // either undeployed column so the Stripe visual states remain
+    // screenshotable; a test that NEEDS `provider` checks `providerApplied`.
+    const { intro_months_used: _dropped, provider: _provider, ...rest } = patch;
     void _dropped;
+    void _provider;
     const retry = await sb.from("subscription").update(rest).eq("user_id", userId);
     if (retry.error) throw retry.error;
+    providerApplied = false;
   }
-  return { email, userId };
+  return { email, userId, providerApplied };
 }
 
 async function signIn(page: import("@playwright/test").Page, email: string) {
@@ -115,5 +121,31 @@ test.describe("ENG-1028 account subscription card", () => {
 
     const card = page.getByTestId("subscription-card");
     await card.screenshot({ path: ".rx/review/eng-1028-account-payment-failed.png" });
+  });
+
+  // ENG-1192 — a member who subscribed in the iOS app, signed in on the web.
+  test("store-managed (app_store) — managed-by-store meta, no Manage card, no Cancel", async ({ page }) => {
+    const { email, providerApplied } = await seedMember("app-store", {
+      status: "active",
+      current_period_end: new Date(Date.now() + 20 * DAY).toISOString(),
+      stripe_customer_id: null,
+      canceled_at: null,
+      provider: "app_store",
+    });
+    // Without ENG-1185's column the row is a plain Stripe row AND the page's
+    // projection 42703s — neither is this state. Skip loudly, never pass.
+    test.skip(!providerApplied, "local Supabase lacks subscription.provider (ENG-1185 not applied)");
+    await signIn(page, email);
+    await page.goto("/account");
+
+    await expect(page.getByText("Active", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("managed-by-store")).toHaveText("Managed through the App Store");
+    await expect(page.getByText(/open Subscriptions in your iPhone Settings/)).toBeVisible();
+    await expect(page.getByTestId("next-charge")).toContainText("Renews on");
+    await expect(page.getByRole("link", { name: "Manage card" })).toHaveCount(0);
+    await expect(page.getByTestId("cancel-open")).toHaveCount(0);
+
+    const card = page.getByTestId("subscription-card");
+    await card.screenshot({ path: ".rx/review/eng-1192-managed-by-store.png" });
   });
 });

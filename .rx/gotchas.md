@@ -2555,3 +2555,15 @@ passes for an entitled viewer. The property rests on the BE policy
 → Don't title such a test a lapsed-session guard. Pin the gap as an explicit
 characterization test instead, and treat the signing-order restructure as the
 only thing that can make the observable property real.
+
+## `subscription.provider` is a presentation switch — never a gate input (ENG-1192)
+**Symptom risk:** a store-billed row (`app_store` / `play_store`) reaching Stripe code: the
+portal 302s to a customer that no longer bills, cancel marks our row `canceled` while Apple
+bills on, `/account` says "update your card". **Rule:** `hasAccess()` still decides
+entitlement first; `isStoreManaged()` / `isComplimentary()` in `app/(member)/account/billing.ts`
+only pick wording and affordances, and both `/api/subscription/cancel` and `/portal` answer
+`409 managed_by_store` **before** any Stripe call (the portal now reads the row BEFORE it checks
+Stripe config, so an unconfigured Stripe cannot mask the honest 409). A store row can carry a
+leftover `stripe_customer_id` from a former web purchase — never key a Stripe affordance on
+`hasCustomer` alone. `provider IS NULL` = `stripe`. The e2e seed drops `provider` on retry and
+the store test `test.skip`s on `!providerApplied` — never let it pass as a plain Stripe row.

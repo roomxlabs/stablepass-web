@@ -7,7 +7,7 @@
 export const INTRO_MONTHS = 6;
 
 export const ACCOUNT_SUB_COLUMNS =
-  "status,trial_ends_at,current_period_end,intro_months_used,stripe_customer_id,canceled_at";
+  "status,trial_ends_at,current_period_end,intro_months_used,stripe_customer_id,canceled_at,provider";
 
 export type AccountSubRow = {
   status: string | null;
@@ -16,6 +16,11 @@ export type AccountSubRow = {
   intro_months_used: number | null;
   stripe_customer_id: string | null;
   canceled_at: string | null;
+  // ENG-1192 / ENG-1185: who bills this row — `stripe` | `app_store` |
+  // `play_store` | `promotional`. A PRESENTATION switch only: entitlement is
+  // still `hasAccess()` on status + period, never this column. `null` (a row
+  // read before the migration) is treated as `stripe`.
+  provider: string | null;
 };
 
 export type StripePricing = {
@@ -90,5 +95,52 @@ export function addCalendarMonthsSydney(iso: string, months: number): string | n
  */
 export function isFailedRenewal(sub: AccountSubRow | null): boolean {
   if (!sub) return false;
-  return sub.status === "lapsed" && sub.stripe_customer_id !== null && sub.canceled_at === null;
+  // A store row carrying a leftover Stripe customer (a former web member who
+  // later bought in the app) is NOT a failed card — the store bills it, and
+  // "update your card" would send them to a portal for a subscription that no
+  // longer exists. Only a Stripe (or pre-migration null) row can fail a renewal
+  // we can help with.
+  const stripeBilled = (sub.provider ?? null) === null || sub.provider === "stripe";
+  return (
+    stripeBilled &&
+    sub.status === "lapsed" &&
+    sub.stripe_customer_id !== null &&
+    sub.canceled_at === null
+  );
+}
+
+type ProviderRow = { provider?: string | null } | null | undefined;
+
+/**
+ * Billed by Apple or Google (ENG-1192). Such a row has no Stripe subscription
+ * to cancel and no Billing Portal to open: the member manages it in the store.
+ * The cancel + portal routes answer `409 managed_by_store` on this predicate.
+ */
+export function isStoreManaged(sub: ProviderRow): boolean {
+  return sub?.provider === "app_store" || sub?.provider === "play_store";
+}
+
+/** Comp access granted from admin via a RevenueCat promotional entitlement. */
+export function isComplimentary(sub: ProviderRow): boolean {
+  return sub?.provider === "promotional";
+}
+
+export function providerLabel(provider: string | null | undefined): string {
+  switch (provider) {
+    case "app_store":
+      return "App Store";
+    case "play_store":
+      return "Google Play";
+    case "promotional":
+      return "Complimentary";
+    default:
+      return "Web";
+  }
+}
+
+/** Where a store-billed member changes their card or cancels. */
+export function storeManageCopy(provider: string | null | undefined): string {
+  return provider === "play_store"
+    ? "To change your payment method or cancel, open Subscriptions in the Google Play app."
+    : "To change your payment method or cancel, open Subscriptions in your iPhone Settings.";
 }
