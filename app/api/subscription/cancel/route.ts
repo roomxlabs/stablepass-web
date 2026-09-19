@@ -39,13 +39,28 @@
 // mark our row cancelled while Apple / Google bill on. So a store row answers
 // `409 managed_by_store` BEFORE Stripe and BEFORE the RPC — nothing is written.
 //
+// NOR DO PROMOTIONAL ROWS (ENG-1276). Complimentary access (a RevenueCat
+// promotional entitlement granted from admin, ENG-1194) ends on its own, and
+// `cancel_own_subscription()` refuses every row that is not `provider =
+// 'stripe'` (ENG-1221). A promotional member who was once a Stripe member can
+// still carry a leftover `stripe_subscription_id`, so without this exit the
+// route would tell Stripe first and only then be refused by the RPC. So a
+// promotional row answers `409 complimentary` right after the store check —
+// BEFORE Stripe, BEFORE the RPC, nothing written. Stripe is therefore only ever
+// called for a row the RPC would accept.
+//
 // `cancel_reason` is UNTRUSTED MEMBER TEXT. It is validated for length here,
 // stored as text by the RPC, and never rendered — not by this response (which
 // deliberately does not echo it back) and not anywhere in this app.
 import { getStripe } from "@/lib/stripe";
 import { supabaseServer } from "@/lib/supabase/server";
 import { ok, UNAUTH, fail } from "@/lib/api/envelope";
-import { isStoreManaged, MANAGED_BY_STORE_MESSAGE } from "@/app/(member)/account/billing";
+import {
+  isStoreManaged,
+  isComplimentary,
+  MANAGED_BY_STORE_MESSAGE,
+  COMPLIMENTARY_MESSAGE,
+} from "@/app/(member)/account/billing";
 
 /**
  * Mirrors `subscription_cancel_reason_len` on the column. The DB CHECK is the
@@ -69,6 +84,15 @@ export const MAX_REASON_LENGTH = 500;
 const NO_ACTIVE_SUBSCRIPTION_CODE = "42501";
 const NO_ACTIVE_SUBSCRIPTION_MESSAGE = "no_active_subscription";
 
+// ENG-1221's refusal for a row that is not `provider = 'stripe'` — raised with
+// the SAME `42501`, so it gets the same code-AND-message match as above, for the
+// same reason: a broken grant must still fall through to the loud 500. The
+// store and promotional exits above the Stripe call normally catch these rows
+// first; this mapping is for the provider flipping between our SELECT and the
+// RPC, which must read as a 409, never a 500.
+const NOT_SELF_CANCELLABLE_CODE = "42501";
+const NOT_SELF_CANCELLABLE_MESSAGE = "not_self_cancellable";
+
 function stripeCancelFailed() {
   // A fresh Response each time — a module-scope NextResponse can only be
   // read once, so reusing one 502 would 500 the second caller.
@@ -82,6 +106,11 @@ function stripeCancelFailed() {
 /** A fresh Response per call; the message is shared with the portal route. */
 function managedByStore() {
   return fail("managed_by_store", MANAGED_BY_STORE_MESSAGE, 409);
+}
+
+/** A fresh Response per call (ENG-1276). */
+function complimentary() {
+  return fail("complimentary", COMPLIMENTARY_MESSAGE, 409);
 }
 
 export async function POST(req: Request) {
@@ -140,6 +169,11 @@ export async function POST(req: Request) {
   if (isStoreManaged(subRow)) {
     return managedByStore();
   }
+  // Before Stripe: a leftover `stripe_subscription_id` on a promotional row
+  // must never reach `subscriptions.update` (see the header).
+  if (isComplimentary(subRow)) {
+    return complimentary();
+  }
   const stripeSubscriptionId = subRow?.stripe_subscription_id ?? null;
 
   if (stripeSubscriptionId) {
@@ -171,6 +205,19 @@ export async function POST(req: Request) {
       (error.message ?? "").includes(NO_ACTIVE_SUBSCRIPTION_MESSAGE)
     ) {
       return fail("no_active_subscription", "You don't have an active subscription to cancel.", 409);
+    }
+    if (
+      error.code === NOT_SELF_CANCELLABLE_CODE &&
+      (error.message ?? "").includes(NOT_SELF_CANCELLABLE_MESSAGE)
+    ) {
+      // Normally only the SELECT/RPC race lands here — and if the row was a
+      // Stripe row at SELECT time, Stripe is already set to cancel at period end
+      // while our row stays uncancelled. Leave a trace for reconciliation.
+      console.error(
+        "[cancel] RPC refused not_self_cancellable after the provider checks passed (Stripe touched: %s)",
+        stripeSubscriptionId ? "yes" : "no",
+      );
+      return fail("not_self_cancellable", "This subscription can't be cancelled here.", 409);
     }
     // Fixed copy, never `error.message`: a constraint violation echoes the
     // offending row back, and on this table that row is the member's own

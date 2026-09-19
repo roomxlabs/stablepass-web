@@ -113,6 +113,10 @@ export function isFailedRenewal(sub: AccountSubRow | null): boolean {
 export const MANAGED_BY_STORE_MESSAGE =
   "This subscription is managed through the App Store or Google Play.";
 
+/** The cancel route's `409 complimentary` message (ENG-1276) — a promotional row has nothing to cancel. */
+export const COMPLIMENTARY_MESSAGE =
+  "Your complimentary access ends on its own, so there's nothing to cancel.";
+
 type ProviderRow = { provider?: string | null } | null | undefined;
 
 /**

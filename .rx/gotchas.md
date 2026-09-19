@@ -2567,3 +2567,20 @@ Stripe config, so an unconfigured Stripe cannot mask the honest 409). A store ro
 leftover `stripe_customer_id` from a former web purchase — never key a Stripe affordance on
 `hasCustomer` alone. `provider IS NULL` = `stripe`. The e2e seed drops `provider` on retry and
 the store test `test.skip`s on `!providerApplied` — never let it pass as a plain Stripe row.
+
+## The cancel route's pre-Stripe gate is a DENYLIST; the RPC's is an allowlist (ENG-1276, 19 Sep 2026)
+`POST /api/subscription/cancel` exits `409 managed_by_store` (app_store/play_store) and
+`409 complimentary` (promotional) before Stripe; everything else reaches Stripe. ENG-1221's
+`cancel_own_subscription()` accepts ONLY `provider = 'stripe'` and raises `42501` +
+`not_self_cancellable` otherwise (mapped to `409 not_self_cancellable`). Safe today only because
+the BE CHECK limits `provider` to those four values. → **Adding a fifth provider means adding its
+exit in the route BEFORE the Stripe call**, or that row gets `cancel_at_period_end` in Stripe and
+is then refused by the RPC (the route logs `[cancel] RPC refused not_self_cancellable …` when that
+happens).
+
+## `npm test` on this box: 10 marketing reds are the fixture, not you (19 Sep 2026)
+`10-marketing-site/deploy/src/mockup.html` is absent from this machine, so
+`test/marketing-shell.test.tsx` (9) + `test/marketing-home.test.tsx` (1) fail via `mockupOrThrow`
+on an untouched `origin/feature/iap-v1` too. `test/marketing-marquee.test.ts` can add an 11th
+(5s timeout right after `npm run build`); re-run it alone before believing it. → Baseline with
+`git stash` in the SAME worktree and compare the failing set; disclose it in the PR.
