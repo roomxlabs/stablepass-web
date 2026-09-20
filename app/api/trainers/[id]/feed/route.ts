@@ -20,8 +20,16 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const { data: posts } = await sb
     .from("post")
     // Post columns from the ONE shared constant (ENG-794) — see the note in
-    // app/api/horses/[id]/feed/route.ts and on the constant itself. `horse_id`
-    // and the embedded horse join are this route's own context and stay here.
+    // app/api/horses/[id]/feed/route.ts and on the constant itself. The
+    // embedded horse join is this route's own context and stays here;
+    // `horse_id` moved INTO the constant at ENG-1270 (with `subject`, `byline`
+    // and `source_trainer_id`) and is no longer named twice.
+    //
+    // ENG-1270: `subject` arriving here is what lets a TRAINER-subject post —
+    // which has no horse at all, so the embed is null — head its card with the
+    // trainer instead of the old `"Horse"` placeholder. The filter below is
+    // unchanged: it always was `source_trainer_id`, which is exactly why trainer
+    // posts show up on this profile without a query change.
     // Pinned exactly by test/trainers-route.test.ts.
     // `horse.photo_url` (ENG-958) is a bare object path in the PRIVATE
     // `horse-photos` bucket, added to this SAME embed. Shipping it is allowed
@@ -35,7 +43,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     // `photo_url`: that envelope has no signer. Same rule, opposite answer.
     // If you add another path to this embed, name its signer here or strip it.
     // Pinned by test/trainers-route.test.ts.
-    .select(`${POST_INTRINSIC_COLUMNS}, horse_id, horse:horse_id(display_name, racing_name, photo_url)`)
+    .select(`${POST_INTRINSIC_COLUMNS}, horse:horse_id(display_name, racing_name, photo_url)`)
     .eq("source_trainer_id", id)
     .eq("status", "published")
     .order("published_at", { ascending: false })

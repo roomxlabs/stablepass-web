@@ -10,26 +10,27 @@ import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
 import { AccessWall } from "@/components/access-wall";
 import { HlsVideo } from "@/components/hls-video";
 import { useFeedVideoFailure } from "@/lib/feed/use-feed-video-failure";
-import { PostCard, PostAvatar, mediaBoxProps } from "@/components/post-card";
+import { PostCard, mediaBoxProps } from "@/components/post-card";
+import { PostHead } from "@/components/post-head";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { signPhotoMap, HORSE_PHOTO_BUCKET, TRAINER_PHOTO_BUCKET } from "@/lib/storage/photos";
 import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@/lib/api/post-media";
 import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
+import { enrichFeedSubjects } from "@/lib/feed/subject";
 import type { FeedPost, ReactionEmoji } from "@/components/types";
 import { apiFetch } from "@/lib/api/client";
 
 const LIMIT = 10;
 
 // Bare be `post` row shape — the bookmark→post embed returns full post columns.
-type PostRow = PostIntrinsicRow & { horse_id: string };
+// `horse_id` / `source_trainer_id` / `subject` / `byline` ride on the shared row
+// type since ENG-1270.
+type PostRow = PostIntrinsicRow;
 type BookmarkRow = { created_at: string; post: PostRow | PostRow[] | null };
 
-// `stable_name`/`location` for the STABLE UPDATE panel footer. Stable identity
-// only — there is no owner field here and none may be added. `photo_url` (both
-// sides) is a bare object path in a PRIVATE bucket — signed below (ENG-958).
-type HorseTrainer = { name: string; stable_name: string | null; location: string | null; photo_url: string | null };
-type HorseRow = { id: string; display_name: string; photo_url: string | null; trainer: HorseTrainer | HorseTrainer[] | null };
+// The horse read, its trainer embed and both photo-signing batches MOVED to
+// `lib/feed/subject.ts` at ENG-1270 — this screen has no rails of its own, so
+// nothing else here needs horse/trainer identity.
 type ReactionRow = { post_id: string; emoji: ReactionEmoji };
 
 function one<T>(v: T | T[] | null): T | null {
@@ -108,22 +109,16 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
       }
 
       const ids = postRows.map((p) => p.id);
-      const horseIds = [...new Set(postRows.map((p) => p.horse_id))];
-      const [{ data: horseRows }, { data: reactionRows }] = await Promise.all([
-        // `sb` is untyped, so `tsc` can never catch a too-narrow `.select()`. Pinned by a test.
-        sb.from("horse").select("id, display_name, photo_url, trainer:trainer_id(name, stable_name, location, photo_url)").in("id", horseIds),
+
+      // ONE subject-aware identity read for the page (ENG-1270): the horse read
+      // for the non-null `horse_id`s, the trainer read for the trainer-subject
+      // rows, and both signing batches.
+      const [identityById, { data: reactionRows }] = await Promise.all([
+        enrichFeedSubjects(sb, postRows),
         sb.from("reaction").select("post_id,emoji").in("post_id", ids),
       ]);
 
-      const horseById = new Map(((horseRows ?? []) as HorseRow[]).map((h) => [h.id, h]));
       const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
-      // `photo_url` is a bare path in a PRIVATE bucket — sign it or the avatar
-      // renders as a broken relative URL. ONE batch call per bucket (ENG-958).
-      const savedHorseRows = (horseRows ?? []) as HorseRow[];
-      const [savedHorsePhotos, savedTrainerPhotos] = await Promise.all([
-        signPhotoMap(sb, HORSE_PHOTO_BUCKET, savedHorseRows.map((h) => h.photo_url)),
-        signPhotoMap(sb, TRAINER_PHOTO_BUCKET, savedHorseRows.map((h) => one(h.trainer)?.photo_url)),
-      ]);
       // Photos + their slide counts via ONE POST /api/posts/media; video posters
       // via playback?posterOnly=1. Absolute URLs pass through. A 402 surfaces the
       // AccessWall (guardrail 3). `slideCounts` rides in on the same batch, which
@@ -140,21 +135,11 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
       }
 
       const intrinsics = { signedMedia: media.urls, slideCountByPost: media.slideCounts, reactionByPost: myReaction };
-      const mapped: FeedPost[] = postRows.map((r) => {
-        const horse = horseById.get(r.horse_id);
-        const trainer = one(horse?.trainer ?? null);
-        return {
-          ...postIntrinsics(r, intrinsics),
-          horseId: r.horse_id,
-          horseName: horse?.display_name ?? "Unknown horse",
-          trainerName: trainer?.name ?? "Stablepass",
-          stableName: trainer?.stable_name ?? null,
-          stableLocation: trainer?.location ?? null,
-          horsePhotoUrl: horse?.photo_url ? savedHorsePhotos.get(horse.photo_url) ?? null : null,
-          trainerPhotoUrl: trainer?.photo_url ? savedTrainerPhotos.get(trainer.photo_url) ?? null : null,
-          bookmarked: true, // everything on this screen is, by definition, saved
-        };
-      });
+      const mapped: FeedPost[] = postRows.map((r) => ({
+        ...postIntrinsics(r, intrinsics),
+        ...identityById.get(r.id)!,
+        bookmarked: true, // everything on this screen is, by definition, saved
+      }));
 
       setPosts((prev) => (forCursor ? [...prev, ...mapped] : mapped));
       // No impression writes: Saved is a curated list, not the ranked feed.
@@ -272,16 +257,12 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
               if (playbackUrl) {
                 return (
                   <article className="post-web" key={p.id}>
-                    <div className="post-head-web">
-                      <PostAvatar url={p.horsePhotoUrl} initial={p.horseName[0]?.toUpperCase() ?? "?"} />
-                      <div className="post-meta-web">
-                        <h3 className="post-horse">{p.horseName}</h3>
-                        {/* title on a media card is withheld (client, 18 Aug 2026) — see post-card.tsx */}
-                        <div className="post-byline">
-                          <span className="by-trainer">{p.trainerName}</span> · {p.postedAgo}
-                        </div>
-                      </div>
-                    </div>
+                    {/* THE SAME HEAD THE CARD DRAWS (ENG-1270). This article exists because a
+                        playing video replaces the card's media box, not its identity — and the
+                        five hand-copied heads this used to be one of are exactly how a trainer
+                        video would have kept saying "Unknown horse" here while the card beside
+                        it got it right (ENG-558: the second copy is the bug). */}
+                    <PostHead post={p} />
                     <div {...mediaBoxProps(p.media.aspectRatio, { video: true })}>
                       <HlsVideo
                         src={playbackUrl}

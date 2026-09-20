@@ -359,17 +359,21 @@ describe("SavedFeed — ENG-613 view model", () => {
     const chain = fromMock.mock.results[horseCallIndex].value as { select: ReturnType<typeof vi.fn> };
     const projection = chain.select.mock.calls[0][0] as string;
 
+    // ENG-1270: this read moved into the SHARED `enrichFeedSubjects` helper
+    // (lib/feed/subject.ts), whose `SUBJECT_HORSE_COLUMNS` constant is now
+    // shared by Explore, Following AND Saved — so it carries the trainer `id`
+    // even here, where Saved itself never offers the Follow pill. The
+    // consolidation is the ticket's own change to this projection, not drift.
+    //
     // Assert the WHOLE embed, not a per-column `toContain`. "id" is a substring
     // of `trainer_id(` and of the horse's own `id`, and "name" is a substring of
     // `display_name`, so a per-column loop still passes after the trainer's `id`
-    // is dropped — while `trainerId` goes null on every post and the Follow pill
-    // silently vanishes feed-wide with a green suite. `sb` is untyped, so this
-    // string IS the only guard.
-    expect(projection).toContain("trainer:trainer_id(name, stable_name, location, photo_url)");
+    // is dropped. `sb` is untyped, so this string IS the only guard.
+    expect(projection).toContain("trainer:trainer_id(id, name, stable_name, location, photo_url)");
     // And nothing extra: a widened projection is how owner-adjacent columns
     // would arrive on the card (guardrail 2).
     expect(projection).toBe(
-      "id, display_name, photo_url, trainer:trainer_id(name, stable_name, location, photo_url)",
+      "id, display_name, photo_url, trainer:trainer_id(id, name, stable_name, location, photo_url)",
     );
   });
 

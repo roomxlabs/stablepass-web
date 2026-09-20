@@ -2555,3 +2555,63 @@ passes for an entitled viewer. The property rests on the BE policy
 → Don't title such a test a lapsed-session guard. Pin the gap as an explicit
 characterization test instead, and treat the signing-order restructure as the
 only thing that can make the observable property real.
+
+## A worktree's `node_modules` symlink is stale in a way that only a NEW dep exposes (ENG-1270, 20 Sep 2026)
+**Sharpens the ENG-1059 entry above.** Symlinking the shared checkout's
+`node_modules` into a worktree works for months and then fails in one run,
+because the shared checkout sits on a LOCAL `main` that can be many commits
+behind `origin/main`. It is invisible until some merged PR adds a dependency:
+ENG-1270 branched off `feature/post-subject-v1` (cut from a current
+`origin/main`, which has `hls.js` from ENG-1056) while the shared checkout's
+`main` predated it, so `components/hls-video.tsx` could not resolve and tsc,
+vitest and `next build` all reded for a reason that had nothing to do with the
+change under test.
+→ Don't symlink. In the worktree, `rm node_modules && npm ci` against the
+worktree's OWN lockfile (11s here). And never `npm install` through the symlink:
+that writes into the user's shared working tree.
+
+## The local checkout you READ is not necessarily the base you BUILD on (ENG-1270)
+Reading source from `/…/stablepass-web/<path>` reads whatever the shared checkout
+has CHECKED OUT, which under the implement loop is a stale `main` — not
+`origin/<base>`. Half the files read that way for ENG-1270 were a merge behind
+(the four feed screens had moved to `HlsVideo`, Explore had grown the ENG-1057
+aside thumbs), so a patch written against them silently no-ops or lands on the
+wrong hunk.
+→ After `git worktree add`, read EVERY file from the worktree. `git diff --stat
+main origin/main` in the shared checkout up front tells you how much you would
+have got wrong.
+
+## `POST_INTRINSIC_COLUMNS` and a route's "own context" column can collide (ENG-1270)
+When ENG-1270 moved `horse_id` and `source_trainer_id` INTO the shared
+projection (the subject decides which is populated, so they are identity now, not
+per-screen context), both routes that intersect the constant were already naming
+one of them: `app/api/trainers/[id]/feed` added `, horse_id` and
+`app/api/horses/[id]/feed` added `, source_trainer_id`. Left alone that produces
+`select=…,horse_id,…,horse_id`.
+→ Widening the constant means grepping every `${POST_INTRINSIC_COLUMNS}`
+interpolation and deleting what it now duplicates — and both route tests pin the
+select string LITERALLY (ENG-1057), so they must be updated in the same commit.
+
+## A head that varies by SUBJECT had five copies, not one (ENG-1270)
+`post.subject` changes only the card HEAD, but the head markup lived in five
+places: `PostCard`'s classic head, `PostCard`'s reel head, and an inline copy in
+each of explore-feed, following-screen, saved-feed and trainer-posts — the
+article those screens render themselves once a video is playing, because the
+card's media box is replaced by the player. Shipping the variants without the
+extraction would have left a trainer's playing video headed "Unknown horse" on
+four screens while the card beside it was right (the ENG-558 rule: the second
+copy is the bug).
+→ `components/post-head.tsx` is now the only copy. Anything that draws
+`.post-head-web` or `.reel-head` goes through it. `horse-posts.tsx` is the one
+screen that never needed it — it shows horse posts only.
+
+## A null inside `.in()` does not fail loudly — it blanks the whole page (ENG-1270)
+B1 made `post.horse_id` nullable. `sb.from("horse").select(…).in("id", horseIds)`
+with one null in the list is rejected by PostgREST for the WHOLE query, and the
+three feed screens destructure only `data` — so the page renders with EVERY
+byline blank rather than erroring. One horse-less post would take out the
+identity of every other card beside it.
+→ `lib/feed/subject.ts` filters nulls before `.in()` and
+`test/feed-subject.test.ts` asserts the recorded `.in()` arguments with
+`toEqual`, not merely that the call happened. An empty list skips the read
+entirely — `.in("id", [])` is a real round trip for an answer you already have.

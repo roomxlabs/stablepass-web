@@ -370,8 +370,13 @@ describe("GET /api/horses/:id/feed", () => {
 
     const postCallIndex = fromMock.mock.calls.findIndex((c) => c[0] === "post");
     const postChain = fromMock.mock.results[postCallIndex].value as { select: ReturnType<typeof vi.fn> };
+    // ENG-1270: `POST_INTRINSIC_COLUMNS` widened by four (`subject`, `byline`,
+    // `horse_id`, `source_trainer_id`); the old per-route `, source_trainer_id`
+    // was removed from this route's own `.select()` at the same time, since the
+    // constant now carries it — see lib/feed/post-row.ts and this route's own
+    // comment. Updated here deliberately: this is the ticket's own change.
     expect(postChain.select.mock.calls[0][0]).toBe(
-      "id, type, title, body, label, media_url, poster_url, mux_playback_id, aspect_ratio, watermarked, like_count, published_at, source_trainer_id",
+      "id, type, title, body, label, media_url, poster_url, mux_playback_id, aspect_ratio, watermarked, like_count, published_at, subject, byline, horse_id, source_trainer_id",
     );
   });
 });

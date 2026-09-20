@@ -9,12 +9,14 @@
 import { useEffect, useState } from "react";
 import { HlsVideo } from "@/components/hls-video";
 import { useFeedVideoFailure } from "@/lib/feed/use-feed-video-failure";
-import { PostCard, PostAvatar, mediaBoxProps } from "@/components/post-card";
+import { PostCard, mediaBoxProps } from "@/components/post-card";
+import { PostHead } from "@/components/post-head";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { signPhotoMap, HORSE_PHOTO_BUCKET } from "@/lib/storage/photos";
 import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@/lib/api/post-media";
 import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
+import { postSubjectOf, buildPostHead } from "@/lib/feed/subject";
 import type { FeedPost, ReactionEmoji } from "@/components/types";
 import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 import { apiFetch } from "@/lib/api/client";
@@ -23,7 +25,11 @@ import { apiFetch } from "@/lib/api/client";
 // route is a plain BFF read (not a signing surface), so the SCREEN batch-signs
 // it client-side with `signPhotoMap`, same rule as every other feed mapper (ENG-958).
 type HorseRef = { display_name: string; racing_name: string | null; photo_url: string | null };
-type PostRow = PostIntrinsicRow & { horse_id: string; horse: HorseRef | HorseRef[] | null };
+// `horse_id` comes from the SHARED row type, where it is correctly nullable
+// since B1 — a trainer-subject post on this very route has none. Re-declaring
+// it as `string` here (as this line did before ENG-1270) made `tsc` believe
+// something the BE contradicts, and made the `?? null` below read as dead code.
+type PostRow = PostIntrinsicRow & { horse: HorseRef | HorseRef[] | null };
 type ReactionRow = { post_id: string; emoji: ReactionEmoji };
 type BookmarkRow = { post_id: string };
 
@@ -106,21 +112,44 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
         const intrinsics = { signedMedia: media.urls, slideCountByPost: media.slideCounts, reactionByPost: myReaction };
         const mapped: FeedPost[] = rows.map((r) => {
           const horse = one(r.horse);
+          // The two-sided fallback below is HORSE-subject only (ticket decision
+          // 6): a trainer- or StablePass-subject row gets "" rather than the old
+          // "Horse" placeholder heading, since neither card draws a horse name.
+          const subject = postSubjectOf(r);
+          const horsePhotoUrl = horse?.photo_url ? horsePhotos.get(horse.photo_url) ?? null : null;
+          const horseName =
+            subject === "horse"
+              ? // Formatted per side of the `||` so a racing_name of just "(AUS)"
+                // falls through (ENG-761 item 6). Without this the trainer profile
+                // shows two spellings of one horse: the formatted name in the
+                // stable-horses list above, the raw registrar caps on these cards.
+                horse
+                ? displayHorseNameOrEmpty(horse.racing_name) || displayHorseNameOrEmpty(horse.display_name) || "Horse"
+                : "Horse"
+              : "";
           return {
             ...postIntrinsics(r, intrinsics),
-            horseId: r.horse_id,
-            // Formatted per side of the `||` so a racing_name of just "(AUS)"
-            // falls through (ENG-761 item 6). Without this the trainer profile
-            // shows two spellings of one horse: the formatted name in the
-            // stable-horses list above, the raw registrar caps on these cards.
-            horseName: horse
-              ? displayHorseNameOrEmpty(horse.racing_name) || displayHorseNameOrEmpty(horse.display_name) || "Horse"
-              : "Horse",
+            subject,
+            byline: r.byline ?? null,
+            horseId: r.horse_id ?? null,
+            horseName,
             trainerName,
+            trainerId,
             stableName,
             stableLocation,
-            horsePhotoUrl: horse?.photo_url ? horsePhotos.get(horse.photo_url) ?? null : null,
+            horsePhotoUrl,
             trainerPhotoUrl,
+            head: buildPostHead({
+              subject,
+              horseName,
+              horsePhotoUrl,
+              trainerId,
+              trainerName,
+              stableName,
+              stableLocation,
+              trainerPhotoUrl,
+              byline: r.byline ?? null,
+            }),
             bookmarked: mySet.has(r.id),
           };
         });
@@ -207,16 +236,12 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
         if (playbackUrl) {
           return (
             <article className="post-web" key={p.id}>
-              <div className="post-head-web">
-                <PostAvatar url={p.horsePhotoUrl} initial={p.horseName[0]?.toUpperCase() ?? "?"} />
-                <div className="post-meta-web">
-                  <h3 className="post-horse">{p.horseName}</h3>
-                  {/* title on a media card is withheld (client, 18 Aug 2026) — see post-card.tsx */}
-                  <div className="post-byline">
-                    <span className="by-trainer">{p.trainerName}</span> · {p.postedAgo}
-                  </div>
-                </div>
-              </div>
+              {/* THE SAME HEAD THE CARD DRAWS (ENG-1270). This article exists because a
+                  playing video replaces the card's media box, not its identity — and the
+                  five hand-copied heads this used to be one of are exactly how a trainer
+                  video would have kept saying "Unknown horse" here while the card beside
+                  it got it right (ENG-558: the second copy is the bug). */}
+              <PostHead post={p} />
               <div {...mediaBoxProps(p.media.aspectRatio, { video: true })}>
                 <HlsVideo
                   src={playbackUrl}

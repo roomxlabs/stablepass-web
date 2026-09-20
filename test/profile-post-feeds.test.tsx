@@ -460,6 +460,75 @@ describe("profile post feeds — ENG-799 post-media mint", () => {
     expect(createSignedUrlsMock.mock.calls[0][0]).toEqual([RAW_PATH]);
   });
 
+  // ENG-1270 decision 6 — THE TRAINER PROFILE'S SUBJECT SPLIT. The three cases
+  // below run `TrainerPosts`' REAL mapper (not a hand-built `FeedPost`), which
+  // is the only place the split is implemented: the preview gallery's fixtures
+  // hand `PostCard` a PRE-BUILT `head`, so they never execute `buildPostHead`
+  // or this mapper and cannot catch a regression here.
+  it("TrainerPosts heads a TRAINER-subject post with the trainer, not the `Horse` placeholder", async () => {
+    // The shape B1 makes possible: no horse at all. Before ENG-1270 the mapper
+    // had no branch for this and the card headed `"Horse"` — a placeholder for a
+    // horse that does not exist, over a post that is about the trainer.
+    feedRows = [
+      {
+        ...TEXT_ROW,
+        type: "photo",
+        title: null,
+        body: "A word from the stable.",
+        subject: "trainer",
+        horse_id: null,
+        source_trainer_id: "t1",
+        byline: null,
+        horse: null,
+      },
+    ];
+
+    const { container } = render(
+      <TrainerPosts trainerId="t1" trainerName="Tom Alcott" stableName="Alcott Racing" stableLocation="Sydney" viewerId={VIEWER_ID} />,
+    );
+    await screen.findByText("A word from the stable.");
+
+    expect(container.querySelector(".post-horse")).toHaveTextContent("Tom Alcott");
+    // The stable line is the byline's green lead on a trainer head.
+    expect(container.querySelector(".post-byline")).toHaveTextContent("Alcott Racing · Sydney");
+    // THE REGRESSION THIS EXISTS FOR: the placeholder must be gone from the
+    // whole card, not merely absent from the `h3`.
+    expect(container.textContent).not.toContain("Horse");
+    // And the head navigates to the trainer profile.
+    expect(container.querySelector("[data-testid='post-head-link']")).toHaveAttribute("href", "/trainers/t1");
+  });
+
+  it("TrainerPosts KEEPS the `Horse` fallback for a horse-subject post whose embed is null", async () => {
+    // The other direction, which is what makes the test above meaningful:
+    // decision 6 narrows the fallback to horse-subject rows, it does not delete
+    // it. A horse post whose embed RLS-filtered to null still needs a heading.
+    feedRows = [
+      { ...TEXT_ROW, type: "photo", title: null, body: "Trackwork this morning.", subject: "horse", horse: null },
+    ];
+
+    const { container } = render(
+      <TrainerPosts trainerId="t1" trainerName="Tom Alcott" viewerId={VIEWER_ID} />,
+    );
+    await screen.findByText("Trackwork this morning.");
+
+    expect(container.querySelector(".post-horse")).toHaveTextContent("Horse");
+    expect(container.querySelector("[data-testid='post-head-link']")).toBeNull();
+  });
+
+  it("TrainerPosts treats a row with NO `subject` as a horse post (legacy rows)", async () => {
+    // Defensive: a pre-B1 row, or one read through a projection that predates
+    // the column, must render exactly the card it always rendered.
+    feedRows = [{ ...TEXT_ROW, type: "photo", title: null, body: "Trackwork this morning." }];
+
+    const { container } = render(
+      <TrainerPosts trainerId="t1" trainerName="Tom Alcott" viewerId={VIEWER_ID} />,
+    );
+    await screen.findByText("Trackwork this morning.");
+
+    expect(container.querySelector(".post-horse")).toHaveTextContent("Mahogany");
+    expect(container.querySelector("[data-testid='post-head-link']")).toBeNull();
+  });
+
   it("TrainerPosts falls back to the monogram when the horse has no photo", async () => {
     // No `photo_url` on the row — the pre-ENG-958 shape, and still the majority
     // of real rows. A photo row again, so the head resolves the HORSE.
