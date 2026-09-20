@@ -55,7 +55,26 @@ import type { FeedPost, PostMedia, ReactionEmoji } from "@/components/types";
  * and locally `post.label` is undeployed and the `feed` edge function is a stub.
  */
 export const POST_INTRINSIC_COLUMNS =
-  "id, type, title, body, label, media_url, poster_url, mux_playback_id, aspect_ratio, watermarked, like_count, published_at";
+  "id, type, title, body, label, media_url, poster_url, mux_playback_id, aspect_ratio, watermarked, like_count, published_at, subject, byline, horse_id, source_trainer_id";
+
+/**
+ * ENG-1270 widened this by four: `subject`, `byline`, `horse_id` and
+ * `source_trainer_id`. The last two used to be each ROUTE's own context column
+ * (`${POST_INTRINSIC_COLUMNS}, horse_id` / `, source_trainer_id`) and were
+ * removed from those two selects in the same change — a column named twice in
+ * one PostgREST `select` is at best redundant and at worst a 400, and the whole
+ * point of this constant is that there is one answer to "what does a feed row
+ * carry".
+ *
+ * They belong here now because the SUBJECT decides which of them is populated:
+ * after B1 (ENG-1264) `horse_id` and `source_trainer_id` are both nullable, and
+ * `lib/feed/subject.ts` needs all four on every row to resolve a head. They are
+ * no longer per-screen context; they ARE the row's identity.
+ *
+ * The 42703 warning above applies with full force: B1 must be merged AND
+ * DEPLOYED before this ships, or PostgREST rejects the whole query and every
+ * feed renders as a cheerful empty list.
+ */
 
 /**
  * The `post` columns every member feed row carries. Screens intersect this with
@@ -74,6 +93,21 @@ export type PostIntrinsicRow = {
   watermarked: boolean;
   like_count: number;
   published_at: string;
+  /**
+   * The four SUBJECT columns (ENG-1270). They are not mapped by
+   * `postIntrinsics()` — `lib/feed/subject.ts` owns the identity half — but they
+   * ride on the same row, so the row type carries them and a screen no longer
+   * intersects `& { horse_id: string }` of its own.
+   *
+   * All four are nullable on the wire: `horse_id` and `source_trainer_id`
+   * because B1 dropped their NOT NULL, `byline` because only a StablePass post
+   * has one, and `subject` defensively — a row read through a projection that
+   * predates the column has none, and `postSubjectOf` reads that as `horse`.
+   */
+  subject?: string | null;
+  byline?: string | null;
+  horse_id?: string | null;
+  source_trainer_id?: string | null;
 };
 
 /**
