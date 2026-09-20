@@ -172,11 +172,19 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
       // ONE subject-aware identity read for the page (ENG-1270): the horse read
       // for the non-null `horse_id`s, the trainer read for the trainer-subject
       // rows, and both signing batches.
-      const [identityById, { data: reactionRows }, { data: bookmarkRows }] = await Promise.all([
+      const [{ identityById, error: identityError }, { data: reactionRows }, { data: bookmarkRows }] = await Promise.all([
         enrichFeedSubjects(sb, rows),
         sb.from("reaction").select("post_id,emoji").in("post_id", ids),
         sb.from("bookmark").select("post_id").in("post_id", ids),
       ]);
+
+      // An identity read that was REJECTED (not merely empty) must not paint:
+      // every card would read "Unknown horse" over a blank byline and the page
+      // would look fine. Raise the same error state a failed feed fetch raises.
+      if (identityError) {
+        setError(true);
+        return;
+      }
 
       const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
       const mySet = new Set(((bookmarkRows ?? []) as BookmarkRow[]).map((b) => b.post_id));

@@ -18,6 +18,7 @@
 // rendered before — class for class — so the parity screenshot still matches.
 import type { CSSProperties, ReactNode } from "react";
 import { useState } from "react";
+import Link from "next/link";
 import { resolvePostHead } from "@/lib/feed/subject";
 import type { FeedPost } from "./types";
 
@@ -134,11 +135,29 @@ export function StablePassMark({ className = "post-avatar-web" }: { className?: 
   );
 }
 
-/** The anchor that makes a head tappable — the head row's own flex, inherited ink. */
+/**
+ * The anchor that makes a head tappable — the head row's own flex, inherited ink.
+ *
+ * IT KEEPS A BOX, and that is the whole decision. `display: contents` looks
+ * tidier (the avatar and meta stay direct flex items of the head row, so every
+ * layout rule reaches them untouched) and it was tried — but an element with
+ * `display: contents` generates no box and Chromium will not focus it, which
+ * made the app's ONLY tappable head unreachable by Tab. Measured: `a.focus()`
+ * left `document.activeElement` on `<body>`, and focused the moment the display
+ * was flipped back. A mouse-only link is not a link. `e2e/post-subject.spec.ts`
+ * now pins the focus in a real browser, because jsdom cannot see this.
+ *
+ * `gap: inherit` rather than a literal 12: it takes the PARENT's computed gap,
+ * which is 12px on `.post-head-web` (globals.css) and 12px on `.reel-head` — so
+ * the head row stays the single source of that number and the two variants
+ * cannot drift apart. `flex: 1` / `min-width: 0` are NOT a restatement of
+ * `.post-meta-web`'s: they are this anchor's own flex-ITEM properties, filling
+ * the head row the way the unwrapped meta does; the meta keeps its own inside.
+ */
 const HEAD_LINK_STYLE: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 12,
+  gap: "inherit",
   flex: 1,
   minWidth: 0,
   color: "inherit",
@@ -260,11 +279,24 @@ export function PostHead({
   // behave. The StablePass head is deliberately inert (there is no StablePass
   // profile), and the horse head keeps the flat, unwrapped markup it has always
   // had so its rendered tree is unchanged to the node.
+  // `next/link`, NOT a raw `<a>`: this head sits INSIDE an infinite feed, and a
+  // full document load would throw away the scroll position and every page the
+  // member has paged in — the whole reason they got far enough down to see a
+  // trainer card. The `.rx/gotchas.md` "member nav is a plain `<a>`" note is
+  // about the nav SHELL; the in-feed precedents are client-side both ways
+  // (`shares-list.tsx` uses next/link, `horses-grid.tsx` uses router.push), and
+  // the raw `<a>` in `following-screen.tsx` is an empty-state link, not a card.
   const identity = head.href ? (
-    <a href={head.href} style={HEAD_LINK_STYLE} data-testid="post-head-link">
+    // `prefetch={false}`: this is an INFINITE feed, and the default viewport
+    // prefetch would spend one server render of `/trainers/[id]` — a dynamic
+    // component doing several Supabase reads plus photo signing — on every
+    // trainer card that merely scrolls past. Same reasoning, same call as
+    // `app/start/trial-start-form.tsx`. The client-side navigation on tap,
+    // which is why this is a `Link` at all, is unaffected.
+    <Link href={head.href} prefetch={false} style={HEAD_LINK_STYLE} data-testid="post-head-link">
       {avatar}
       {meta}
-    </a>
+    </Link>
   ) : (
     <>
       {avatar}

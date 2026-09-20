@@ -2615,3 +2615,9 @@ identity of every other card beside it.
 `test/feed-subject.test.ts` asserts the recorded `.in()` arguments with
 `toEqual`, not merely that the call happened. An empty list skips the read
 entirely — `.in("id", [])` is a real round trip for an answer you already have.
+→ **The null was only half of it.** `data`-only destructuring makes ANY rejected
+identity read look like the same calm, fully-blanked page — RLS drift, a 42703,
+a transport blip. `enrichFeedSubjects` therefore returns `{ identityById, error }`
+and the three screens raise their existing error state on it. When you add a
+read here, carry its `error` out; a feed that paints "Unknown horse" over every
+card is indistinguishable from one that is simply quiet.

@@ -76,6 +76,26 @@ test.describe("ENG-1270 post subject variants", () => {
     }
   });
 
+  // THE ONLY TAPPABLE HEAD MUST BE REACHABLE BY KEYBOARD, and this test exists
+  // because jsdom cannot see the way it stopped being. `display: contents` on
+  // the anchor is the tidy way to let the head row's own flex rules reach the
+  // avatar and meta — and it generates no box, so Chromium refuses to focus it:
+  // the trainer head became mouse-only while every unit test stayed green and
+  // the link stayed in the accessibility tree. Only a real browser catches it.
+  test("the trainer head is focusable — a mouse-only link is not a link", async ({ page }) => {
+    await page.goto(GALLERY);
+    const link = section(page).locator("article.post-web").nth(1).getByTestId("post-head-link");
+    await expect(link).toBeVisible();
+
+    // A real box, not a phantom: `display: contents` reports 0x0 here.
+    const box = await link.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.height).toBeGreaterThan(0);
+
+    await link.focus();
+    await expect(link).toBeFocused();
+  });
+
   test("captures the subject-variant evidence", async ({ page }) => {
     await page.goto(GALLERY);
     const gallery = section(page);

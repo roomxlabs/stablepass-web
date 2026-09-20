@@ -596,3 +596,25 @@ describe("SavedFeed — ENG-762 multi-photo carousel", () => {
     expect(screen.queryByTestId("photo-track")).toBeNull();
   });
 });
+
+// ===========================================================================
+// ENG-1270 — the identity read is REJECTED, not merely empty. See the twin in
+// `test/following-screen.test.tsx` for why this is pinned per screen.
+// ===========================================================================
+describe("SavedFeed — ENG-1270 a rejected identity read never paints", () => {
+  it("shows the screen's error state, not a feed of 'Unknown horse' cards", async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "subscription") return chainable({ data: subRow, error: null });
+      if (table === "bookmark") return bookmarkBuilder();
+      if (table === "horse")
+        return chainable({ data: null, error: { code: "42703", message: "column post.subject does not exist" } });
+      return chainable({ data: [], error: null });
+    });
+
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+
+    expect(await screen.findByText(/couldn.t load your saved posts/i)).toBeInTheDocument();
+    expect(screen.queryByText("Unknown horse")).not.toBeInTheDocument();
+    expect(document.querySelector("article.post-web")).toBeNull();
+  });
+});

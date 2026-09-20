@@ -95,8 +95,16 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
       if (fetchError) { setError(true); return; }
 
       const rows = (bookmarkRows ?? []) as BookmarkRow[];
-      setCursor(rows.length ? rows[rows.length - 1].created_at : forCursor);
-      setHasMore(rows.length === LIMIT);
+      // PAGING STATE IS COMMITTED ONLY WHERE THE ROWS ACTUALLY LAND. It used to
+      // be set here, before enrichment — which meant the identity-error bail
+      // below advanced the cursor past a page it then discarded. Nothing retries
+      // today (the sentinel is gated on `!error`), so that was latent rather
+      // than broken; it becomes a silent content hole the day anyone adds a
+      // "Try again". Explore already had this order; these two now match it.
+      const commitPaging = () => {
+        setCursor(rows.length ? rows[rows.length - 1].created_at : forCursor);
+        setHasMore(rows.length === LIMIT);
+      };
 
       // Drop rows whose post RLS-filtered to null (unpublished/hidden/lost content-access).
       const postRows = rows
@@ -104,6 +112,7 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
         .filter((p): p is PostRow => p !== null);
 
       if (postRows.length === 0) {
+        commitPaging();
         if (!forCursor) setPosts([]);
         return;
       }
@@ -113,10 +122,18 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
       // ONE subject-aware identity read for the page (ENG-1270): the horse read
       // for the non-null `horse_id`s, the trainer read for the trainer-subject
       // rows, and both signing batches.
-      const [identityById, { data: reactionRows }] = await Promise.all([
+      const [{ identityById, error: identityError }, { data: reactionRows }] = await Promise.all([
         enrichFeedSubjects(sb, postRows),
         sb.from("reaction").select("post_id,emoji").in("post_id", ids),
       ]);
+
+      // An identity read that was REJECTED (not merely empty) must not paint:
+      // every card would read "Unknown horse" over a blank byline and the page
+      // would look fine. Raise the same error state a failed feed fetch raises.
+      if (identityError) {
+        setError(true);
+        return;
+      }
 
       const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
       // Photos + their slide counts via ONE POST /api/posts/media; video posters
@@ -142,6 +159,7 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
       }));
 
       setPosts((prev) => (forCursor ? [...prev, ...mapped] : mapped));
+      commitPaging();
       // No impression writes: Saved is a curated list, not the ranked feed.
     } finally {
       loadingRef.current = false;

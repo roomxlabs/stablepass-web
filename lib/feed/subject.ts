@@ -200,6 +200,24 @@ export function resolvePostHead(post: FeedPost): PostHeadModel {
   });
 }
 
+/** Whatever PostgREST handed back on a failed identity read. `sb` is untyped, so this is structural. */
+export type FeedSubjectReadError = { message?: string; code?: string } & Record<string, unknown>;
+
+/**
+ * What `enrichFeedSubjects` returns.
+ *
+ * `error` is NOT decoration. The whole module exists because a failed identity
+ * read is INVISIBLE at the card — every horse head reads "Unknown horse" and
+ * every byline blanks, with no crash and no empty state to give it away. A
+ * caller MUST branch on it; the three member screens raise their existing error
+ * state and stop.
+ */
+export type FeedSubjectEnrichment = {
+  identityById: ReadonlyMap<string, PostSubjectIdentity>;
+  /** Non-null when the `horse` or `trainer` read was rejected. `null` on a clean page AND on a page that made no read at all. */
+  error: FeedSubjectReadError | null;
+};
+
 /**
  * Read one feed page's identity: at most one `horse` read and one `trainer`
  * read, then ONE signing batch per bucket, then a head per post.
@@ -210,11 +228,24 @@ export function resolvePostHead(post: FeedPost): PostHeadModel {
 export async function enrichFeedSubjects(
   sb: SupabaseClient,
   rows: readonly PostSubjectRow[],
-): Promise<ReadonlyMap<string, PostSubjectIdentity>> {
+): Promise<FeedSubjectEnrichment> {
   // THE NULL FILTER. First, and before anything is deduped — a single null
   // reaching `.in()` rejects the whole query and blanks every byline on the
   // page. `test/feed-subject.test.ts` asserts the recorded arguments exactly.
-  const horseIds = [...new Set(rows.map((r) => r.horse_id).filter((id): id is string => Boolean(id)))];
+  // The other way into that same blanked page — the read being REJECTED for a
+  // reason of its own — is handled below, at `readError`.
+  // Both branches narrow by SUBJECT first and only then by null. Relying on
+  // B1's `post_subject_shape` CHECK to have nulled `horse_id` on a trainer or
+  // StablePass row would put this module's stated invariant in another repo; the
+  // symmetry is the point — a drifted row reads as the subject it declares.
+  const horseIds = [
+    ...new Set(
+      rows
+        .filter((r) => postSubjectOf(r) === "horse")
+        .map((r) => r.horse_id)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
   const trainerIds = [
     ...new Set(
       rows
@@ -228,11 +259,24 @@ export async function enrichFeedSubjects(
   // nothing — paying a round trip for an answer we already have, on the exact
   // page (all-StablePass) this ticket exists to make cheap.
   const [horseResult, trainerResult] = await Promise.all([
-    horseIds.length ? sb.from("horse").select(SUBJECT_HORSE_COLUMNS).in("id", horseIds) : Promise.resolve({ data: null }),
+    horseIds.length
+      ? sb.from("horse").select(SUBJECT_HORSE_COLUMNS).in("id", horseIds)
+      : Promise.resolve({ data: null, error: null }),
     trainerIds.length
       ? sb.from("trainer").select(SUBJECT_TRAINER_COLUMNS).in("id", trainerIds)
-      : Promise.resolve({ data: null }),
+      : Promise.resolve({ data: null, error: null }),
   ]);
+
+  // THE ERROR PATH, and it is the SAME failure this module exists to end.
+  // Dropping `error` here would reproduce the null bug exactly: a rejected
+  // `horse` read (an RLS change, a 42703 after schema drift, a transport blip)
+  // returns `data: null`, every card falls back to "Unknown horse" with a green
+  // suite, and the page looks CALM while every byline on it is wrong. So the
+  // error is carried out to the caller, which already owns an error state, and
+  // the screens stop rather than paint a plausible lie. The identities below are
+  // still built — a caller that decides a degraded page beats no page can use
+  // them — but nothing in this repo does that today.
+  const readError = (horseResult?.error ?? trainerResult?.error ?? null) as FeedSubjectReadError | null;
 
   const horseRows = (horseResult?.data ?? []) as HorseRef[];
   const trainerRows = (trainerResult?.data ?? []) as TrainerRef[];
@@ -287,5 +331,5 @@ export async function enrichFeedSubjects(
     };
     out.set(row.id, { ...identity, head: buildPostHead({ ...identity, subject }) });
   }
-  return out;
+  return { identityById: out, error: readError };
 }
