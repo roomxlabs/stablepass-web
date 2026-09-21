@@ -364,4 +364,115 @@ describe("POST /api/subscription/cancel", () => {
     expect(subscriptionsUpdate).not.toHaveBeenCalled();
     expect(rpcMock).not.toHaveBeenCalled();
   });
+
+  // ─── ENG-1276 ─────────────────────────────────────────────────────────────
+  // A promotional (complimentary, ENG-1194) row answers `409 complimentary`
+  // BEFORE Stripe and BEFORE the RPC. A former Stripe member can carry a
+  // leftover `stripe_subscription_id`; without this exit the route would tell
+  // Stripe to cancel and only then be refused by the RPC (ENG-1221).
+  const COMPLIMENTARY_BODY = {
+    error: {
+      code: "complimentary",
+      message: "Your complimentary access ends on its own, so there's nothing to cancel.",
+    },
+  };
+
+  it.each([
+    ["with a leftover stripe_subscription_id", "sub_leftover"],
+    ["without a stripe_subscription_id", null],
+  ])(
+    "GUARDRAIL — a promotional row %s is 409 complimentary; Stripe is never constructed or called, the RPC never runs, nothing written",
+    async (_label, stripeSubscriptionId) => {
+      getStripeMock.mockClear();
+      tableData.subscription = {
+        data: { stripe_subscription_id: stripeSubscriptionId, provider: "promotional" },
+      };
+      rpcMock.mockResolvedValue({ data: HAPPY_RPC_ROW, error: null });
+
+      const res = await POST(req({ reason: "done" }));
+      const body = await res.json();
+
+      expect(res.status).toBe(409);
+      expect(body).toEqual(COMPLIMENTARY_BODY);
+      expect(getStripeMock).toHaveBeenCalledTimes(0);
+      expect(subscriptionsUpdate).toHaveBeenCalledTimes(0);
+      expect(rpcMock).toHaveBeenCalledTimes(0);
+      expect(updateMock).not.toHaveBeenCalled();
+
+      // A fresh Response per call — a reused one is unreadable the second time.
+      const again = await POST(req({}));
+      expect(again.status).toBe(409);
+      expect(await again.json()).toEqual(COMPLIMENTARY_BODY);
+    },
+  );
+
+  // Positive control for the spies above: the SAME leftover id on a stripe row
+  // does construct Stripe and does run the RPC, so the zero counts on a
+  // promotional row measure the new exit, not a dead spy.
+  it("control — the same leftover id on a stripe row constructs Stripe, cancels it, then runs the RPC", async () => {
+    getStripeMock.mockClear();
+    tableData.subscription = { data: { stripe_subscription_id: "sub_leftover", provider: "stripe" } };
+    rpcMock.mockResolvedValue({ data: HAPPY_RPC_ROW, error: null });
+
+    const res = await POST(req({}));
+
+    expect(res.status).toBe(200);
+    expect(getStripeMock).toHaveBeenCalledTimes(1);
+    expect(subscriptionsUpdate).toHaveBeenCalledWith("sub_leftover", { cancel_at_period_end: true });
+    expect(rpcMock).toHaveBeenCalledTimes(1);
+  });
+
+  // The provider can flip between our SELECT and the RPC (e.g. an admin grants
+  // comp access, or the member buys in the app, mid-request). ENG-1221's RPC
+  // then refuses with `42501` + `not_self_cancellable`: that is a 409 with fixed
+  // copy, never a 500.
+  it("409 not_self_cancellable — the RPC refuses a row that is no longer stripe-billed (42501)", async () => {
+    tableData.subscription = { data: { stripe_subscription_id: "sub_1", provider: "stripe" } };
+    rpcMock.mockResolvedValue({
+      data: null,
+      error: { code: "42501", message: "not_self_cancellable" },
+    });
+
+    const res = await POST(req({ reason: "too pricey" }));
+    const bodyText = await res.text();
+
+    expect(res.status).toBe(409);
+    expect(JSON.parse(bodyText)).toEqual({
+      error: {
+        code: "not_self_cancellable",
+        message: "This subscription can't be cancelled here.",
+      },
+    });
+    expect(bodyText).not.toContain("too pricey");
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  // Code AND message, exactly like `no_active_subscription`: 42501 alone is
+  // `insufficient_privilege` generally, so a broken grant must stay a loud 500.
+  it("42501 with any other message is still 500 cancel_failed, with fixed copy", async () => {
+    rpcMock.mockResolvedValue({
+      data: null,
+      error: { code: "42501", message: "permission denied for function cancel_own_subscription" },
+    });
+
+    const res = await POST(req({}));
+    const bodyText = await res.text();
+
+    expect(res.status).toBe(500);
+    expect(JSON.parse(bodyText).error.code).toBe("cancel_failed");
+    expect(bodyText).not.toContain("permission denied");
+  });
+
+  it("not_self_cancellable under a code other than 42501 is still 500 cancel_failed", async () => {
+    rpcMock.mockResolvedValue({
+      data: null,
+      error: { code: "P0001", message: "not_self_cancellable" },
+    });
+
+    const res = await POST(req({}));
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.error.code).toBe("cancel_failed");
+  });
 });
