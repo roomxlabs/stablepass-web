@@ -3,6 +3,51 @@
 // never fetch. `ReactionEmoji` matches the backend `reaction.emoji` CHECK set.
 export type ReactionEmoji = "like" | "love" | "clap" | "pray" | "fire" | "flex" | "horse";
 
+/**
+ * `post.subject` (ENG-1264/B1) — WHO the post is about, which is what selects the
+ * card's HEAD. It is NOT a media type: a trainer post and a horse post can both
+ * be a video, and `media.type` still picks the anatomy below the head exactly as
+ * it always has.
+ *
+ * `horse` is the only value that existed before B1 and is the DEFENSIVE default
+ * everywhere: a legacy row read through a client that predates the column, or a
+ * projection that forgot to ask for it, renders the card it has always rendered.
+ */
+export type PostSubject = "horse" | "trainer" | "stablepass";
+
+/**
+ * THE HEAD MODEL — the one shape every card head is drawn from (ENG-1270).
+ *
+ * The head is the ONLY part of the card that varies by subject: media, carousel,
+ * reactions, caption and bookmark are byte-identical on all three (client
+ * decision, 19 Sep 2026 — there is no new mockup, the trainer and StablePass
+ * cards ARE the horse card with a different head). Keeping the variance in one
+ * resolved value is what stops that decision drifting into three card
+ * components.
+ *
+ * - `name`   — the `h3`. The horse's display name, the trainer's name, or the
+ *              literal lowercase `stablepass`.
+ * - `line2`  — the green lead of the byline row, BEFORE the posted-ago text:
+ *              the trainer's name (horse), `stable_name · location` (trainer),
+ *              or the editorial `byline` (stablepass). Null renders the
+ *              posted-ago text alone, with no orphan separator.
+ * - `avatarUrl` — an ALREADY SIGNED url or null; never a stored bucket path
+ *              (see lib/storage/photos.ts' transport rule). The StablePass mark
+ *              is a local static asset and is drawn by the component, not
+ *              carried here.
+ * - `href`   — where the head navigates, or null for a head that is NOT a link.
+ *              Only the trainer head is tappable (`/trainers/<id>`); the
+ *              StablePass head deliberately is not — there is no StablePass
+ *              profile to land on.
+ */
+export interface PostHeadModel {
+  kind: PostSubject;
+  name: string;
+  line2: string | null;
+  avatarUrl: string | null;
+  href: string | null;
+}
+
 export interface PostMedia {
   type: "video" | "photo" | "text" | "voice" | "news";
   posterUrl?: string | null; // image, or a video poster frame
@@ -17,7 +62,35 @@ export interface PostMedia {
 
 export interface FeedPost {
   id: string;
-  horseId: string;
+  /**
+   * `post.horse_id` — NULLABLE since B1 (ENG-1264): a trainer or StablePass post
+   * has no horse at all. Nothing on the card reads it (the head takes its
+   * identity from `head` below); it is carried for keys and comparisons.
+   */
+  horseId: string | null;
+  /**
+   * The post's subject. OPTIONAL on purpose, and the absence means `horse`:
+   * `horse-posts.tsx` only ever shows horse posts and is deliberately untouched
+   * by ENG-1270, and a pre-B1 row read through an old projection has no value to
+   * give. Every consumer resolves it through `postSubjectOf` / `resolvePostHead`
+   * (lib/feed/subject.ts) rather than reading it raw, so "absent" has exactly
+   * one meaning in exactly one place.
+   */
+  subject?: PostSubject;
+  /**
+   * `post.byline` — the editorial SOURCE of a StablePass post ("Racing TV"), not
+   * a person and never owner identity (guardrail 2). Null on every horse and
+   * trainer post; the be's shape CHECK enforces that.
+   */
+  byline?: string | null;
+  /**
+   * The resolved head. Optional for the same reason `subject` is: a screen that
+   * has not been through the subject enrichment still gets the horse head it
+   * always drew, built from `horseName` / `trainerName` / `horsePhotoUrl` by
+   * `resolvePostHead`.
+   */
+  head?: PostHeadModel;
+  /** The horse's display name. Empty string on a horse-less post. */
   horseName: string;
   trainerName: string;
   /**

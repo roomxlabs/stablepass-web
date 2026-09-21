@@ -1055,3 +1055,71 @@ describe("ExploreFeed — ENG-1063 GUARDRAIL 3: the aside's signing, on the wall
     // them as proof the front end asks, which is the part we own.
   });
 });
+
+// ===========================================================================
+// ENG-1270 — the subject-aware identity read (lib/feed/subject.ts) wired
+// through the REAL screen: a null `horse_id` on a trainer-subject row must
+// resolve to the trainer's own head, not blank the card, and a rejected
+// identity read must raise the screen's existing error state rather than
+// paint a page of "Unknown horse" cards.
+// ===========================================================================
+describe("ExploreFeed — ENG-1270 subject-aware identity", () => {
+  // A top-level SIBLING describe (see the ENG-613/ENG-1063 blocks above for
+  // why): without its own reset, both the mock implementation and the call
+  // history leak in from whichever describe ran last.
+  beforeEach(() => {
+    fromMock.mockReset();
+  });
+
+  function feedWithRows(rows: unknown[]) {
+    return vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/feed/seen")) return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
+      if (url === "/api/posts/media" || url.startsWith("/api/posts/media?")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: { items: [], expiresAt: "2026-08-01T00:00:00.000Z" } }) });
+      }
+      if (url.startsWith("/api/feed")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: rows, meta: { nextCursor: null, hasMore: false } }) });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    });
+  }
+
+  const MIXED_ROWS = [
+    { id: "p-horse", subject: "horse", horse_id: "h1", source_trainer_id: null, type: "photo", body: "x", media_url: null, watermarked: false, like_count: 1, published_at: "2026-07-10T00:00:00.000Z" },
+    // A trainer-subject row: `horse_id` is null (B1 makes it nullable) — this
+    // is the exact row shape that used to reach `.in("id", horseIds)` with a
+    // null in the list and reject the WHOLE query, blanking every byline.
+    { id: "p-trainer", subject: "trainer", horse_id: null, source_trainer_id: "t1", type: "photo", body: "y", media_url: null, watermarked: false, like_count: 1, published_at: "2026-07-10T00:00:00.000Z" },
+  ];
+
+  it("a MIXED page with a trainer-subject row (horse_id: null) renders the trainer's own head, and no card reads 'Unknown horse'", async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "horse") return chainable({ data: [{ id: "h1", display_name: "Mahogany", photo_url: null, trainer: null }], error: null });
+      if (table === "trainer") return chainable({ data: [{ id: "t1", name: "Chris Waller", stable_name: "Waller Racing", location: "Rosehill", photo_url: null }], error: null });
+      return chainable({ data: [], error: null });
+    });
+    global.fetch = feedWithRows(MIXED_ROWS) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+
+    expect(await screen.findByText("Mahogany")).toBeInTheDocument();
+    expect(await screen.findByText("Chris Waller")).toBeInTheDocument();
+    expect(screen.queryByText("Unknown horse")).not.toBeInTheDocument();
+  });
+
+  it("a rejected horse identity read shows the screen's error state, not a feed of 'Unknown horse' cards", async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "horse") return chainable({ data: null, error: { code: "42703", message: "column post.subject does not exist" } });
+      return chainable({ data: [], error: null });
+    });
+    global.fetch = fetchImpl(200) as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+
+    expect(await screen.findByText(/couldn.t load the feed/i)).toBeInTheDocument();
+    expect(screen.queryByText("Unknown horse")).not.toBeInTheDocument();
+    expect(document.querySelector("article.post-web")).toBeNull();
+    expect(document.querySelector(".post-panel")).toBeNull();
+  });
+});

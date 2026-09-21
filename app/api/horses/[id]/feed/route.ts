@@ -28,7 +28,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   // test/horses-route.test.ts still pins the resolved string exactly.
   const { data: posts } = await sb
     .from("post")
-    .select(`${POST_INTRINSIC_COLUMNS}, source_trainer_id`)
+    .select(POST_INTRINSIC_COLUMNS)
     .eq("horse_id", id)
     .eq("status", "published")
     .order("published_at", { ascending: false })

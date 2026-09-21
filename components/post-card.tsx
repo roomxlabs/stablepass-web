@@ -23,7 +23,14 @@ import { PostOverlay } from "./post-overlay";
 import { FollowPill } from "./follow-pill";
 import { MediaPhotoChip, PhotoCarousel } from "./photo-carousel";
 import { PostMediaImage } from "./post-media-image";
+import { PostAvatar, PostHead } from "./post-head";
 import type { FeedPost, PostMedia, ReactionEmoji } from "./types";
+
+// PostAvatar MOVED to ./post-head at ENG-1270 — the head became its own
+// component and the avatar is part of the head. Re-exported here so every
+// existing `import { PostAvatar } from "@/components/post-card"` keeps
+// resolving to the ONE implementation rather than growing a second copy.
+export { PostAvatar, PostHead } from "./post-head";
 
 /**
  * The two post types that get the STABLE UPDATE treatment — pill, title and the
@@ -160,13 +167,6 @@ export function mediaBoxProps(
 const Play = () => (
   <svg className="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16l13-8Z" fill="currentColor" stroke="none" /></svg>
 );
-const More = () => (
-  <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">
-    <circle cx="5" cy="12" r="1.5" fill="currentColor" stroke="none" />
-    <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" />
-    <circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none" />
-  </svg>
-);
 
 /**
  * The photo chip moved to `photo-carousel.tsx` in round 6 (ENG-762) so the
@@ -291,76 +291,6 @@ export function PostCaption({ body }: { body: string }) {
   );
 }
 
-/**
- * THE HEAD AVATAR — a rounded BOX carrying the real photo, monogram as fallback
- * (ENG-958, porting mobile's ENG-833 + ENG-869).
- *
- * Shape: mobile went boxy on the browse rows at ENG-833 and brought the same
- * corner to the post head at ENG-869, with the client's reason recorded on the
- * mobile `AVATAR_BOX_RADIUS`: *"with circles it's going to be too difficult to
- * position the horses"* — a horse photographed side-on is a long subject and a
- * circle crops whichever end the framing did not centre. So this is a cropping
- * decision, not a taste one, and it is the same horse photo in the same product
- * as the browse thumbs. The radius lives in `.post-avatar-web` (14px, mobile's
- * `Radius.md`, the card-media radius). **The stable-update panel's footer disc
- * (`.post-panel-foot .av`) stays a CIRCLE** — it is a stable's mark, not a
- * profile photo (mobile ENG-754 draws it the same way, and pins it as a
- * control). A test pins that split so a future "round the avatars" sweep cannot
- * quietly take the footer with it.
- *
- * Photo: web drew an initial letter and nothing else until now, on every card,
- * while mobile has painted the signed photo since ENG-754. `url` is an ALREADY
- * SIGNED url — this component never mints and never fetches, exactly like the
- * rest of the card; the screens sign in their existing batch (`signPhotoMap`).
- *
- * `onError` → monogram. Not defensive padding: a revoked or rotated bucket
- * object does NOT throw, it resolves to an `<img>` that never paints (see
- * `.rx/gotchas.md`, ENG-815 — "a revoked bucket does not throw, it renders a
- * carousel of nulls"). Falling back on the error event turns that silent broken
- * -image icon back into the monogram the card had before.
- */
-export function PostAvatar({
-  url,
-  initial,
-  className = "post-avatar-web",
-}: {
-  url?: string | null;
-  initial: string;
-  className?: string;
-}) {
-  const [failed, setFailed] = useState(false);
-  // A NEW url deserves a fresh attempt — otherwise one dead object poisons the
-  // element for every post that recycles it during a feed page change.
-  //
-  // React's "adjust state when a prop changes" pattern (a render-phase
-  // `setState`, which React re-renders immediately without painting), NOT a
-  // `useEffect`. `react-hooks/set-state-in-effect` is an ERROR in this repo, not
-  // a warning (.rx/gotchas.md), and the effect form is also a frame slower: it
-  // would paint the previous post's monogram before resetting.
-  const [seenUrl, setSeenUrl] = useState(url);
-  if (url !== seenUrl) {
-    setSeenUrl(url);
-    setFailed(false);
-  }
-
-  if (url && !failed) {
-    return (
-      // `alt=""` + aria-hidden: the horse's name is already the adjacent
-      // headline, so announcing it twice is noise for a screen reader. The
-      // monogram branch has always been `aria-hidden` for the same reason.
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        className={`${className} post-avatar-photo`}
-        src={url}
-        alt=""
-        aria-hidden="true"
-        data-testid="post-avatar-photo"
-        onError={() => setFailed(true)}
-      />
-    );
-  }
-  return <div className={className} aria-hidden="true">{initial}</div>;
-}
 
 /**
  * How many lines of the stable-update PANEL a member sees before "Read more"
@@ -654,15 +584,9 @@ export function PostCard({
   // take the whole feed down, not just this card. Every current call site
   // coalesces, so this is defence, not a live bug.
   const trainerInitial = post.trainerName?.[0]?.toUpperCase() ?? "?";
-  // An update card is the STABLE's voice, so it leads with the trainer's initial;
-  // a media card is about the horse and leads with the horse's.
-  const initial = isUpdate ? trainerInitial : post.horseName?.[0]?.toUpperCase() ?? "?";
-  // The photo follows the SAME rule as the monogram it replaces, so the head
-  // never shows one identity's picture over the other's letter: an update card
-  // is the stable's voice and takes the trainer's photo, every other variant is
-  // about the horse and takes the horse's. Undefined on a screen that has not
-  // resolved photos yet, which simply falls back to the monogram.
-  const headPhotoUrl = isUpdate ? post.trainerPhotoUrl : post.horsePhotoUrl;
+  // (The update card's "lead with the TRAINER's photo and initial" rule moved
+  // into `PostHead` with the rest of the head — it is horse-subject only, and
+  // `isUpdate` below is what carries it there.)
   // The box takes the asset's OWN ratio, clamped — except a REEL (portrait
   // video), which keeps its true ratio down to 9:16 and takes Instagram's
   // in-feed reel layout: the header overlays the top of the frame on an ink
@@ -685,52 +609,14 @@ export function PostCard({
 
   return (
     <article className="post-web">
+      {/* THE CLASSIC HEAD — now `PostHead` (ENG-1270), which is also what the
+          four screens' inline video articles render, so there is exactly ONE
+          copy of this markup in the app. The horse variant emits the same tree
+          it always did, class for class; only the trainer and StablePass
+          subjects add anything. `showRaceBadge`/`showLabel`/`showMore` carry the
+          three things the classic head draws and the video article never has. */}
       {!isReel && (
-      <div className="post-head-web">
-        <PostAvatar url={headPhotoUrl} initial={initial} />
-        <div className="post-meta-web">
-          {/* THE STACK (ENG-958, porting mobile ENG-869; Justin, 28 Aug 2026,
-              screenshot 1): race badge, then horse name, then trainer + age,
-              then the green chip UNDER all three.
-
-              The pill used to sit ABOVE the horse name here. On mobile it
-              shared the NAME's line from 26 Aug, capped at 62% of the row, and
-              a real title truncated to "Race Replay - Sunsh…" while the name
-              beside it also had to shrink — two runs of text fighting over one
-              line and both losing. Moving it below the byline gives each of the
-              three its own line and gives the chip the whole column, which is
-              the truncation fix. Both the race badge and the pill can be on one
-              card: the race badge renders FIRST, above; the pill LAST, below.
-
-              Null label = no pill AND no gap — the margin lives on the pill,
-              not on the byline above it, so an unlabelled card's head is
-              exactly as tall as it was. */}
-          {post.raceBadge && (
-            <div className={`race-badge${post.raceBadge.kind === "result" ? " result" : ""}`}>{post.raceBadge.text}</div>
-          )}
-          <h3 className="post-horse">{post.horseName}</h3>
-          {/* `post.title` is not drawn AT ALL — on any variant (client, 18
-              Aug 2026, in two steps: media cards first, then the update card:
-              "dont need the title. same as others"). The data still flows;
-              the cards just never render it. */}
-          <div className="post-byline">
-            <span className="by-trainer">{post.trainerName}</span> · {post.postedAgo}
-          </div>
-          {/* The `.post-badge` pill is DATA, not card-type copy: `post.label`,
-              one of the be's 13 presets (ENG-738), and nothing at all when the
-              column is null — which is every pre-round-6 post. `.stacked` is
-              what takes it off the old centred one-line treatment and gives it
-              the full column. */}
-          {post.label && (
-            <span className="post-badge stacked">
-              {/* The copy is its OWN element so the ellipsis has a block box to
-                  apply to — see `.post-badge.stacked .post-badge-text`. */}
-              <span className="post-badge-text">{post.label}</span>
-            </span>
-          )}
-        </div>
-        <button className="post-more-web" type="button" aria-label="More"><More /></button>
-      </div>
+        <PostHead post={post} isUpdate={isUpdate} showRaceBadge showLabel showMore />
       )}
 
       {hasMedia && (
@@ -756,27 +642,13 @@ export function PostCard({
           {isReel && (
             /* THE REEL HEADER — the card's identity on a top scrim, with the
                Follow pill IN the row next to the name (mobile's 18 Aug
-               placement: aligned and legible, ENG-606's pill untouched). */
-            <div className="reel-head">
-              <PostAvatar url={headPhotoUrl} initial={initial} />
-              <div className="reel-head-meta">
-                {/* SAME STACK AS THE CLASSIC HEAD (Naufal, 31 Aug 2026: the reel
-                    follows the post format) — name, byline, then the chip. The
-                    reel head carries no race badge, exactly as mobile's does
-                    not. It costs one line of picture on a 9:16 asset; accepted
-                    on mobile, and accepted here for the same reason. */}
-                <h3 className="reel-horse">{post.horseName}</h3>
-                <div className="reel-byline">
-                  <span className="by-trainer">{post.trainerName}</span> · {post.postedAgo}
-                </div>
-                {post.label && (
-                  <span className="post-badge stacked">
-                    <span className="post-badge-text">{post.label}</span>
-                  </span>
-                )}
-              </div>
+               placement: aligned and legible, ENG-606's pill untouched).
+               SAME STACK AS THE CLASSIC HEAD (Naufal, 31 Aug 2026: the reel
+               follows the post format) — name, byline, then the chip — and the
+               reel head carries no race badge, exactly as mobile's does not. */
+            <PostHead post={post} variant="reel" isUpdate={isUpdate} showLabel>
               {canFollow && <FollowPill trainerName={post.trainerName} onFollow={onFollow} />}
-            </div>
+            </PostHead>
           )}
           {isVideo && (
             <button className="media-play" type="button" aria-label="Play video" onClick={onPlay}><Play /></button>

@@ -12,12 +12,14 @@ import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
 import { AccessWall } from "@/components/access-wall";
 import { HlsVideo } from "@/components/hls-video";
 import { useFeedVideoFailure } from "@/lib/feed/use-feed-video-failure";
-import { PostCard, PostAvatar, mediaBoxProps } from "@/components/post-card";
+import { PostCard, mediaBoxProps } from "@/components/post-card";
+import { PostHead } from "@/components/post-head";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { signPhotoMap, HORSE_PHOTO_BUCKET, TRAINER_PHOTO_BUCKET } from "@/lib/storage/photos";
 import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@/lib/api/post-media";
 import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
+import { enrichFeedSubjects } from "@/lib/feed/subject";
 import type { FeedPost, ReactionEmoji } from "@/components/types";
 import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 import { apiFetch } from "@/lib/api/client";
@@ -25,15 +27,13 @@ import { apiFetch } from "@/lib/api/client";
 const LIMIT = 10;
 
 // Bare be `post` row shape (the following feed returns post rows; names are enriched).
-// Pinned by test/following-screen.test.tsx.
-type PostRow = PostIntrinsicRow & { horse_id: string };
-// `id` for the Follow pill (a name is not a key), `stable_name`/`location` for the
-// STABLE UPDATE panel footer. Stable identity only — no owner field, ever.
-// `photo_url` (both sides) is a bare object path in a PRIVATE bucket — signed
-// below, distinct from the rail's OWN photo maps (ENG-958: those only cover
-// FOLLOWED horses/trainers, not every horse in this post feed).
-type HorseTrainer = { id: string; name: string; stable_name: string | null; location: string | null; photo_url: string | null };
-type HorseRow = { id: string; display_name: string; photo_url: string | null; trainer: HorseTrainer | HorseTrainer[] | null };
+// `horse_id` / `source_trainer_id` / `subject` / `byline` ride on the shared row
+// type since ENG-1270. Pinned by test/following-screen.test.tsx.
+type PostRow = PostIntrinsicRow;
+// The horse read, its trainer embed and both photo-signing batches for the POST
+// FEED moved to `lib/feed/subject.ts` at ENG-1270 (see explore-feed.tsx's module
+// comment). The `Followed*`/`RailItem` types further below are for the FOLLOWED
+// RAILS only — unrelated data, untouched by this ticket.
 type ReactionRow = { post_id: string; emoji: ReactionEmoji };
 type BookmarkRow = { post_id: string };
 
@@ -202,35 +202,45 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
       const body = await res.json();
       const rows = (body.data ?? []) as PostRow[];
       const meta = (body.meta ?? {}) as { nextCursor?: string | null; hasMore?: boolean };
-      setCursor(meta.nextCursor ?? null);
-      setHasMore(Boolean(meta.hasMore));
+      // PAGING STATE IS COMMITTED ONLY WHERE THE ROWS ACTUALLY LAND. It used to
+      // be set here, before enrichment — which meant the identity-error bail
+      // below advanced the cursor past a page it then discarded. Nothing retries
+      // today (the sentinel is gated on `!error`), so that was latent rather
+      // than broken; it becomes a silent content hole the day anyone adds a
+      // "Try again". Explore already had this order; these two now match it.
+      const commitPaging = () => {
+        setCursor(meta.nextCursor ?? null);
+        setHasMore(Boolean(meta.hasMore));
+      };
 
       if (rows.length === 0) {
+        commitPaging();
         if (!forCursor) setPosts([]);
         return;
       }
 
       const ids = rows.map((r) => r.id);
-      const horseIds = [...new Set(rows.map((r) => r.horse_id))];
       const sb = supabaseBrowser();
-      const [{ data: horseRows }, { data: reactionRows }, { data: bookmarkRows }] = await Promise.all([
-        // `sb` is untyped, so `tsc` can never catch a too-narrow `.select()`.
-        // Pinned by a test instead.
-        sb.from("horse").select("id, display_name, photo_url, trainer:trainer_id(id, name, stable_name, location, photo_url)").in("id", horseIds),
+
+      // ONE subject-aware identity read for the page (ENG-1270): the horse read
+      // for the non-null `horse_id`s, the trainer read for the trainer-subject
+      // rows, and both signing batches.
+      const [{ identityById, error: identityError }, { data: reactionRows }, { data: bookmarkRows }] = await Promise.all([
+        enrichFeedSubjects(sb, rows),
         sb.from("reaction").select("post_id,emoji").in("post_id", ids),
         sb.from("bookmark").select("post_id").in("post_id", ids),
       ]);
 
-      const horseById = new Map(((horseRows ?? []) as HorseRow[]).map((h) => [h.id, h]));
+      // An identity read that was REJECTED (not merely empty) must not paint:
+      // every card would read "Unknown horse" over a blank byline and the page
+      // would look fine. Raise the same error state a failed feed fetch raises.
+      if (identityError) {
+        setError(true);
+        return;
+      }
+
       const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
       const mySet = new Set(((bookmarkRows ?? []) as BookmarkRow[]).map((b) => b.post_id));
-      // ONE batch call per bucket for the whole POST feed — separate from the
-      // rails' own maps above, which only cover FOLLOWED horses/trainers.
-      const postHorseRows = (horseRows ?? []) as HorseRow[];
-      const [postHorsePhotos, postTrainerPhotos] = await Promise.all([
-        signPhotoMap(sb, HORSE_PHOTO_BUCKET, postHorseRows.map((h) => h.photo_url)),
-        signPhotoMap(sb, TRAINER_PHOTO_BUCKET, postHorseRows.map((h) => one(h.trainer)?.photo_url)),
-      ]);
       // Photos + their slide counts via ONE POST /api/posts/media; video posters
       // via playback?posterOnly=1. Absolute URLs pass through. A 402 surfaces the
       // AccessWall (guardrail 3). `slideCounts` rides in on the same batch, which
@@ -247,26 +257,14 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
       }
 
       const intrinsics = { signedMedia: media.urls, slideCountByPost: media.slideCounts, reactionByPost: myReaction };
-      const mapped: FeedPost[] = rows.map((r) => {
-        const horse = horseById.get(r.horse_id);
-        const trainer = one(horse?.trainer ?? null);
-        return {
-          ...postIntrinsics(r, intrinsics),
-          horseId: r.horse_id,
-          // Title-cased and (AUS)-stripped for display; the raw value stays on
-          // the row for keys and comparisons (ENG-761 item 6).
-          horseName: displayHorseNameOrEmpty(horse?.display_name) || "Unknown horse",
-          trainerName: trainer?.name ?? "Stablepass",
-          trainerId: trainer?.id ?? null,
-          stableName: trainer?.stable_name ?? null,
-          stableLocation: trainer?.location ?? null,
-          horsePhotoUrl: horse?.photo_url ? postHorsePhotos.get(horse.photo_url) ?? null : null,
-          trainerPhotoUrl: trainer?.photo_url ? postTrainerPhotos.get(trainer.photo_url) ?? null : null,
-          bookmarked: mySet.has(r.id),
-        };
-      });
+      const mapped: FeedPost[] = rows.map((r) => ({
+        ...postIntrinsics(r, intrinsics),
+        ...identityById.get(r.id)!,
+        bookmarked: mySet.has(r.id),
+      }));
 
       setPosts((prev) => (forCursor ? [...prev, ...mapped] : mapped));
+      commitPaging();
 
       // Best-effort impression tracking (the following feed is unseen-first).
       apiFetch("/api/feed/seen", {
@@ -406,16 +404,12 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
                   if (playbackUrl) {
                     return (
                       <article className="post-web" key={p.id}>
-                        <div className="post-head-web">
-                          <PostAvatar url={p.horsePhotoUrl} initial={p.horseName[0]?.toUpperCase() ?? "?"} />
-                          <div className="post-meta-web">
-                            <h3 className="post-horse">{p.horseName}</h3>
-                            {/* title on a media card is withheld (client, 18 Aug 2026) — see post-card.tsx */}
-                            <div className="post-byline">
-                              <span className="by-trainer">{p.trainerName}</span> · {p.postedAgo}
-                            </div>
-                          </div>
-                        </div>
+                        {/* THE SAME HEAD THE CARD DRAWS (ENG-1270). This article exists because a
+                            playing video replaces the card's media box, not its identity — and the
+                            five hand-copied heads this used to be one of are exactly how a trainer
+                            video would have kept saying "Unknown horse" here while the card beside
+                            it got it right (ENG-558: the second copy is the bug). */}
+                        <PostHead post={p} />
                         <div {...mediaBoxProps(p.media.aspectRatio, { video: true })}>
                           <HlsVideo
                             src={playbackUrl}

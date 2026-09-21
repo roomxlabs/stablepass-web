@@ -359,17 +359,21 @@ describe("SavedFeed — ENG-613 view model", () => {
     const chain = fromMock.mock.results[horseCallIndex].value as { select: ReturnType<typeof vi.fn> };
     const projection = chain.select.mock.calls[0][0] as string;
 
+    // ENG-1270: this read moved into the SHARED `enrichFeedSubjects` helper
+    // (lib/feed/subject.ts), whose `SUBJECT_HORSE_COLUMNS` constant is now
+    // shared by Explore, Following AND Saved — so it carries the trainer `id`
+    // even here, where Saved itself never offers the Follow pill. The
+    // consolidation is the ticket's own change to this projection, not drift.
+    //
     // Assert the WHOLE embed, not a per-column `toContain`. "id" is a substring
     // of `trainer_id(` and of the horse's own `id`, and "name" is a substring of
     // `display_name`, so a per-column loop still passes after the trainer's `id`
-    // is dropped — while `trainerId` goes null on every post and the Follow pill
-    // silently vanishes feed-wide with a green suite. `sb` is untyped, so this
-    // string IS the only guard.
-    expect(projection).toContain("trainer:trainer_id(name, stable_name, location, photo_url)");
+    // is dropped. `sb` is untyped, so this string IS the only guard.
+    expect(projection).toContain("trainer:trainer_id(id, name, stable_name, location, photo_url)");
     // And nothing extra: a widened projection is how owner-adjacent columns
     // would arrive on the card (guardrail 2).
     expect(projection).toBe(
-      "id, display_name, photo_url, trainer:trainer_id(name, stable_name, location, photo_url)",
+      "id, display_name, photo_url, trainer:trainer_id(id, name, stable_name, location, photo_url)",
     );
   });
 
@@ -590,5 +594,27 @@ describe("SavedFeed — ENG-762 multi-photo carousel", () => {
 
     expect(screen.queryByTestId("photo-dots")).toBeNull();
     expect(screen.queryByTestId("photo-track")).toBeNull();
+  });
+});
+
+// ===========================================================================
+// ENG-1270 — the identity read is REJECTED, not merely empty. See the twin in
+// `test/following-screen.test.tsx` for why this is pinned per screen.
+// ===========================================================================
+describe("SavedFeed — ENG-1270 a rejected identity read never paints", () => {
+  it("shows the screen's error state, not a feed of 'Unknown horse' cards", async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "subscription") return chainable({ data: subRow, error: null });
+      if (table === "bookmark") return bookmarkBuilder();
+      if (table === "horse")
+        return chainable({ data: null, error: { code: "42703", message: "column post.subject does not exist" } });
+      return chainable({ data: [], error: null });
+    });
+
+    render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+
+    expect(await screen.findByText(/couldn.t load your saved posts/i)).toBeInTheDocument();
+    expect(screen.queryByText("Unknown horse")).not.toBeInTheDocument();
+    expect(document.querySelector("article.post-web")).toBeNull();
   });
 });

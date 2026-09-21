@@ -57,6 +57,14 @@ function row(over: Partial<PostIntrinsicRow> = {}): PostIntrinsicRow {
     watermarked: true,
     like_count: 7,
     published_at: new Date().toISOString(),
+    // ENG-1270 — the four SUBJECT columns. Not mapped by `postIntrinsics()` (the
+    // identity half lives in lib/feed/subject.ts), but declared here so the
+    // "selects exactly the columns the row type declares" guard below still
+    // compares against the row type's FULL shape.
+    subject: "horse",
+    byline: null,
+    horse_id: "h1",
+    source_trainer_id: null,
     ...over,
   };
 }
@@ -77,9 +85,13 @@ describe("POST_INTRINSIC_COLUMNS", () => {
   // undeployed column, PostgREST rejects the WHOLE query with 42703/400, the
   // routes destructure only `data`, and the screens render "No updates yet" — a
   // total content blackout that looks exactly like an empty stable.
+  // ENG-1270 widened this by four (`subject`, `byline`, `horse_id`,
+  // `source_trainer_id`) — see lib/feed/post-row.ts's module comment. Updated
+  // here deliberately: this is the ticket's own change to the shared
+  // projection, not drift.
   it("pins the EXACT shared post projection", () => {
     expect(POST_INTRINSIC_COLUMNS).toBe(
-      "id, type, title, body, label, media_url, poster_url, mux_playback_id, aspect_ratio, watermarked, like_count, published_at",
+      "id, type, title, body, label, media_url, poster_url, mux_playback_id, aspect_ratio, watermarked, like_count, published_at, subject, byline, horse_id, source_trainer_id",
     );
   });
 

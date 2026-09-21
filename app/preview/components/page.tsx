@@ -18,6 +18,97 @@ const noop = () => {};
 
 const VIEWER_ID = "8f3c1a2b-1234-4abc-9def-0123456789ab";
 
+/**
+ * ENG-1270 — the three SUBJECT variants, side by side, which is the only place
+ * they can be seen together: the local Supabase edge runtime serves a `feed`
+ * STUB that returns no rows, so /explore renders its empty state and any
+ * assertion about a card there passes vacuously (.rx/gotchas.md, ENG-613).
+ *
+ * All three are the SAME photo card with the same label pill, the same media
+ * box and the same reaction bar (client, 19 Sep 2026: no new mockup — only the
+ * head changes). Reading them as a column is how you check that.
+ */
+const SUBJECT_HORSE_POST: FeedPost = {
+  id: "post-subject-horse",
+  horseId: "horse-2",
+  subject: "horse",
+  horseName: "Winx",
+  trainerName: "Chris Waller",
+  trainerId: "trainer-1",
+  stableName: "Chris Waller Racing",
+  stableLocation: "Rosehill, NSW",
+  postedAgo: "2h ago",
+  label: "Trackwork",
+  body: "Strong gallop on the course proper this morning.",
+  media: { type: "photo", posterUrl: null },
+  watermarked: false,
+  raceBadge: null,
+  count: 214,
+  reacted: null,
+  bookmarked: false,
+  head: {
+    kind: "horse",
+    name: "Winx",
+    line2: "Chris Waller",
+    avatarUrl: null,
+    href: null,
+  },
+};
+
+/** The head is the trainer, line 2 is `stable_name · location`, and it LINKS. */
+const SUBJECT_TRAINER_POST: FeedPost = {
+  id: "post-subject-trainer",
+  horseId: null,
+  subject: "trainer",
+  horseName: "",
+  trainerName: "Chris Waller",
+  trainerId: "trainer-1",
+  stableName: "Chris Waller Racing",
+  stableLocation: "Rosehill, NSW",
+  postedAgo: "4h ago",
+  label: "Stable news",
+  body: "A word from the stable ahead of a big Saturday at Randwick.",
+  media: { type: "photo", posterUrl: null },
+  watermarked: false,
+  raceBadge: null,
+  count: 87,
+  reacted: "clap",
+  bookmarked: false,
+  head: {
+    kind: "trainer",
+    name: "Chris Waller",
+    line2: "Chris Waller Racing · Rosehill, NSW",
+    avatarUrl: null,
+    href: "/trainers/trainer-1",
+  },
+};
+
+/** The S-mark, the lowercase literal, the editorial byline — and NO link. */
+const SUBJECT_STABLEPASS_POST: FeedPost = {
+  id: "post-subject-stablepass",
+  horseId: null,
+  subject: "stablepass",
+  horseName: "",
+  trainerName: "",
+  byline: "Racing TV",
+  postedAgo: "6h ago",
+  label: "Replay",
+  body: "The full replay of Saturday's Group 1, in case you missed it.",
+  media: { type: "photo", posterUrl: null },
+  watermarked: false,
+  raceBadge: null,
+  count: 402,
+  reacted: null,
+  bookmarked: true,
+  head: {
+    kind: "stablepass",
+    name: "stablepass",
+    line2: "Racing TV",
+    avatarUrl: null,
+    href: null,
+  },
+};
+
 const VIDEO_POST: FeedPost = {
   id: "post-video-1",
   horseId: "horse-1",
@@ -448,6 +539,21 @@ export default function ComponentPreviewPage() {
         <PostCard post={LONG_LABEL_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
         <PostCard post={LONG_UPDATE_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />
         <PostCard post={SHORT_UPDATE_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} />
+      </div>
+
+      <h2>Post subject variants (ENG-1270)</h2>
+      <p style={{ color: "var(--muted)", maxWidth: 640, marginBottom: 16 }}>
+        The head is the ONLY thing that changes. A horse post keeps the horse name over its
+        trainer; a trainer post heads with the trainer, reads{" "}
+        <em>stable · location</em> on line two and links to the trainer profile; a StablePass post
+        takes the S-mark on brand green, the lowercase <em>stablepass</em> wordmark and its
+        editorial byline, and is deliberately <em>not</em> a link. Media, label pill, reactions,
+        caption and bookmark are identical on all three.
+      </p>
+      <div style={{ maxWidth: 520, marginBottom: 40 }} data-testid="subject-gallery">
+        <PostCard post={SUBJECT_HORSE_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
+        <PostCard post={SUBJECT_TRAINER_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
+        <PostCard post={SUBJECT_STABLEPASS_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
       </div>
 
       <h2>Stable update card (post.type = text | news)</h2>
