@@ -7,10 +7,16 @@
  *
  * Nav target for "Subscription", and where both hero CTAs and the nav CTA land.
  *
- * COPY NOTE, deliberate and signed off: this card says "$19 per month" and
- * "Cancel anytime", which does not match the non-renewing 30-day pass ENG-567
- * shipped. ENG-588's resolved open question is explicit — ship it verbatim, the
- * mismatch is a client conversation recorded on the epic, not a bug to fix here.
+ * COPY NOTE, rewritten by ENG-1324 (Pricing v2). This card used to carry the
+ * signed-off mockup's "$19 per month" and the "$9/month for your first 6 months"
+ * launch offer. Both are retired: the price is A$9.99 per month after a 30-day
+ * free trial, identical on the website, the App Store and Google Play (epic
+ * ENG-1321, locked decisions 1, 2 and 5).
+ *
+ * The mockup in the design tree still says $19, so this file now deliberately
+ * DIVERGES from it. That divergence is not silent — every replaced run is listed
+ * in PRICING_V2_COPY in `test/marketing-home.test.tsx`, which is what keeps the
+ * copy freeze meaningful instead of just switched off.
  *
  * The two CTAs both point at `#top` in the mockup because the concept had no
  * checkout behind it. W5 repoints them; leaving them as the mockup has them keeps
@@ -37,21 +43,22 @@ export default function Pricing() {
           <span className="eyebrow">Subscription</span>
           <h2>One simple subscription.</h2>
           <p className="lead">
-            $19 per month for behind-the-scenes racing content from participating stables. Simple monthly billing.
-            Cancel anytime. No lock-in contract.
+            30 days free, then A$9.99 per month for behind-the-scenes racing content from participating stables.
+            Simple monthly billing. Cancel anytime. No lock-in contract.
           </p>
         </div>
         <div className="price-card rv" suppressHydrationWarning>
           <div className="pc-top">
             <span>STABLEPASS. SUBSCRIBER</span>
-            <span style={{ color: "#EDD9A8", fontWeight: 700 }}>LAUNCH OFFER</span>
+            <span style={{ color: "#EDD9A8", fontWeight: 700 }}>30 DAYS FREE</span>
           </div>
-          {/* Standing price leads; the launch price sits prominently under it. */}
+          {/* The standing price leads; the trial sits prominently under it, in the
+              slot the retired launch offer used to occupy. */}
           <div className="price-num">
-            $19<small>/month</small>
+            A$9.99<small>/month</small>
           </div>
-          <p className="price-launch">Launch Offer — $9/month for your first 6 months.</p>
-          <p className="price-intro">$19/month thereafter. Cancel anytime. No lock-in contract.</p>
+          <p className="price-launch">Start with 30 days free.</p>
+          <p className="price-intro">Then A$9.99 per month. Cancel anytime. No lock-in contract.</p>
           <ul className="price-list">
             {INCLUDED.map((item) => (
               <li key={item}>
@@ -63,14 +70,14 @@ export default function Pricing() {
             ))}
           </ul>
           <a className="btn cta-trial" href="/start">
-            Get the $9/month offer
+            Start your 30 days free
           </a>
           <a className="btn cta-join" href="/start">
             Start Your Subscription
           </a>
           <p className="price-fine">
-            $9/month for your first 6 months when you sign up on or before 30 November 2026. stablepass. provides
-            content access and racing experiences only.
+            The same A$9.99 per month on the website, the App Store and Google Play. stablepass. provides content
+            access and racing experiences only.
           </p>
           <img className="pc-mark" src="/marketing/ec7c405b.png" alt="" aria-hidden="true" />
         </div>

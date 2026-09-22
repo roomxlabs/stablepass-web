@@ -44,9 +44,17 @@ describe("sign-in bottom CTA", () => {
     expect(text).toMatch(/account/i);
   });
 
-  // ENG-1003 retired the trial: the CTA now says only "Create an account",
-  // with no offer attached — the price the member pays is quoted at /checkout,
-  // from Stripe, not advertised here.
+  // DO NOT DELETE THIS AS OBSOLETE. ENG-1003 retired the trial and ENG-1324
+  // brought it back (30 days free, then A$9.99), so the original reason for this
+  // assertion is gone — but the assertion is not, and the two reasons that
+  // outlive the offer are the ones that matter:
+  //   1. this CTA sits under "Forgot your password?", so its reader usually
+  //      already HAS an account; a "Start 30 days free" tail here read as a way
+  //      back in and produced duplicate accounts (ENG-583/1);
+  //   2. trial eligibility is per person (`trial_used_at`), so a blanket promise
+  //      would over-promise to exactly the returning member on this screen.
+  // The price and the trial the member actually gets are quoted at /checkout,
+  // from Stripe.
   it("no longer carries a trial or free-days value proposition", () => {
     const { container } = render(<SignInForm />);
     expect(foot(container).textContent ?? "").not.toMatch(/trial|30 days|free/i);

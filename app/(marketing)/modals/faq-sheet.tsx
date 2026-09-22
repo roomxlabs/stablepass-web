@@ -23,21 +23,22 @@ import Sheet from "./sheet";
  * The sheet's own thirteen, verbatim from the mockup's `#sheet-faq`.
  *
  * Deliberately NOT shared with `sections/faq.tsx`, which renders a curated
- * seven with slightly different wording (its price answer mentions the trial).
- * That difference is the mockup's, not drift: the section teases and the sheet
- * is the full list, which is what "View all" means.
+ * subset. That difference is the mockup's, not drift: the section teases and the
+ * sheet is the full list, which is what "View all" means. ENG-1324 gave the two
+ * price answers the same wording, since there is now exactly one price to state.
  */
 const FAQS: ReadonlyArray<{ q: string; a: string; launchOnly?: boolean }> = [
   {
     q: "What is stablepass.?",
     a: "stablepass. is a monthly racing experience subscription that gives subscribers access to behind-the-scenes content from participating thoroughbred racing stables.",
   },
+  // ENG-1324: the "Is there an introductory offer?" entry is deleted, not
+  // reworded — the six-month promo is retired (ENG-1321, decision 5).
   {
     launchOnly: true,
-    q: "Is there an introductory offer?",
-    a: "Yes. New subscribers who join on or before 30 November 2026 pay $9 per month for their first 6 months, then $19 per month thereafter. Cancel anytime.",
+    q: "How much does stablepass. cost?",
+    a: "stablepass. is 30 days free, then A$9.99 per month. Cancel anytime. The price is the same on the website, the App Store and Google Play.",
   },
-  { launchOnly: true, q: "How much does stablepass. cost?", a: "stablepass. subscription is $19 per month." },
   {
     q: "What do subscribers receive?",
     a: "Subscribers receive access to stable updates, photos, videos, horse progress reports, race previews, race follow-ups, and other subscription-only racing content from participating stables.",

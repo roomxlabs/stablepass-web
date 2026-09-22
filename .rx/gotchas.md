@@ -2649,3 +2649,57 @@ happens).
 on an untouched `origin/feature/iap-v1` too. `test/marketing-marquee.test.ts` can add an 11th
 (5s timeout right after `npm run build`); re-run it alone before believing it. → Baseline with
 `git stash` in the SAME worktree and compare the failing set; disclose it in the PR.
+
+## Marketing copy has a TWO-LAYER freeze against a mockup that is not on this machine
+`test/marketing-home.test.tsx` diffs the rendered page against the committed
+`test/fixtures/marketing-copy.json` (layer 1), and diffs that fixture against the
+designer's `10-marketing-site/deploy/src/mockup.html` (layer 2). `marketing-shell.test.tsx`
+does the same for `marketing.css`.
+
+**The mockup is not in any checkout here** — `10-marketing-site/` does not exist under
+`~/Documents`, and the older `dev-handover/StablePass-mockups/` tree is NOT it. So
+**10 tests fail out of the box, on an untouched base**, all with "mockup fixture not
+found". Baseline before you conclude you broke something:
+
+```sh
+git stash push -u && npx vitest run test/marketing-home.test.tsx test/marketing-shell.test.tsx; git stash pop
+```
+
+`$STABLEPASS_MARKETING_MOCKUP` points the guard at the file if you ever have it.
+
+## Changing marketing copy on purpose: EXTEND the freeze, never regenerate the fixture
+When the product deliberately diverges from the signed-off mockup (ENG-1324 moved the
+site off A$19 to "30 days free, then A$9.99"), regenerating `marketing-copy.json` is the
+obvious move and is wrong twice: it makes layer 1 circular (the page checked against
+itself, freezing whatever drifted in alongside), and layer 2 goes red anyway because the
+mockup still says $19.
+
+The pattern the file already established for ENG-729 is the one to follow — a per-block
+table applied to the EXPECTED runs before the comparison, with a pin that fails if an
+entry stops matching so the list cannot rot into a permanent hole. ENG-1324 added
+`PRICING_V2_COPY` (replacements **and** `to: null` deletions) next to `WAITLIST_ADDITIONS`.
+Two hardcoded COUNTS sit outside that mechanism and must be updated by hand when an item
+is added or removed: `marketing-home.test.tsx` "builds the FAQ from native
+details/summary" (was 7) and `marketing-sheets.test.tsx` "opens the FAQ sheet …" (was 13).
+
+## The marketing site ships `data-cta-mode="waitlist"` — all pricing copy is CSS-hidden
+`app/(marketing)/layout.tsx` hardcodes `data-cta-mode="waitlist"`, and marketing.css hides
+`.price-sec`, every `.launch-only` and every `.cta-trial` in that mode. So a screenshot of
+`/` shows **none** of the price/trial copy, and a copy change there is invisible in
+production until someone flips that attribute to `"trial"`. Screenshot with the attribute
+flipped in the page (`e2e/eng-1324-pricing-copy.spec.ts` does this) and say so in the PR —
+otherwise the evidence looks like the change did not land. Flipping the mode is a separate,
+un-ticketed launch-day action; do not assume shipping the copy ships the price.
+
+## The funnel is deliberately copy-free about price and trial — two tests enforce it
+`/start` and `/signin` carry no offer, and it is not an oversight: `test/sign-in-form.test.tsx`
+asserts `.auth-foot` matches no `/trial|30 days|free/i` (a "Start 30 days free" tail there
+produced duplicate accounts, ENG-583/1) and `test/trial-start-form.test.tsx` asserts the form
+body has no `/trial/i` or `/30 days/i`. A ticket telling you to add "30 days free" to the
+funnel is asking you to turn both red. Eligibility is per-person (`trial_used_at`), so a
+blanket promise there over-promises to the returning member most likely to be reading it.
+The honest figure is quoted at `/checkout`, from Stripe.
+
+## `vitest --reporter=basic` is not a reporter in this repo
+vitest 4.x: `--reporter=basic` throws "Failed to load custom Reporter from basic" before any
+test runs, which reads like a broken suite. Use the default reporter, or `--reporter=dot`.

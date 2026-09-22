@@ -31,9 +31,11 @@ export default async function StartPage() {
               column has no mobile breakpoint and clips badly on a phone
               (pre-existing, see .rx/gotchas.md), where the quote wraps to
               roughly one word per line — so length here is a fidelity cost, not
-              a copy preference. It also must not pitch anything the funnel no
-              longer offers: the trial is retired and the price the member
-              actually pays is quoted at /checkout, from Stripe. */}
+              a copy preference. It also must not pitch an offer: ENG-1324 brings
+              back a 30-day trial, but eligibility is per person (`trial_used_at`,
+              W3), so a blanket promise here would over-promise to a returning
+              member. The price and the trial the member actually gets are quoted
+              at /checkout, from Stripe. */}
           <p className="quote">
             &ldquo;Every update, every race day report, every replay from the yard.&rdquo;
           </p>

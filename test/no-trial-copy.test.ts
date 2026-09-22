@@ -2,79 +2,75 @@ import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { resolve, join, relative } from "node:path";
 
-// ENG-1003 retired the free trial from the signup funnel. This is a grep-style
-// guard against the copy that pitched it coming back.
+// ENG-1324 TURNED THIS FILE AROUND. Read this before editing it.
 //
-// It is a REAL guard, not scoped to the files this ticket touched — it walks
-// each root recursively, so any future file under them is covered.
+// It used to be ENG-1003's guard, banning /free trial/, /30 days free/,
+// /30 days,? on us/ and /no credit card/ from the funnel: the trial had been
+// retired and the guard kept its copy from creeping back.
 //
-// THE PATTERN LIST IS THE WHOLE TEST, so it is written against the strings that
-// actually existed rather than against the phrase "free trial". The first
-// version of this file banned /free trial/, /30 days free/ and /30 days, on us/
-// — and the retired aside quote was "30 days on us — no credit card, no
-// auto-charge", which has no comma and contains neither of the other two. The
-// guard would have waved back in the single largest piece of trial copy it was
-// written to keep out. Optional comma, and `no credit card` in its own right:
-// with nothing to be free of, offering to not ask for a card is the same pitch.
+// Pricing v2 (ENG-1321) reinstates the trial — 30 days free, then A$9.99 per
+// month, the same price on the website, the App Store and Google Play — so the
+// old bar is not merely obsolete, it would fail the copy we now ship on purpose.
+// The trial copy is no longer the thing to keep out. THE OLD PRICE IS.
+//
+// THE PATTERN LIST IS STILL THE WHOLE TEST, and the original's hard-won lesson
+// carries over unchanged, so it is repeated here rather than left in git
+// history: write the patterns against THE STRINGS THAT ACTUALLY EXISTED, never
+// against the phrase. ENG-1003's first draft banned the phrase "free trial" and
+// would have waved through the single largest piece of trial copy on the site,
+// because that copy never used the words.
+//
+// A note on what this bar actually is, because the header used to over-claim it:
+// it is NOT "any bare 19 anywhere". A naked `const PRICE_AUD = 19;` is invisible
+// to a line-oriented grep that must also leave `const GRID = 19` alone, and
+// pretending otherwise would be the same false comfort this file exists to warn
+// about. The enforced bar is: **a 19 wearing a currency sign, or a 19 sitting
+// next to a period word on the same line** — which is every form the retired
+// price actually took on this site.
+//
+// The same trap, in its Pricing v2 shape, is the price card. The old markup was
+//
+//     <div className="price-num">
+//       $19<small>/month</small>
+//     </div>
+//
+// so a pattern written against the PHRASE — /19 per month/, /nineteen dollars/,
+// even /19\/month/ — matches nothing at all there: the number and the period are
+// separated by a JSX tag. That line was the biggest, boldest price on the page.
+// Hence the rule below: the bar is the bare `19` LITERAL, matched either by its
+// currency sign or by a period word that a tag is allowed to sit in front of.
 const BANNED = [
-  /free trial/i,
-  /30 days free/i,
-  /30 days,? on us/i,
-  /no credit card/i,
-  /\bfree for \d+ days/i,
-  /\bdays,? (?:on|free) (?:us|of)\b/i,
+  // `$19`, `A$19`, `AU$19`, `$19.00`, `$ 19` — the literal wearing its sign.
+  /A?U?\$\s*19\b/i,
+  // The other half of the retirement (ENG-1321, decision 5): the six-month promo.
+  // The `19` bar alone would let "$9/month for your first 6 months" creep back,
+  // and that string is now one character from the LIVE price — a stray promo line
+  // reads as almost-correct, which is the worst kind of wrong. Matched on the
+  // promo's own phrase, which `A$9.99 per month` cannot collide with.
+  /first (?:6|six) months/i,
+  // The same number with no sign, next to a period word: "19 per month",
+  // "19/month", "19 a month", "19.00 per month". `(?:<[^>]*>)?` is the whole
+  // point — it steps over the `<small>` in `$19<small>/month</small>`, so the
+  // price card is caught twice over rather than not at all.
+  /\b19(?:\.\d{2})?\s*(?:<[^>]*>)?\s*(?:\/\s*|per |a )month/i,
 ];
 
-// The funnel itself, plus every root whose pending entry has since been paid
-// off. ENG-1003 owns the first two; ENG-1008 cleared `components` and
-// `app/onboarding` (see the note under PENDING_ROOTS). The bar is zero hits
-// and stays zero.
-const FUNNEL_ROOTS = ["app/start", "app/signin", "components", "app/onboarding"];
-
-// Roots where trial copy still exists and is NOT this slice's to remove. Each
-// entry names the exact offending text, so the assertion is "the offenders are
-// a SUBSET of these" rather than "equal to these".
+// Every root that renders a price to a member or a visitor. The bar is ZERO
+// hits and stays zero — there is no pending list, because ENG-1324 left no
+// offender behind in any of them.
 //
-// Keyed on TEXT, never on a line number. The comment-stripping below preserves
-// the line count precisely so a reported line is a real one — but an allowlist
-// keyed on line numbers is still coupled to a sibling branch's whitespace, and
-// it rots silently in both directions: a comment added above shifts the number
-// and false-reds their PR, while a genuinely NEW trial string landing on the
-// allowed line is waved straight through. Text has neither failure mode.
+// `app/(member)` is scanned but NOT edited by ENG-1324: those screens are W3's
+// (ENG-1328) and they must keep retrieving the amount from Stripe rather than
+// printing a literal. Scanning a root you do not own is the point — this guard
+// is what makes "never hardcode the price" checkable instead of aspirational.
 //
-// This gives the property worth having in all three directions:
-//   - NEW trial copy under any of these roots goes red today;
-//   - the owning ticket deleting its line does NOT turn this red on their
-//     branch, so the guard cannot hold their PR hostage;
-//   - once they land, the entry is dead and should be deleted, at which point
-//     that root gets the same zero bar as the funnel.
-const PENDING_ROOTS: Record<string, string[]> = {
-  // ENG-1002 (P4 — member cancel, the /account UI, hasAccess()). In progress in
-  // a sibling worktree; editing it here would break the collision guarantee.
-  "app/(member)": [
-    "You're on a free trial. When it ends you can choose to buy 30 days — nothing happens automatically and we have no card on file.",
-    "Your free trial has ended. Buy 30 days to pick up where you left off.",
-  ],
-};
-
-// ENG-1008 landed and removed two of the entries this list carried:
-//
-//   components:       "Your free trial has ended" + its body, in access-wall.tsx
-//   "app/onboarding": "30 days free", in the /onboarding nav greeting
-//
-// They were parked here deliberately by ENG-1003 so the copy could not be
-// forgotten — the guard stayed red-on-anything-new while naming the exact debt
-// that was still outstanding. Both roots are now scanned at the same ZERO bar as
-// the funnel, via FUNNEL_ROOTS above: note that DELETING an entry is only half
-// the job, because a root named in neither list is not scanned at all and the
-// guard would silently stop covering it. Promote, don't just delete.
-//
-// Deleting the entries IS the fix landing; do not re-add a root here to make a
-// red go away.
-//
-// `app/(member)` is left in place on purpose: ENG-1002 has landed and its two
-// strings look dead, but retiring that entry is ENG-1002's cleanup to claim, not
-// this ticket's — the subset semantics mean a stale entry costs nothing.
+// A root named in no list is not scanned at all. If a root ever genuinely needs
+// a temporary exception, give it a TEXT-KEYED allowlist (never a line number:
+// line numbers couple this file to a sibling branch's whitespace and rot
+// silently in both directions) and promote it back to zero when the owner
+// lands — deleting an entry without promoting the root silently stops covering
+// it.
+const PRICED_ROOTS = ["app/(marketing)", "app/start", "app/signin", "app/(member)", "components"];
 
 function filesUnder(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -99,8 +95,9 @@ function offendersUnder(root: string): { at: string; text: string }[] {
     const body = raw.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ""));
     body.split("\n").forEach((line, i) => {
       // Skip a line that is itself a // comment, so an engineering note ABOUT
-      // the trial (like the one at the top of this file) cannot trip a guard
-      // meant for copy a member reads.
+      // the old price (like the ones at the top of this file, and the ones
+      // ENG-1324 left in the marketing sections explaining what changed) cannot
+      // trip a guard meant for copy a member reads.
       if (line.trim().startsWith("//")) return;
       if (BANNED.some((pattern) => pattern.test(line))) {
         hits.push({ at: `${relative(process.cwd(), file)}:${i + 1}`, text: line.trim() });
@@ -111,25 +108,71 @@ function offendersUnder(root: string): { at: string; text: string }[] {
   return hits;
 }
 
-describe("no free-trial copy remains in the signup funnel", () => {
-  for (const root of FUNNEL_ROOTS) {
+describe("no A$19 price literal survives anywhere a member can read one", () => {
+  for (const root of PRICED_ROOTS) {
     it(`scans every .ts/.tsx file under ${root}`, () => {
-      expect(offendersUnder(root).map((h) => `${h.at}: ${h.text}`)).toEqual([]);
+      expect(
+        offendersUnder(root).map((h) => `${h.at}: ${h.text}`),
+        `the price is A$9.99 after a 30-day trial (ENG-1321) — and a checkout screen must read it from Stripe, not print a literal`,
+      ).toEqual([]);
     });
   }
 });
 
-describe("the member-facing app grows no NEW free-trial copy", () => {
-  for (const [root, pending] of Object.entries(PENDING_ROOTS)) {
-    it(`scans every .ts/.tsx file under ${root}`, () => {
-      const unexpected = offendersUnder(root)
-        .filter((hit) => !pending.some((known) => hit.text.includes(known)))
-        .map((hit) => `${hit.at}: ${hit.text}`);
+/**
+ * NON-VACUITY PIN.
+ *
+ * A grep guard whose patterns have quietly stopped matching anything reports a
+ * perfect green, and `.rx/gotchas.md` records this repo losing a real red to
+ * exactly that (ENG-991: a fidelity guard that skipped when its fixture was
+ * unreachable went from "1 failed" to "all green"). The scan above can rot the
+ * same way — a refactor to `BANNED`, or a walk that silently returns no files,
+ * and it passes forever while checking nothing.
+ *
+ * So the patterns are exercised here against the strings that were actually on
+ * the site before ENG-1324, including the JSX-split price card, and against the
+ * copy we now ship on purpose. If someone weakens a pattern, this goes red in
+ * the same run.
+ */
+describe("the guard itself still bites", () => {
+  const matches = (line: string) => BANNED.some((p) => p.test(line));
 
-      expect(
-        unexpected,
-        `new free-trial copy under ${root} — the trial is retired (ENG-999/ENG-1003)`,
-      ).toEqual([]);
-    });
-  }
+  it.each([
+    ["$19 per month for behind-the-scenes racing content from participating stables."],
+    ["$19<small>/month</small>"],
+    ["$19/month thereafter. Cancel anytime. No lock-in contract."],
+    ["Join stablepass. $9/month for your first 6 months, then $19/month."],
+    ["stablepass. subscription is $19 per month."],
+    ['a: "… pay $9 per month for their first 6 months, then $19 per month thereafter."'],
+    ['const PRICE = "A$19.00";'],
+    ["19 per month"],
+    ["Launch Offer \u2014 $9/month for your first 6 months."],
+    ["pay $9 per month for their first six months"],
+  ])("catches the retired price literal: %s", (line) => {
+    expect(matches(line)).toBe(true);
+  });
+
+  it.each([
+    ["30 days free, then A$9.99 per month. Cancel anytime."],
+    ["A$9.99<small>/month</small>"],
+    ["The same A$9.99 per month on the website, the App Store and Google Play."],
+    ["Start your 30 days free"],
+    // The bar is a PRICE literal, not the digits. These must stay green or the
+    // guard becomes a tax on unrelated code.
+    ["const GRID = 19;"],
+    ["signed up on 19 September 2026"],
+    ["unitAmount: 1900,"],
+    ['width={19} height={19}'],
+    // The live price must never collide with the promo pattern above.
+    ["A$9.99 per month, billed monthly"],
+    ["30 days free, then A$9.99"],
+  ])("leaves legitimate copy and code alone: %s", (line) => {
+    expect(matches(line)).toBe(false);
+  });
+
+  it("actually walked the tree — every scanned root yielded source files", () => {
+    for (const root of PRICED_ROOTS) {
+      expect(sourceFiles(root).length, `no .ts/.tsx found under ${root} — the walk is broken`).toBeGreaterThan(0);
+    }
+  });
 });
