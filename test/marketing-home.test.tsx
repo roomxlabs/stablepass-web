@@ -236,7 +236,9 @@ describe("marketing home — works with scripting off", () => {
     const { container } = render(<HomeSections />);
     const items = [...container.querySelectorAll("#faq .faq > details")];
 
-    expect(items).toHaveLength(7);
+    // Seven until ENG-1324 deleted the "Is there an introductory offer?" entry
+    // with the six-month promo it answered (ENG-1321, decision 5).
+    expect(items).toHaveLength(6);
     for (const item of items) {
       expect(item.querySelector("summary")).not.toBeNull();
       expect(item.querySelector("p.a")).not.toBeNull();
@@ -419,10 +421,127 @@ describe("marketing home — copy matches the frozen fixture", () => {
     "section#.": ["Email address", "Join the waitlist"],
   };
 
+/**
+ * ENG-1324 — Pricing v2's copy, layered OVER the frozen fixture the same way
+ * ENG-729's waitlist additions are, and for the same reason.
+ *
+ * The fixture is distilled from the signed-off mockup, and the mockup sells
+ * A$19 a month with a "$9/month for your first 6 months" launch offer. The
+ * product no longer does: it is 30 days free, then A$9.99 per month, the same
+ * price on the website, the App Store and Google Play (epic ENG-1321, locked
+ * decisions 1, 2 and 5). So the page must now deliberately DIVERGE from its own
+ * design source.
+ *
+ * Regenerating the fixture is the obvious move and is the wrong one, twice over:
+ * it makes layer 1 circular (the page checked against itself), and layer 2 below
+ * would go red anyway, because it diffs the fixture against the mockup — which
+ * still says $19 and is not this ticket's to rework.
+ *
+ * So the divergence is listed, per block, in the mockup's own order, and applied
+ * to the EXPECTED runs before the comparison. `to: null` deletes a run. This
+ * keeps every property the copy freeze is for:
+ *
+ *   - the list cannot go stale: every `from` must still appear in the fixture,
+ *     or `unused` is non-empty and this fails. When the mockup is finally
+ *     reworked to A$9.99, this test tells you to delete the entries rather than
+ *     leaving a permanent hole;
+ *   - nothing else may drift: after the substitution the runs must equal the
+ *     fixture exactly, so any OTHER added, removed or reordered string still
+ *     fails, exactly as before;
+ *   - the deviation is auditable in one place, in review, instead of being
+ *     spread across five TSX files and invisible.
+ */
+const PRICING_V2_COPY: Record<string, { from: string; to: string | null }[]> = {
+  "header#top.hero": [
+    { from: "LAUNCH OFFER \u00b7 $9/MONTH FOR YOUR FIRST 6 MONTHS", to: "30 DAYS FREE \u00b7 THEN A$9.99/MONTH" },
+    { from: "Launch Offer \u2014 $9/month for your first 6 months.", to: "Start with 30 days free." },
+    {
+      from: "$19/month thereafter. Cancel anytime. No lock-in contract.",
+      to: "Then A$9.99 per month. Cancel anytime. No lock-in contract.",
+    },
+    { from: "Get the $9/month offer", to: "Start your 30 days free" },
+    {
+      from: "$9/month for your first 6 months when you sign up on or before 30 November 2026.",
+      to: "The same A$9.99 per month on the website, the App Store and Google Play.",
+    },
+  ],
+  "section#subscription.sec price-sec": [
+    {
+      from: "$19 per month for behind-the-scenes racing content from participating stables. Simple monthly billing. Cancel anytime. No lock-in contract.",
+      to: "30 days free, then A$9.99 per month for behind-the-scenes racing content from participating stables. Simple monthly billing. Cancel anytime. No lock-in contract.",
+    },
+    { from: "LAUNCH OFFER", to: "30 DAYS FREE" },
+    // The price card splits the amount from the period across a `<small>`, so
+    // the mockup gives them as two runs. Both move.
+    { from: "$19", to: "A$9.99" },
+    { from: "Launch Offer \u2014 $9/month for your first 6 months.", to: "Start with 30 days free." },
+    {
+      from: "$19/month thereafter. Cancel anytime. No lock-in contract.",
+      to: "Then A$9.99 per month. Cancel anytime. No lock-in contract.",
+    },
+    { from: "Get the $9/month offer", to: "Start your 30 days free" },
+    {
+      from: "$9/month for your first 6 months when you sign up on or before 30 November 2026. stablepass. provides content access and racing experiences only.",
+      to: "The same A$9.99 per month on the website, the App Store and Google Play. stablepass. provides content access and racing experiences only.",
+    },
+  ],
+  // The CTA band — the one section the mockup gives neither an id nor a class.
+  "section#.": [
+    {
+      from: "Join stablepass. $9/month for your first 6 months, then $19/month.",
+      to: "Join stablepass. 30 days free, then A$9.99 per month.",
+    },
+    { from: "Get the $9/month offer", to: "Start your 30 days free" },
+  ],
+  "section#faq.sec": [
+    // Deleted outright, not reworded: the six-month promo is retired, and a
+    // reworded promo answer would keep pitching something we do not sell.
+    { from: "Is there an introductory offer?", to: null },
+    {
+      from: "Yes. New subscribers who join on or before 30 November 2026 pay $9 per month for their first 6 months, then $19 per month thereafter. Cancel anytime.",
+      to: null,
+    },
+    // The cost question survives — a pricing FAQ that cannot state the price is
+    // a regression — and now carries the same-price-everywhere promise.
+    {
+      from: "stablepass. is $9 per month for your first 6 months, then $19 per month thereafter. Cancel anytime.",
+      to: "stablepass. is 30 days free, then A$9.99 per month. Cancel anytime. The price is the same on the website, the App Store and Google Play.",
+    },
+  ],
+};
+
+/**
+ * Applies the divergence to one block's expected runs, and reports any entry
+ * that matched nothing so the list cannot rot into a permanent hole.
+ */
+function withPricingV2(signature: string, runs: string[]): { expected: string[]; unused: string[] } {
+  const pending = [...(PRICING_V2_COPY[signature] ?? [])];
+  const expected: string[] = [];
+
+  for (const run of runs) {
+    // One occurrence at a time, in order — mirroring WAITLIST_ADDITIONS above.
+    // No run is currently listed twice within one block, so this is not load
+    // bearing today; it is the correct shape for when one is, because a
+    // set-based lookup would collapse a repeat the mockup legitimately carries.
+    // (Do not "simplify" it to a Set on the grounds that it changes nothing.)
+    const at = pending.findIndex((entry) => entry.from === run);
+    if (at === -1) {
+      expected.push(run);
+      continue;
+    }
+    const [entry] = pending.splice(at, 1);
+    if (entry.to !== null) expected.push(entry.to);
+  }
+
+  return { expected, unused: pending.map((entry) => entry.from) };
+}
+
   it("renders every string verbatim, plus only ENG-729's pinned waitlist copy", () => {
     const { container } = render(<HomeSections />);
     blocksOf(container, "main").forEach((block, i) => {
-      const { signature, runs: want } = fixture.blocks[i];
+      const { signature, runs } = fixture.blocks[i];
+      const { expected: want, unused } = withPricingV2(signature, runs);
+      expect(unused, `stale ENG-1324 pricing entry for ${signature} — the fixture no longer carries it`).toEqual([]);
 
       // Subtracted one occurrence at a time, not with a set: "Join the waitlist"
       // is both the button label and part of the line above it in the hero, and

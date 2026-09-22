@@ -253,7 +253,38 @@ describe("dialog shell — the focus contract", () => {
 
     expect(sheet).toHaveAttribute("open");
     expect(document.activeElement).toBe(sheet.querySelector("[data-close]"));
-    expect(sheet.querySelectorAll("details")).toHaveLength(13);
+    // Thirteen until ENG-1324 deleted the "Is there an introductory offer?"
+    // entry with the six-month promo it answered (ENG-1321, decision 5).
+    expect(sheet.querySelectorAll("details")).toHaveLength(12);
+  });
+
+  /**
+   * ENG-1324. The sheet has NO fixture freeze of its own — the copy fidelity
+   * layers in `marketing-home.test.tsx` cover `HomeSections`, and this file
+   * otherwise only counts `<details>`. A count cannot tell a right price from a
+   * wrong one, so the sheet's price answer was the one string this ticket
+   * changed that nothing asserted: a typo, a stale $19, or a dropped store-parity
+   * clause would all have shipped green.
+   *
+   * Pinned verbatim, and paired with a negative on the retired promo so the
+   * deleted entry cannot quietly come back through this surface either.
+   */
+  it("states the new price, once, with the store-parity promise", () => {
+    const { container } = renderFaq();
+    const sheet = container.querySelector("#sheet-faq")!;
+
+    const cost = [...sheet.querySelectorAll("details")].find((d) =>
+      d.querySelector("summary")?.textContent?.includes("How much does stablepass. cost?"),
+    );
+    expect(cost, "the sheet no longer answers what stablepass. costs").toBeDefined();
+    expect(cost!.querySelector("p.a")?.textContent).toBe(
+      "stablepass. is 30 days free, then A$9.99 per month. Cancel anytime. The price is the same on the website, the App Store and Google Play.",
+    );
+
+    const all = sheet.textContent ?? "";
+    expect(all).not.toMatch(/\$19|19 per month/);
+    expect(all).not.toMatch(/introductory offer/i);
+    expect(all).not.toMatch(/first (?:6|six) months/i);
   });
 
   it("closes on Escape and gives focus back to the trigger", () => {

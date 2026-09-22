@@ -15,7 +15,14 @@
  */
 
 /**
- * `launchOnly` marks the two pricing questions. Pre-launch they are hidden with
+ * ENG-1324 (Pricing v2) deleted the "Is there an introductory offer?" entry
+ * outright — the six-month promo is retired (epic ENG-1321, decision 5), and a
+ * reworded promo answer would keep pitching something we no longer sell. The
+ * cost answer survives, because a pricing FAQ that cannot say the price is a
+ * regression; it now carries the trial, the one standing price, and the
+ * same-price-everywhere promise the epic exists to deliver.
+ *
+ * `launchOnly` marks the pricing question. Pre-launch it is hidden with
  * the rest of the pricing (Naufal, 2 Sep) rather than deleted, for the same
  * reason as every other hide in this mode: the copy freeze requires the text to
  * stay in the DOM, and the launch switch-back is then a mode flip with no copy
@@ -28,13 +35,8 @@ const FAQS = [
   },
   {
     launchOnly: true,
-    q: "Is there an introductory offer?",
-    a: "Yes. New subscribers who join on or before 30 November 2026 pay $9 per month for their first 6 months, then $19 per month thereafter. Cancel anytime.",
-  },
-  {
-    launchOnly: true,
     q: "How much does stablepass. cost?",
-    a: "stablepass. is $9 per month for your first 6 months, then $19 per month thereafter. Cancel anytime.",
+    a: "stablepass. is 30 days free, then A$9.99 per month. Cancel anytime. The price is the same on the website, the App Store and Google Play.",
   },
   {
     q: "What do subscribers receive?",
