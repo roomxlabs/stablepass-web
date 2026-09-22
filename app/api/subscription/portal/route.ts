@@ -11,10 +11,16 @@
 //
 // SELECT only on `subscription` — never `.update()`. Writes stay on the
 // definer RPC / the webhook.
+//
+// ENG-1192: a row billed by the App Store / Google Play has no portal of ours —
+// it answers `409 managed_by_store` (JSON, not a redirect). The row is read
+// FIRST, before any Stripe configuration is consulted, so a store member gets
+// the honest answer even when Stripe is unconfigured and never reaches Stripe.
 import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { supabaseServer } from "@/lib/supabase/server";
 import { UNAUTH, fail } from "@/lib/api/envelope";
+import { isStoreManaged, MANAGED_BY_STORE_MESSAGE } from "@/app/(member)/account/billing";
 
 function returnUrl(req: Request): string {
   const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
@@ -31,20 +37,9 @@ export async function GET(req: Request) {
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return UNAUTH();
 
-  const stripe = getStripe();
-  if (!stripe) return fail("stripe_unavailable", "Payment provider not configured.", 502);
-
-  const configuration = process.env.STRIPE_PORTAL_CONFIGURATION_ID?.trim();
-  if (!configuration) {
-    console.error(
-      "[portal] STRIPE_PORTAL_CONFIGURATION_ID is unset — refusing to create an unpinned session",
-    );
-    return fail("stripe_error", "Payment provider unavailable.", 502);
-  }
-
   const { data, error } = await sb
     .from("subscription")
-    .select("stripe_customer_id")
+    .select("stripe_customer_id,provider")
     .eq("user_id", user.id)
     .maybeSingle();
   if (error && error.code !== "PGRST116") {
@@ -56,8 +51,23 @@ export async function GET(req: Request) {
     return fail("stripe_error", "Payment provider unavailable.", 502);
   }
 
-  const customerId =
-    (data as { stripe_customer_id: string | null } | null)?.stripe_customer_id ?? null;
+  const row = data as { stripe_customer_id: string | null; provider: string | null } | null;
+  if (isStoreManaged(row)) {
+    return fail("managed_by_store", MANAGED_BY_STORE_MESSAGE, 409);
+  }
+
+  const stripe = getStripe();
+  if (!stripe) return fail("stripe_unavailable", "Payment provider not configured.", 502);
+
+  const configuration = process.env.STRIPE_PORTAL_CONFIGURATION_ID?.trim();
+  if (!configuration) {
+    console.error(
+      "[portal] STRIPE_PORTAL_CONFIGURATION_ID is unset — refusing to create an unpinned session",
+    );
+    return fail("stripe_error", "Payment provider unavailable.", 502);
+  }
+
+  const customerId = row?.stripe_customer_id ?? null;
   if (!customerId) {
     return fail("no_stripe_customer", "There's no billing account to manage yet.", 409);
   }
