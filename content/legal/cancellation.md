@@ -126,7 +126,7 @@ Stablepass may request additional information to assess your claim.
 
 The standard Stablepass subscription price is A$9.99 per month (including GST). The same monthly price applies whether you subscribe on the Stablepass website, through the Apple App Store or through Google Play.
 
-Eligible new subscribers may start their subscription with a free trial (“Free Trial”). On the Stablepass website the Free Trial lasts 30 days. In the App Store and Google Play, the free trial is offered by Apple or Google, and its length and eligibility are shown in the store before you subscribe.
+Eligible subscribers may start their subscription with a free trial (“Free Trial”). On the Stablepass website the Free Trial lasts 30 days. In the App Store and Google Play, the free trial is offered by Apple or Google, and its length and eligibility are shown in the store before you subscribe.
 
 Under the Free Trial:
 

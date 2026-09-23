@@ -49,7 +49,7 @@ A small amount of information survives deletion because Stablepass is required t
 
 - Records of payments already made, including invoices, are retained by Stablepass and its payment provider to meet tax, accounting and financial record-keeping obligations. As part of deletion Stablepass asks its payment provider to unlink those records from your account, so that they are no longer connected to your profile.
 - A record that a deletion happened, with the date and an internal identifier for the deleted account, is retained so Stablepass can demonstrate the request was honoured. That identifier is not linked to any remaining profile and is not used to contact you.
-- A one-way, irreversible form of the phone number on the deleted account is retained, so that the same number cannot be attached to a new account. It cannot be read back or used to contact you.
+- A one-way, irreversible form of the phone number on the deleted account is retained, so that a new account registered with that number does not have it stored against it. It cannot be read back or used to contact you.
 
 The email address on the deleted account is released, and may be used to register again.
 
@@ -59,7 +59,7 @@ The email address on the deleted account is released, and may be used to registe
 
 Deletion takes effect at once. Access to Stablepass ends immediately, and any remaining time on a current subscription is forfeited. It is not refunded, and it is not transferred to another account.
 
-A subscription billed by Stablepass on the website is cancelled as part of the deletion. Deleting your account does not cancel a subscription billed by Apple or Google. If you subscribed in the App Store or Google Play, cancel it in your iPhone Settings or in the Google Play app as well, or you will continue to be charged.
+As part of deletion, Stablepass cancels any subscription it bills on the website. If you are charged by Stablepass after deleting your account, contact hello@stablepass.co. Deleting your account does not cancel a subscription billed by Apple or Google. If you subscribed in the App Store or Google Play, cancel it in your iPhone Settings or in the Google Play app as well, or you will continue to be charged.
 
 If you would rather keep your remaining time and simply stop using Stablepass, do not delete your account — deletion is the one action here that cannot be reversed.
 
