@@ -6,19 +6,29 @@
 // `.trial-banner-web` (the established informational band) plus the mockup's
 // existing `.trial-callout`. Flagged on the PR as a design gap.
 //
-// On mount, POSTs /api/subscription/checkout, which returns a clientSecret plus
-// the live list price (`unitAmount`/`currency`), the discount reported
-// separately (`discountAmount` / `amountDueNow`), and `mode: "subscribe"`.
+// On mount, POSTs /api/subscription/checkout, which returns a clientSecret, its
+// `intentType` ("setup" to save the card for a free trial, "payment"
+// otherwise), the live
+// list price (`unitAmount`/`currency`), what Stripe says is due today
+// (`amountDueNow` — A$0.00 on a trial), `trialEndsAt`, and `mode: "subscribe"`.
 // There is no `renewal` mode — an active member is redirected to /account.
+// Trial eligibility is decided by the route from the member's own row; this
+// screen only displays the outcome (Pricing v2, ENG-1328).
+//
+// A trial is CARD FIRST: after `confirmSetup` saves the card, this screen POSTs
+// the same route again and the route starts the trial Subscription on that card
+// (`started: true`). A load that finds the card already saved (a redirect-based
+// method returning to `/checkout?setup=1`, or a tab closed mid-way) gets
+// `started: true` straight away and goes on to /explore the same way.
 //
 // EVERY amount on this screen is formatted from the route's numbers — there is
 // deliberately no currency symbol and no price literal anywhere in this file.
 // A hardcode here would make the screen claim one number while Stripe charges
 // another.
 //
-// `introMonthsRemaining` / `priceChangesOn` are DISPLAY ONLY. They arrive on
-// the response; they are never sent back. `priceChangesOn` is ignored on this
-// screen: remaining intro months are paid invoices, not a calendar date.
+// `trialEndsAt` / `priceChangesOn` are DISPLAY ONLY. They arrive on the
+// response; they are never sent back. `priceChangesOn` is always null and is
+// ignored: after a trial the price is flat, there is no change-over date.
 // Nothing this file posts can influence what the member is charged (the route
 // takes no request body at all).
 //
@@ -36,11 +46,12 @@ import { goToExploreAfterPay, waitForEntitled } from "@/lib/api/wait-for-access"
 type Pricing = {
   unitAmount: number;
   currency: string;
-  discountAmount: number;
   amountDueNow: number;
-  introMonthsRemaining: number | null;
-  priceChangesOn: string | null;
+  // Set only while the route started (or reused) a free trial.
+  trialEndsAt: string | null;
 };
+
+type IntentType = "payment" | "setup";
 
 // The not-ready states are deliberately SPLIT. They used to be one
 // ("unavailable") rendering one hardcoded line — "connect a Stripe key to enable
@@ -59,7 +70,10 @@ type CheckoutState =
   // always logged, because rendering a dead Pay button silently is what hid the
   // original bug for weeks.
   | { status: "error" }
-  | { status: "ready"; clientSecret: string; publishableKey: string };
+  | { status: "ready"; clientSecret: string; publishableKey: string; intentType: IntentType }
+  // The route has started the trial on an already-saved card: wait for the
+  // webhook to grant access, then go to /explore.
+  | { status: "starting" };
 
 // A$ rather than a bare $ — an en-AU locale renders AUD as the local "$19.00",
 // which is ambiguous on an international card screen. Formatting AUD from en-US
@@ -69,6 +83,21 @@ export function formatMoney(unitAmount: number, currency: string): string {
     style: "currency",
     currency: currency.toUpperCase(),
   }).format(unitAmount / 100);
+}
+
+// "23 October 2026" in the member's (Sydney) day — the same convention as the
+// Account screen. Null for an unusable input, and the copy then omits the date
+// rather than printing a wrong one.
+export function formatTrialEnd(iso: string | null): string | null {
+  if (!iso) return null;
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts)) return null;
+  return new Date(ts).toLocaleDateString("en-AU", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "Australia/Sydney",
+  });
 }
 
 // AU prices are GST-INCLUSIVE, so the GST component of a tax-inclusive amount is
@@ -82,10 +111,8 @@ function OrderSummary({ pricing }: { pricing: Pricing | null }) {
   const list = pricing ? formatMoney(pricing.unitAmount, pricing.currency) : "—";
   const today = pricing ? formatMoney(pricing.amountDueNow, pricing.currency) : "—";
   const gst = pricing ? formatMoney(gstComponent(pricing.amountDueNow), pricing.currency) : "—";
-  const discount =
-    pricing && pricing.discountAmount > 0
-      ? formatMoney(pricing.discountAmount, pricing.currency)
-      : null;
+  const onTrial = pricing?.trialEndsAt != null;
+  const trialEnd = formatTrialEnd(pricing?.trialEndsAt ?? null);
 
   return (
     <div className="checkout-right">
@@ -102,10 +129,10 @@ function OrderSummary({ pricing }: { pricing: Pricing | null }) {
         <span>Subscription · monthly</span>
         <span>{list}</span>
       </div>
-      {discount ? (
-        <div className="summary-line">
-          <span>Introductory discount</span>
-          <span>−{discount}</span>
+      {onTrial ? (
+        <div className="summary-line" data-testid="summary-trial">
+          <span>Free trial</span>
+          <span>{trialEnd ? `Until ${trialEnd}` : "Included"}</span>
         </div>
       ) : null}
       <div className="summary-line">
@@ -119,47 +146,50 @@ function OrderSummary({ pricing }: { pricing: Pricing | null }) {
 
       <div className="trial-callout">
         <strong>Cancel anytime.</strong>
-        Your subscription renews monthly until you cancel. Cancellation takes effect at the end of
-        the current billing period.
+        {onTrial
+          ? `Nothing is charged today. Your first ${list} charge is ${trialEnd ? `on ${trialEnd}` : "when your free trial ends"}, then ${list} every month until you cancel. Cancel before then and you won't be charged.`
+          : "Your subscription renews monthly until you cancel. Cancellation takes effect at the end of the current billing period."}
       </div>
     </div>
   );
 }
 
-// The introductory / standard-pricing band.
+// The free-trial / standard-pricing band.
 //
-// DESIGN NOTE: the ticket's cited mockup had no recurring + price-change
-// treatment. Rather than invent a component, this composes the screen family's
+// DESIGN NOTE: the ticket's cited mockup had no recurring-price treatment.
+// Rather than invent a component, this composes the screen family's
 // established informational band, `.trial-banner-web` (soft green fill, green
 // left rule) with its `.trial-label` eyebrow and `.trial-detail` body. Those
 // two child classes are SCOPED — the rules are `.trial-banner-web .trial-label`,
 // not bare class selectors — so they must stay nested inside the parent or they
 // render as unstyled browser defaults. Same pattern as the start wall and the
 // expiry banner. No new CSS, no new colour, no new radius.
+//
+// Eligibility is per StablePass account only, so this copy says what THIS
+// checkout does and makes no promise about trials elsewhere.
 function RecurringBand({ pricing }: { pricing: Pricing | null }) {
-  if (!pricing || pricing.introMonthsRemaining == null) return null;
+  if (!pricing) return null;
   const today = formatMoney(pricing.amountDueNow, pricing.currency);
   const list = formatMoney(pricing.unitAmount, pricing.currency);
-  const remaining = pricing.introMonthsRemaining;
 
-  if (remaining > 0) {
+  if (pricing.trialEndsAt != null) {
+    const trialEnd = formatTrialEnd(pricing.trialEndsAt);
     return (
-      <div className="trial-banner-web">
-        <div className="trial-label">Introductory pricing</div>
+      <div className="trial-banner-web" data-testid="pricing-band">
+        <div className="trial-label">Free trial</div>
         <div className="trial-detail">
-          {today} today, then {list}. Charged monthly until you cancel.
-          {remaining === 1
-            ? " This is the last month at the introductory rate."
-            : ` ${remaining} introductory months remain, this one included.`}
+          {today} today. Free until {trialEnd ?? "your trial ends"}, then {list} per month until you cancel.
         </div>
       </div>
     );
   }
 
   return (
-    <div className="trial-banner-web">
-      <div className="trial-label">Standard pricing</div>
-      <div className="trial-detail">{list} every month until you cancel.</div>
+    <div className="trial-banner-web" data-testid="pricing-band">
+      <div className="trial-label">Monthly membership</div>
+      <div className="trial-detail">
+        {today} today, then {list} per month until you cancel.
+      </div>
     </div>
   );
 }
@@ -180,7 +210,7 @@ function CheckoutHeader() {
 }
 
 // Renders inside <Elements> — useStripe/useElements only work in that context.
-function PayForm({ pricing }: { pricing: Pricing | null }) {
+function PayForm({ pricing, intentType }: { pricing: Pricing | null; intentType: IntentType }) {
   const stripe = useStripe();
   const elements = useElements();
   const [submitting, setSubmitting] = useState(false);
@@ -194,17 +224,58 @@ function PayForm({ pricing }: { pricing: Pricing | null }) {
     // per .rx/guardrails.md #4); return_url is Stripe's required fallback for
     // payment methods that must leave the page. `?paid=1` tells Explore to
     // keep waiting for the webhook if this confirm has to redirect.
-    const { error: confirmError } = await stripe.confirmPayment({
-      elements,
-      confirmParams: { return_url: `${window.location.origin}/explore?paid=1` },
-      redirect: "if_required",
-    });
+    //
+    // A free-trial start hands us a SetupIntent (nothing is charged today; the
+    // card is saved for the first charge when the trial ends), which only
+    // `confirmSetup` accepts — `confirmPayment` rejects a `seti_…` secret.
+    //
+    // A saved-card trial that must leave the page comes back to /checkout, whose
+    // on-mount POST then starts the trial (a payment returns to /explore).
+    const { error: confirmError } =
+      intentType === "setup"
+        ? await stripe.confirmSetup({
+            elements,
+            confirmParams: { return_url: `${window.location.origin}/checkout?setup=1` },
+            redirect: "if_required",
+          })
+        : await stripe.confirmPayment({
+            elements,
+            confirmParams: { return_url: `${window.location.origin}/explore?paid=1` },
+            redirect: "if_required",
+          });
     if (confirmError) {
       setError(confirmError.message ?? "Payment failed. Please try again.");
       setSubmitting(false);
       return;
     }
-    // confirmPayment means Stripe charged the card. Access is granted only
+    if (intentType === "setup") {
+      // The card is saved; nothing is charged. Now ask the route to start the
+      // trial on it. Anything but `started: true` leaves the member here with an
+      // error — never on /explore without a trial behind them.
+      let started = false;
+      try {
+        const res = await fetch("/api/subscription/checkout", { method: "POST" });
+        const body = await res.json().catch(() => null);
+        // 409 already_active here means a trial IS already running on this
+        // member (a second tab or a double click started it first) — the same
+        // outcome, so it proceeds exactly like `started: true`.
+        started =
+          (res.ok && body?.data?.started === true) ||
+          (res.status === 409 && body?.error?.code === "already_active");
+        if (!started) {
+          console.error("[checkout] trial start after confirmSetup returned %s (code: %s)", res.status, body?.error?.code ?? "none");
+        }
+      } catch (err) {
+        console.error("[checkout] trial start after confirmSetup failed", err);
+      }
+      if (!started) {
+        setError("Your card was saved, but we couldn't start your free trial. Nothing has been charged — please refresh to try again.");
+        setSubmitting(false);
+        return;
+      }
+    }
+    // Confirmed means Stripe charged the card (or, on a trial, the trial has
+    // started on the saved card). Access is granted only
     // after stripe-webhook writes the row — jumping to /explore now shows
     // the wall until a later hard refresh. Wait, then hard-navigate.
     await waitForEntitled();
@@ -238,6 +309,9 @@ function PayForm({ pricing }: { pricing: Pricing | null }) {
 
 function PayLabel({ pricing }: { pricing: Pricing | null }) {
   if (!pricing) return <>Subscribe</>;
+  if (pricing.trialEndsAt != null) {
+    return <>Start free trial · {formatMoney(pricing.amountDueNow, pricing.currency)} today</>;
+  }
   return <>Subscribe · {formatMoney(pricing.amountDueNow, pricing.currency)}</>;
 }
 
@@ -264,7 +338,9 @@ function PaymentNotice({ variant }: { variant: PlaceholderVariant }) {
   }
 
   const message =
-    variant === "unconfigured"
+    variant === "starting"
+      ? "Starting your free trial…"
+      : variant === "unconfigured"
       ? // The genuinely-absent-key degradation (route said 502 stripe_unavailable).
         // Deliberately free of dev-speak: if a production key were ever missing a
         // paying member reads this, and "this environment" means nothing to them.
@@ -330,14 +406,19 @@ export function CheckoutForm() {
         setPricing({
           unitAmount: data.unitAmount,
           currency: data.currency,
-          discountAmount: typeof data.discountAmount === "number" ? data.discountAmount : 0,
           amountDueNow: typeof data.amountDueNow === "number" ? data.amountDueNow : data.unitAmount,
-          // Type-checked rather than `?? null`: a non-number (a stale route, a
-          // proxy that stringified it) must fall back to "don't show the band",
-          // never to a band rendering "NaN months left".
-          introMonthsRemaining: typeof data.introMonthsRemaining === "number" ? data.introMonthsRemaining : null,
-          priceChangesOn: typeof data.priceChangesOn === "string" ? data.priceChangesOn : null,
+          // Type-checked rather than `?? null`: only a real string means a trial.
+          trialEndsAt: typeof data.trialEndsAt === "string" ? data.trialEndsAt : null,
         });
+      }
+
+      if (res.ok && data?.started === true) {
+        // The card was already saved and the route has just started the trial
+        // on it. Nothing to confirm — wait for access, then go.
+        setState({ status: "starting" });
+        await waitForEntitled();
+        if (!cancelled) goToExploreAfterPay();
+        return;
       }
 
       if (!res.ok) {
@@ -379,7 +460,13 @@ export function CheckoutForm() {
         setState({ status: "error" });
         return;
       }
-      setState({ status: "ready", clientSecret, publishableKey });
+      // A SetupIntent secret must be confirmed with confirmSetup. Trust the
+      // route's tag; fall back on Stripe's own `seti_` prefix if it is absent.
+      const intentType: IntentType =
+        data?.intentType === "setup" || (data?.intentType == null && clientSecret.startsWith("seti_"))
+          ? "setup"
+          : "payment";
+      setState({ status: "ready", clientSecret, publishableKey, intentType });
     })();
     return () => {
       cancelled = true;
@@ -400,7 +487,7 @@ export function CheckoutForm() {
           <RecurringBand pricing={pricing} />
           {state.status === "ready" && stripePromise ? (
             <Elements stripe={stripePromise} options={{ clientSecret: state.clientSecret }}>
-              <PayForm pricing={pricing} />
+              <PayForm pricing={pricing} intentType={state.intentType} />
             </Elements>
           ) : (
             <PaymentPlaceholder

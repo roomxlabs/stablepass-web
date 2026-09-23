@@ -4,9 +4,10 @@ import { render, screen } from "@testing-library/react";
 // ENG-585 — the Account screen must derive its status from ENTITLEMENT, not
 // from the raw `subscription.status` string.
 //
-// ENG-1028 rewrites the card for a renewing membership: next charge, intro
-// change-over, manage-card, payment-failed. The entitlement ordering is
-// unchanged — do not regress it into reading `status` first.
+// ENG-1028 rewrites the card for a renewing membership: next charge,
+// manage-card, payment-failed. Pricing v2 (ENG-1328) adds a trial-vs-paying
+// wording split off `period_type`. The entitlement ordering is unchanged —
+// do not regress it into reading `status` first.
 
 const DAY = 24 * 60 * 60 * 1000;
 const future = new Date(Date.now() + 10 * DAY).toISOString();
@@ -19,13 +20,13 @@ type Sub = {
   status: string;
   trial_ends_at: string | null;
   current_period_end: string | null;
-  intro_months_used?: number | null;
+  period_type?: string | null;
   stripe_customer_id?: string | null;
   canceled_at?: string | null;
   provider?: string | null;
 } | null;
 
-const { fromMock, setSub, pricesRetrieve, couponsRetrieve } = vi.hoisted(() => {
+const { fromMock, setSub, pricesRetrieve } = vi.hoisted(() => {
   let sub: unknown = null;
 
   const appUserChain = {
@@ -61,7 +62,6 @@ const { fromMock, setSub, pricesRetrieve, couponsRetrieve } = vi.hoisted(() => {
       sub = next;
     },
     pricesRetrieve: vi.fn(),
-    couponsRetrieve: vi.fn(),
   };
 });
 
@@ -81,7 +81,6 @@ vi.mock("@/lib/supabase/server", () => ({
 vi.mock("@/lib/stripe", () => ({
   getStripe: vi.fn(() => ({
     prices: { retrieve: pricesRetrieve },
-    coupons: { retrieve: couponsRetrieve },
   })),
 }));
 
@@ -113,12 +112,24 @@ function activeSub(overrides: Partial<Exclude<Sub, null>> = {}): Exclude<Sub, nu
     status: "active",
     trial_ends_at: null,
     current_period_end: future,
-    intro_months_used: 1,
+    period_type: "normal",
     stripe_customer_id: "cus_1",
     canceled_at: null,
     provider: "stripe",
     ...overrides,
   };
+}
+
+// Same convention `formatEndDate` uses on the page — computed here so the
+// expectation tracks whatever `future`/`past` resolve to today rather than a
+// baked-in literal date.
+function expectedEndDate(iso: string): string {
+  return new Date(Date.parse(iso)).toLocaleDateString("en-AU", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "Australia/Sydney",
+  });
 }
 
 beforeEach(() => {
@@ -128,8 +139,7 @@ beforeEach(() => {
     STRIPE_PRICE_ID_STANDARD: "price_standard",
     STRIPE_SECRET_KEY: "sk_test_dummy",
   };
-  pricesRetrieve.mockResolvedValue({ unit_amount: 1900, currency: "aud" });
-  couponsRetrieve.mockResolvedValue({ amount_off: 1000, currency: "aud" });
+  pricesRetrieve.mockResolvedValue({ unit_amount: 999, currency: "aud" });
 });
 
 afterEach(() => {
@@ -208,46 +218,58 @@ describe("Account status — the entitlement matrix", () => {
   });
 });
 
-describe("Next charge + intro change-over", () => {
-  it("active member inside intro sees next charge amount/date and the A$19 change-over", async () => {
-    await renderAccount(activeSub({ intro_months_used: 1 }));
+describe("Trial vs paying", () => {
+  it("trialling: trial-until row, change-over row, no next-charge, still Active", async () => {
+    await renderAccount(activeSub({ period_type: "trial" }));
 
-    const next = screen.getByTestId("next-charge");
-    expect(next.textContent).toMatch(/A\$9\.00 on /);
+    expect(statusValue()).toBe("Active");
+    expect(screen.queryByTestId("next-charge")).not.toBeInTheDocument();
+
+    const trialUntil = screen.getByTestId("trial-until");
+    expect(trialUntil.textContent).toContain(`Free until ${expectedEndDate(future)}`);
+
     const change = screen.getByTestId("change-over");
-    expect(change.textContent).toMatch(/A\$19\.00 per month/);
-    expect(change.textContent).not.toMatch(/ from /);
+    expect(change.textContent).toMatch(/A\$9\.99 per month/);
+
     expect(pricesRetrieve).toHaveBeenCalledWith("price_standard");
-    expect(couponsRetrieve).toHaveBeenCalledWith("intro_5");
+    expect(document.body.textContent).toMatch(/free trial until/i);
+    expect(document.body.textContent).toMatch(/then A\$9\.99 per month/);
   });
 
-  it("active member past intro sees the standard next charge and no change-over line", async () => {
-    await renderAccount(activeSub({ intro_months_used: 6 }));
+  it("paying (period_type normal): next-charge row, no change-over, no trial-until", async () => {
+    await renderAccount(activeSub({ period_type: "normal" }));
 
     const next = screen.getByTestId("next-charge");
-    expect(next.textContent).toMatch(/A\$19\.00 on /);
+    expect(next.textContent).toMatch(new RegExp(`A\\$9\\.99 on ${expectedEndDate(future)}`));
     expect(screen.queryByTestId("change-over")).not.toBeInTheDocument();
-    expect(couponsRetrieve).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("trial-until")).not.toBeInTheDocument();
   });
 
-  it("omits amounts rather than inventing them when Stripe is unreadable", async () => {
-    pricesRetrieve.mockRejectedValue(new Error("nope"));
-    await renderAccount(activeSub());
+  it("period_type null reads as paying: next-charge, no change-over, no trial-until", async () => {
+    await renderAccount(activeSub({ period_type: null }));
 
     const next = screen.getByTestId("next-charge");
-    expect(next.textContent).not.toMatch(/A\$/);
-    expect(next.textContent).toMatch(/On /);
-    // Label is already "Then" — the value must not repeat it.
-    expect(screen.getByTestId("change-over").querySelector(".value")?.textContent).toBe(
-      "the standard monthly price",
-    );
+    expect(next.textContent).toMatch(new RegExp(`A\\$9\\.99 on ${expectedEndDate(future)}`));
+    expect(screen.queryByTestId("change-over")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("trial-until")).not.toBeInTheDocument();
   });
 
-  it("webhook-in-flight (null period) with intro remaining falls back to 'then A$19.00 per month' without a date", async () => {
-    await renderAccount(activeSub({ current_period_end: null, intro_months_used: 2 }));
+  it("Stripe unreadable while trialling: change-over falls back to the generic price line, no A$ anywhere in it", async () => {
+    pricesRetrieve.mockRejectedValue(new Error("nope"));
+    await renderAccount(activeSub({ period_type: "trial" }));
+
     const change = screen.getByTestId("change-over");
-    expect(change.textContent).toMatch(/A\$19\.00 per month/);
-    expect(change.textContent).not.toMatch(/ from /);
+    expect(change.textContent).toContain("the standard monthly price");
+    expect(change.textContent).not.toMatch(/A\$/);
+  });
+
+  it("canceled + period_type trial: no trial-until row, cancelled copy instead", async () => {
+    await renderAccount(activeSub({ status: "canceled", period_type: "trial", canceled_at: "2026-09-01T00:00:00Z" }));
+
+    expect(statusValue()).toBe("Access ending");
+    expect(screen.queryByTestId("trial-until")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("change-over")).not.toBeInTheDocument();
+    expect(document.body.textContent).toMatch(/You've cancelled\. Your access continues until /);
   });
 });
 
@@ -328,7 +350,6 @@ describe("Provider branching (ENG-1192)", () => {
     expect(screen.queryByRole("link", { name: "Subscribe" })).not.toBeInTheDocument();
     expect(screen.queryByTestId("cancel-open")).not.toBeInTheDocument();
     expect(pricesRetrieve).not.toHaveBeenCalled();
-    expect(couponsRetrieve).not.toHaveBeenCalled();
   });
 
   it("a store row with a leftover Stripe customer still gets no Manage card", async () => {
@@ -392,7 +413,6 @@ describe("Provider branching (ENG-1192)", () => {
     expect(screen.queryByRole("link", { name: "Subscribe" })).not.toBeInTheDocument();
     expect(screen.queryByTestId("cancel-open")).not.toBeInTheDocument();
     expect(pricesRetrieve).not.toHaveBeenCalled();
-    expect(couponsRetrieve).not.toHaveBeenCalled();
   });
 
   it("provider null (pre-migration row) → treated as Stripe: Manage card, Cancel, Stripe amounts", async () => {
@@ -404,7 +424,7 @@ describe("Provider branching (ENG-1192)", () => {
       "/api/subscription/portal",
     );
     expect(screen.getByTestId("cancel-open")).toBeInTheDocument();
-    expect(screen.getByTestId("next-charge").textContent).toMatch(/A\$9\.00 on /);
+    expect(screen.getByTestId("next-charge").textContent).toMatch(/A\$9\.99 on /);
     expect(pricesRetrieve).toHaveBeenCalledWith("price_standard");
     expect(screen.queryByTestId("managed-by-store")).not.toBeInTheDocument();
   });

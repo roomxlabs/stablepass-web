@@ -4,7 +4,8 @@ import { getStripe } from "@/lib/stripe";
 import { supabaseServer } from "@/lib/supabase/server";
 import { ok, UNAUTH, fail } from "@/lib/api/envelope";
 
-// POST /api/subscription/checkout — auto-renewing monthly subscribe (ENG-1027).
+// POST /api/subscription/checkout — auto-renewing monthly subscribe (ENG-1027),
+// with a one-time 30-day free trial (Pricing v2, ENG-1328).
 //
 // One branch: first purchase / lapsed return. Creates a Stripe Subscription
 // that RENEWS (`cancel_at_period_end: false`) and saves the card as the default
@@ -12,28 +13,35 @@ import { ok, UNAUTH, fail } from "@/lib/api/envelope";
 //
 // An already-active member has nothing to buy — 409 `already_active`. The
 // /checkout page redirects them to /account (where R4 manages a live sub).
-// Early renewal (Branch B: one-off PaymentIntent, `mode: "renewal"`,
-// `THIRTY_DAYS_MS`, `metadata.kind`) is gone.
 //
-// PRICE + COUPON (ENG-1027) — always `STRIPE_PRICE_ID_STANDARD` (A$19). The
-// introductory A$9 is a repeating coupon `intro_${remaining}` chosen HERE, on
-// the server, from the member's own `subscription.intro_months_used`. The
-// request body plays no part: this handler takes no `Request` argument at all,
-// so there is no parameter, header or query string that can influence the
-// coupon. A member can never ask for `intro_6`.
+// PRICE — always `STRIPE_PRICE_ID_STANDARD`, the ONE price (A$9.99 after O2).
+// It is retrieved from Stripe on every request and echoed as
+// `unitAmount`/`currency`; it is never hardcoded. There is no coupon and no
+// intro discount any more: `intro_months_used` is not read, no coupon is
+// retrieved or applied, and `STRIPE_PRICE_ID_PROMO` is not read.
 //
-// `?? 0` / a non-numeric read fails TOWARD the discount — a null counter
-// charges less, never more, and the webhook corrects the state. Inverting that
-// default would silently overcharge someone.
+// TRIAL — decided HERE, on the server, from the caller's OWN
+// `subscription.trial_used_at` (the row is selected by the session user's id;
+// this handler takes no `Request` argument, so no body, header or query string
+// can pick whose row is read or ask for a trial):
+//   * `trial_used_at` null (and no Subscription of theirs in Stripe has ever
+//     trialled) → a 30-day free trial, CARD FIRST. The first POST returns a
+//     SetupIntent secret (`intentType: "setup"`, A$0.00 due) and creates
+//     nothing in Billing; once the screen has confirmed it, the next POST
+//     creates the Subscription with `trial_period_days: 30` and that card as
+//     `default_payment_method`, and answers `started: true`. Creating the trial
+//     up front is NOT safe: Stripe marks its A$0.00 invoice paid at create, and
+//     `invoice.paid` entitles the member — a page view would grant 30 days with
+//     no card (measured in the Stripe sandbox 2026-09-23; see the trial branch).
+//   * `trial_used_at` set → no trial: the full price is due now, confirmed as
+//     a PaymentIntent (`intentType: "payment"`) — unchanged from ENG-1027.
+// This route only READS `trial_used_at`. It is stamped once, by the be (B6,
+// ENG-1327), never from here — two writers for an eligibility flag is how a
+// member gets two free months. Eligibility is per StablePass ACCOUNT; it does
+// not (cannot) stop a separate store trial under an Apple / Google ID.
 //
-// `STRIPE_PRICE_ID_PROMO` is no longer read. R0 leaves the env var set.
-//
-// The list price is NEVER hardcoded — `STRIPE_PRICE_ID_STANDARD` is retrieved
-// on every request and echoed as `unitAmount`/`currency`. The discount is
-// reported separately (`discountAmount` / `amountDueNow`) so the screen can
-// honestly say both "A$9.00 today" and "then A$19.00". The change-over is
-// remaining discounted invoices, not a calendar date — a cancel-and-return
-// path would make any printed month wrong.
+// `priceChangesOn` is always null — the "then" line is a flat price, never a
+// computed change-over date.
 //
 // The card never touches our server (.rx/guardrails.md #4): we only create
 // Stripe objects here and hand back a clientSecret for the FE to confirm inline.
@@ -46,21 +54,78 @@ import { ok, UNAUTH, fail } from "@/lib/api/envelope";
 //    degradation (.rx/guardrails.md), and the ONLY code that may produce a
 //    "payments are not configured" message on the screen.
 //  - `stripe_error`       — the key works but Stripe failed (outage, bad price
-//    id, missing coupon, rejected request). Reporting these as
+//    id, unset STRIPE_PRICE_ID_STANDARD, rejected request). Reporting these as
 //    `stripe_unavailable` is what sent a human hunting a misconfiguration
 //    that did not exist.
 //  - `subscription_unavailable` (ENG-1001) — the member's `subscription` row
 //    could not be READ, so we refuse to price a subscribe. Stripe was never
 //    called. A third code for the same reason the two above are two.
-//  - `already_active` (409) — they already have a live subscription.
+//  - `already_active` (409) — they already have a live subscription, in our
+//    row OR in Stripe (trialing / active / past_due) ahead of the webhook.
 
-const INTRO_MONTHS = 6;
+// The trial length Stripe is asked for. Not a price: what the member is charged
+// always comes from the retrieved Stripe price / invoice.
+const TRIAL_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Tags the SetupIntents this route makes to start a trial, so a confirmed one
+// is recognised on the next POST and nothing else under the Customer is.
+const TRIAL_SETUP_PURPOSE = "stablepass_trial";
+
+// A SetupIntent still waiting on the member — safe to hand back again.
+const SETUP_REUSABLE_STATUSES = new Set(["requires_payment_method", "requires_confirmation", "requires_action"]);
+
+// Stripe states in which a Subscription already gives (or is about to give)
+// this member access. Any of these → 409, never a second Subscription.
+const LIVE_STRIPE_STATUSES = new Set(["trialing", "active", "past_due"]);
+
+// `latest_invoice.amount_due` when Stripe expanded it as a finite number.
+function invoiceAmountDue(subscription: Stripe.Subscription): number | null {
+  const due = (subscription.latest_invoice as { amount_due?: unknown } | null)?.amount_due;
+  return typeof due === "number" && Number.isFinite(due) ? due : null;
+}
 
 type SubscriptionRow = {
   status: string | null;
   stripe_customer_id: string | null;
-  intro_months_used: number | null;
+  trial_used_at: string | null;
 };
+
+type ClientSecretInfo = { clientSecret: string | null; intentType: "payment" | "setup" | null };
+
+// Pull the secret the FE must confirm, and WHICH kind it is — Elements'
+// `confirmPayment` rejects a SetupIntent secret and `confirmSetup` rejects a
+// PaymentIntent one, so the type travels with the secret.
+//
+// Order: the invoice's `confirmation_secret` (a tagged union — a PaymentIntent
+// for a charged first invoice; tolerate an absent `type` for forward-compat, and
+// accept a `setup_intent` variant should Stripe ever put one there), then the
+// legacy `latest_invoice.payment_intent`, then the Subscription's
+// `pending_setup_intent` (defensive: this route never creates a card-less trial,
+// but a trialing Subscription's card is collected there, never on its A$0.00
+// already-paid invoice).
+// `|| null` (not `??`) so an empty-string secret normalises to null.
+function readClientSecret(subscription: Stripe.Subscription): ClientSecretInfo {
+  const latestInvoice = subscription.latest_invoice as {
+    confirmation_secret?: { type?: string | null; client_secret?: string | null } | null;
+    payment_intent?: { client_secret?: string | null } | null;
+  } | null;
+  const confirmation = latestInvoice?.confirmation_secret;
+  if (confirmation?.client_secret) {
+    if (confirmation.type == null || confirmation.type === "payment_intent") {
+      return { clientSecret: confirmation.client_secret, intentType: "payment" };
+    }
+    if (confirmation.type === "setup_intent") {
+      return { clientSecret: confirmation.client_secret, intentType: "setup" };
+    }
+  }
+  const legacy = latestInvoice?.payment_intent?.client_secret;
+  if (legacy) return { clientSecret: legacy, intentType: "payment" };
+  const pendingSetup = subscription.pending_setup_intent as { client_secret?: string | null } | string | null;
+  const setupSecret = pendingSetup && typeof pendingSetup === "object" ? pendingSetup.client_secret : null;
+  if (setupSecret) return { clientSecret: setupSecret, intentType: "setup" };
+  return { clientSecret: null, intentType: null };
+}
 
 // first_name / last_name / postcode are the identity split ENG-566 adds to
 // `app_user` in the be repo. Until that migration lands the select errors and
@@ -139,7 +204,7 @@ async function findExistingCustomer(
 //
 // The request body is digested INTO the key on purpose. Stripe rejects a reused
 // key whose parameters differ (`idempotency_error`, confirmed live), and a
-// member's name, postcode, or remaining intro months can legitimately change
+// member's name, postcode, or trial eligibility can legitimately change
 // between visits — digesting gives each distinct body its own key. Genuinely
 // concurrent requests read the same identity row and so produce the same digest.
 // Stripe replays a key for 24h. The key is bucketed to 10 minutes so a deleted
@@ -165,7 +230,7 @@ export async function POST() {
   if (!stripe) return fail("stripe_unavailable", "Payment provider not configured.", 502);
 
   // The `error` is captured, NOT discarded. This projection names
-  // `intro_months_used`, a column the be ENG-1025 migration renames — and an
+  // `trial_used_at`, a column only the be ENG-1323 migration adds — and an
   // explicit PostgREST projection REJECTS THE WHOLE QUERY with `42703` if any
   // named column is not deployed (.rx/gotchas.md, ENG-617). Dropping the error
   // puts that failure in the same branch as "this member has no row yet":
@@ -176,7 +241,7 @@ export async function POST() {
   // strictly safer than proceeding on a row we know we failed to read.
   const { data: subData, error: subError } = await sb
     .from("subscription")
-    .select("status,stripe_customer_id,intro_months_used")
+    .select("status,stripe_customer_id,trial_used_at")
     .eq("user_id", user.id)
     .single();
   // PGRST116 is `.single()`'s "no rows" — a legitimate state for a member who has
@@ -202,21 +267,9 @@ export async function POST() {
     return fail("already_active", "You already have an active subscription.", 409);
   }
 
-  // The coupon is chosen from the member's OWN row, server-side. The default
-  // deliberately fails TOWARD the discount: if there is no row yet the member
-  // is charged less, never more. The counter is authoritative and the be
-  // `stripe-webhook` corrects the state after the payment lands.
-  //
-  // The guard is `Number.isFinite`, not bare `?? 0`: `?? 0` only catches null,
-  // and a non-numeric value would make `remaining` 0 and skip the coupon —
-  // the exact opposite of the stated invariant. The column is `int not null`
-  // with a 0..1000 CHECK so this is not reachable today; it is written this
-  // way so the guarantee holds by construction rather than by the schema
-  // happening to agree.
-  const rawUsed = sub?.intro_months_used;
-  const used = typeof rawUsed === "number" && Number.isFinite(rawUsed) ? rawUsed : 0;
-  const remaining = Math.max(0, INTRO_MONTHS - used);
-  const coupon = remaining > 0 ? `intro_${remaining}` : undefined;
+  // Trial eligibility, from the member's OWN row (selected by `user.id` above).
+  // No row yet = never trialled = eligible. Any non-null stamp = ineligible.
+  const trialEligible = (sub?.trial_used_at ?? null) === null;
 
   const { data: identityData } = await sb
     .from("app_user")
@@ -238,20 +291,6 @@ export async function POST() {
     }
     const unitAmount = price.unit_amount;
     const currency = price.currency;
-
-    // Discount comes from the Stripe coupon object, never a hardcoded 1000.
-    // A missing / non-amount_off coupon is a Stripe failure, not a silent
-    // full-price charge (that would overcharge someone we promised A$9).
-    let discountAmount = 0;
-    if (coupon) {
-      const couponObj = await stripe.coupons.retrieve(coupon);
-      if (typeof couponObj.amount_off !== "number") {
-        console.error("[checkout] coupon %s has no amount_off", coupon);
-        return fail("stripe_error", "Payment provider unavailable.", 502);
-      }
-      discountAmount = couponObj.amount_off;
-    }
-    const amountDueNow = Math.max(0, unitAmount - discountAmount);
 
     // The Stripe Customer carries identity: full name, AU postcode, and the
     // app_user_id the be webhook resolves the member by.
@@ -308,59 +347,159 @@ export async function POST() {
       })).id;
     }
 
-    // Reuse the member's already-pending Subscription instead of stacking
-    // another one (ENG-582). `subscriptions.list` is STRONGLY consistent —
-    // verified live: a Subscription created at t+0 comes back from the very next
-    // list call, already carrying a usable `confirmation_secret` — so a rapid
-    // SEQUENTIAL second page load always sees the first one's work.
-    //
-    // Strong consistency does NOT close the CONCURRENT case: two overlapping
-    // requests both list before either creates, so both miss. That is a
-    // list-then-create TOCTOU, and it is closed by the idempotency key on the
-    // create below — not by this lookup.
+    // Every Subscription this member holds under the Customer, in ANY state
+    // (ENG-582 reuse + ENG-1328 double-trial / double-charge guards).
+    // `subscriptions.list` is STRONGLY consistent — verified live: a
+    // Subscription created at t+0 comes back from the very next list call — so a
+    // rapid SEQUENTIAL second page load always sees the first one's work. The
+    // CONCURRENT case (both list before either creates) is closed by the
+    // idempotency keys on the creates below, not by this lookup.
     //
     // Nothing is ever deleted here: Stripe expires an untouched `incomplete`
-    // Subscription after ~23h, so stale ones fall out of this list by themselves.
-    const pending = await stripe.subscriptions.list({
+    // Subscription after ~23h, so stale ones fall out by themselves.
+    //
+    // Only Subscriptions carrying OUR `metadata.app_user_id` count: one made by
+    // the dashboard / support without it is never adopted (the be webhook could
+    // not resolve the member — charged but never activated).
+    const listed = await stripe.subscriptions.list({
       customer: customerId,
-      status: "incomplete",
+      status: "all",
       limit: 100,
       // Re-expanded so a REUSED Subscription hands back its CURRENT secret
-      // rather than a remembered one — ENG-581's `confirmation_secret` read
-      // applied to the reuse path. Both expand paths verified accepted (HTTP
-      // 200) on the list endpoint at 2026-06-24.dahlia.
+      // rather than a remembered one (ENG-581). Verified accepted (HTTP 200) on
+      // the list endpoint at 2026-06-24.dahlia.
       expand: ["data.latest_invoice.confirmation_secret", "data.latest_invoice.payment_intent"],
     });
-    // A member can legitimately hold several pending Subscriptions (anyone who
-    // loaded /checkout before ENG-582 shipped does). Pick deterministically —
-    // newest first, id as tie-break — so two loads in a row resolve to the SAME
-    // Subscription instead of alternating between them.
+    const mine = listed.data.filter((s) => s.metadata?.app_user_id === user.id);
+
+    // A LIVE Subscription in Stripe means this member already has (or is about
+    // to have) access, even when the webhook has not reached our row yet: a
+    // running trial, a just-paid membership, a cancelled-but-still-running one,
+    // or a failed renewal (fixed from /account, not by buying a second one).
+    // Creating another here would be a second trial or a double charge.
+    if (mine.some((s) => LIVE_STRIPE_STATUSES.has(s.status))) {
+      return fail("already_active", "You already have an active subscription.", 409);
+    }
+
+    // Trial eligibility is the member's OWN `trial_used_at` (read above) — AND,
+    // as defence in depth for when that stamp has not landed, no Subscription of
+    // theirs has ever had a trial in Stripe. Neither check writes anything.
+    const offerTrial = trialEligible && !mine.some((s) => s.trial_start != null);
+
+    if (offerTrial) {
+      // ── TRIAL: CARD FIRST ──────────────────────────────────────────────────
+      // Stripe marks a trial's A$0.00 first invoice `paid` the instant the
+      // Subscription is CREATED, and `invoice.paid` is what entitles the member
+      // (be stripe-webhook → RevenueCat → B6, which also stamps trial_used_at).
+      // Creating the trial on page load would therefore hand out 30 days of
+      // access — and burn the trial — before any card was entered. So:
+      //   1. no confirmed card yet → return a SetupIntent (`usage: off_session`)
+      //      for Elements' `confirmSetup`; nothing is created in Billing;
+      //   2. the screen confirms it, then POSTs here again;
+      //   3. a SUCCEEDED trial SetupIntent → create the trial Subscription with
+      //      that card as `default_payment_method` (so day 30 charges it) and
+      //      answer `started: true`.
+      // Verified against the Stripe sandbox 2026-09-23: step 3 returns
+      // `trialing`, `default_payment_method` = the SetupIntent's card, and an
+      // A$0.00 `paid` first invoice.
+      const intents = await stripe.setupIntents.list({ customer: customerId, limit: 100 });
+      const trialIntents = intents.data.filter(
+        (si) => si.metadata?.app_user_id === user.id && si.metadata?.purpose === TRIAL_SETUP_PURPOSE,
+      );
+      const confirmed = newestFirst(trialIntents.filter((si) => si.status === "succeeded" && si.payment_method))[0];
+
+      if (confirmed) {
+        const paymentMethod =
+          typeof confirmed.payment_method === "string" ? confirmed.payment_method : confirmed.payment_method!.id;
+        const trialParams: Stripe.SubscriptionCreateParams = {
+          customer: customerId,
+          items: [{ price: priceId }],
+          default_payment_method: paymentMethod,
+          // Renews: the first A$… charge lands when the trial ends.
+          cancel_at_period_end: false,
+          trial_period_days: TRIAL_DAYS,
+          // REQUIRED — the be `stripe-webhook` resolves the subscriber by this.
+          metadata: { app_user_id: user.id },
+        };
+        // Keyed on the SetupIntent, NOT time-bucketed: one confirmed card can
+        // start at most one trial however many times this is POSTed. (After
+        // Stripe's 24h key window the LIVE / `trial_start` checks above stop it.)
+        const trial = await stripe.subscriptions.create(trialParams, {
+          idempotencyKey: `eng1328-trial-${user.id}-${confirmed.id}`,
+        });
+        return ok({
+          started: true,
+          clientSecret: null,
+          intentType: null,
+          publishableKey: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
+          mode: "subscribe",
+          unitAmount,
+          amountDueNow: invoiceAmountDue(trial) ?? 0,
+          currency,
+          trialEndsAt: typeof trial.trial_end === "number" ? new Date(trial.trial_end * 1000).toISOString() : null,
+          priceChangesOn: null,
+          subscriptionId: trial.id,
+        });
+      }
+
+      const reusableIntent = newestFirst(trialIntents.filter((si) => SETUP_REUSABLE_STATUSES.has(si.status)))[0];
+      const setupParams: Stripe.SetupIntentCreateParams = {
+        customer: customerId,
+        usage: "off_session",
+        // Card only (wallets such as Apple / Google Pay are cards too). Left to
+        // the account's automatic config the sandbox offered Pix, Klarna,
+        // Bancontact and Satispay here — redirect / non-recurring methods that
+        // cannot carry an off-session A$ renewal on day 30.
+        payment_method_types: ["card"],
+        metadata: { app_user_id: user.id, purpose: TRIAL_SETUP_PURPOSE },
+      };
+      const setupIntent =
+        reusableIntent ??
+        (await stripe.setupIntents.create(setupParams, {
+          idempotencyKey: idempotencyKey("trial-setup", user.id, setupParams),
+        }));
+      if (!setupIntent.client_secret) {
+        console.error("[checkout] trial SetupIntent %s has no client secret", setupIntent.id);
+      }
+      return ok({
+        started: false,
+        clientSecret: setupIntent.client_secret || null,
+        intentType: "setup",
+        publishableKey: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
+        mode: "subscribe",
+        unitAmount,
+        // Nothing is charged to start a trial.
+        amountDueNow: 0,
+        currency,
+        // PROJECTED for display ("free until …"): the trial is created the moment
+        // the card is confirmed, and Stripe ends it TRIAL_DAYS after that.
+        trialEndsAt: new Date(Date.now() + TRIAL_DAYS * DAY_MS).toISOString(),
+        priceChangesOn: null,
+        subscriptionId: null,
+      });
+    }
+
+    // ── NO TRIAL: the full price is due now ─────────────────────────────────
+    // Reuse the member's already-pending Subscription instead of stacking
+    // another (ENG-582). Pick deterministically — newest first, id as
+    // tie-break — so two loads in a row resolve to the SAME Subscription.
     //
     // Adopting a Stripe object into the billing flow means re-asserting every
-    // property the create path guarantees, not just the price. A subscription
-    // made under this Customer by the Stripe dashboard, a support action, or a
-    // leftover from the pass era would otherwise be reused with:
-    //  - no `metadata.app_user_id` → the member pays, the be `stripe-webhook`
-    //    cannot resolve the subscriber, and they are charged but never activated
-    //    (silent, and the worst outcome in this file);
-    //  - `cancel_at_period_end: true` → a pass-era leftover that NEVER renews.
-    //    The create path now sets `false`; only `false` is reusable.
-    //
-    // The price match is against `priceId` — always STANDARD after ENG-1027.
-    // `quantity` is checked alongside the price because the price alone does not
-    // determine the CHARGE: a dashboard-created pending Subscription at the
-    // right price with `quantity: 3` would be adopted, and we would report
-    // `unitAmount` while Stripe charged three times it. The create path below
-    // never sets a quantity (Stripe defaults it to 1), so `== null || === 1` is
-    // exactly "what our own create path guarantees".
+    // property the create path guarantees, not just the price:
+    //  - `metadata.app_user_id` (already required by `mine`);
+    //  - `cancel_at_period_end: false` — a pass-era leftover NEVER renews;
+    //  - the price AND `quantity` — a dashboard-created pending Subscription at
+    //    the right price with `quantity: 3` would be adopted while we reported
+    //    `unitAmount` and Stripe charged three times it. The create path never
+    //    sets a quantity (Stripe defaults it to 1).
     const reusable =
       newestFirst(
-        pending.data.filter(
+        mine.filter(
           (s) =>
+            s.status === "incomplete" &&
             s.items?.data?.some(
               (item) => item.price?.id === priceId && (item.quantity == null || item.quantity === 1),
             ) &&
-            s.metadata?.app_user_id === user.id &&
             s.cancel_at_period_end === false,
         ),
       )[0] ?? null;
@@ -369,9 +508,8 @@ export async function POST() {
       customer: customerId,
       items: [{ price: priceId }],
       payment_behavior: "default_incomplete",
-      // The epic — the subscription renews. The card must also be saved as
-      // the default, or the first off-session renewal has nothing to charge
-      // and every member lapses in a month.
+      // The subscription renews. The card must also be saved as the default, or
+      // the first off-session renewal has nothing to charge.
       cancel_at_period_end: false,
       payment_settings: { save_default_payment_method: "on_subscription" },
       // Stripe MOVED the first-purchase client secret. At this account's API
@@ -392,53 +530,38 @@ export async function POST() {
       // precedent set by ENG-568/ENG-576. If a future Stripe release removes the
       // property outright this expand entry would 400 — the catch below now logs
       // loudly and returns `stripe_error`, so that would be visible, not silent.
+      //
       expand: ["latest_invoice.confirmation_secret", "latest_invoice.payment_intent"],
       // REQUIRED — the be `stripe-webhook` fn resolves the subscriber by this
       // metadata key. Do not rename/remove it. Do not add `kind` — that was
       // the deleted early-renewal branch.
       metadata: { app_user_id: user.id },
-      ...(coupon ? { discounts: [{ coupon }] } : {}),
     };
 
     // The list above closes the SEQUENTIAL race; this key closes the CONCURRENT
     // one. Two overlapping POSTs — a double click, two tabs, or React StrictMode
-    // double-invoking the checkout screen's on-mount effect (which does not abort
-    // its in-flight request) — both find nothing pending and both create. Same
-    // key => Stripe returns the SAME Subscription to both.
+    // double-invoking the checkout screen's on-mount effect — both find nothing
+    // pending and both create. Same key => Stripe returns the SAME Subscription.
     const subscription =
       reusable ??
       (await stripe.subscriptions.create(subCreateParams, {
         idempotencyKey: idempotencyKey("subscription", user.id, subCreateParams),
       }));
 
-    const latestInvoice = subscription.latest_invoice as {
-      confirmation_secret?: { type?: string | null; client_secret?: string | null } | null;
-      payment_intent?: { client_secret?: string | null } | null;
-    } | null;
-    // `confirmation_secret` is a tagged union. Today an incomplete Subscription
-    // yields type "payment_intent", but a $0 invoice (100%-off coupon, credit
-    // balance) yields a SetupIntent secret instead. Handing a `seti_…` secret to
-    // Elements as a payment secret fails at confirmPayment, so only accept the
-    // payment_intent variant (tolerating an absent `type` for forward-compat).
-    const confirmation = latestInvoice?.confirmation_secret;
-    const confirmationSecret =
-      confirmation && (confirmation.type == null || confirmation.type === "payment_intent")
-        ? confirmation.client_secret
-        : null;
-    // New position first, legacy second. `|| null` (not `??`) so an empty-string
-    // secret normalises to null rather than serialising `clientSecret: ""`.
-    const clientSecret = confirmationSecret || latestInvoice?.payment_intent?.client_secret || null;
+    const { clientSecret, intentType } = readClientSecret(subscription);
 
     if (!clientSecret) {
       // A 200 carrying a null secret is precisely the failure that shipped
-      // undetected: the Subscription is created, the route returns ok(), and the
-      // screen renders a dead Pay button with no error anywhere. Never let that
-      // pass silently again — this log is the tripwire.
+      // undetected (ENG-581): the route returns ok() and the screen renders a
+      // dead Pay button with no error anywhere. This log is the tripwire.
       console.error(
-        "[checkout] subscription %s (%s) has no client secret on latest_invoice (keys: %s)",
+        "[checkout] subscription %s (%s, status %s) has no client secret on latest_invoice (invoice keys: %s)",
         subscription.id,
         reusable ? "reused" : "created",
-        latestInvoice && typeof latestInvoice === "object" ? Object.keys(latestInvoice).join(",") : String(latestInvoice),
+        subscription.status,
+        subscription.latest_invoice && typeof subscription.latest_invoice === "object"
+          ? Object.keys(subscription.latest_invoice).join(",")
+          : String(subscription.latest_invoice),
       );
     }
 
@@ -446,19 +569,22 @@ export async function POST() {
     // silently (0 rows, no error), which is exactly why `stripe_customer_id`
     // stayed null and this route stacked a Customer and a Subscription on every
     // visit (ENG-582). The be `stripe-webhook` writes both ids as service role
-    // once a payment lands; that is the only supported write path.
+    // once a payment lands; that is the only supported write path. The same
+    // goes for `trial_used_at` — the be (B6) is its only writer.
 
     return ok({
+      started: false,
       clientSecret,
+      intentType,
       publishableKey: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
       mode: "subscribe",
       unitAmount,
-      discountAmount,
-      amountDueNow,
+      // What is due today is read from Stripe's own first invoice, never
+      // computed from a literal; the retrieved list price if it is absent.
+      amountDueNow: invoiceAmountDue(subscription) ?? unitAmount,
       currency,
-      introMonthsRemaining: remaining,
-      // Never a calendar month: remaining intro months are paid invoices, and
-      // a gap between subscriptions would make any derived date a lie.
+      trialEndsAt: null,
+      // Always null — the "then" line is a flat price, never a computed date.
       priceChangesOn: null,
       subscriptionId: subscription.id,
     });
