@@ -5,9 +5,11 @@ lastUpdated: 2026-09-17
 
 These Terms & Conditions (“Terms”) govern your use of the Stablepass website (Stablepass.co), the Stablepass mobile application (“App”), and all related subscription services (“Services”). By creating an account, accessing the Services, or purchasing a subscription, you agree to be bound by these Terms.
 
+<!-- LEGAL REVIEW REQUIRED (ENG-1337): proposed wording drafted by an agent, not approved. Do not ship without client/legal sign-off. -->
+
 ## 1. Subscription Billing
 
-Stablepass operates on a recurring monthly subscription model. Subscription fees are charged at the time you sign up, and your monthly billing period begins on that date. Your subscription then renews automatically on the same calendar date each month, and the applicable subscription fee will be charged to your nominated payment method on each renewal date unless you cancel before your next billing date.
+Stablepass operates on a recurring monthly subscription model. Unless you start with a free trial (see section 8), subscription fees are charged at the time you sign up, and your monthly billing period begins on that date. If you start with a free trial, the first subscription fee is charged when the free trial ends, and your monthly billing period begins on that date. Your subscription then renews automatically on the same calendar date each month, and the applicable subscription fee will be charged to your nominated payment method on each renewal date unless you cancel before your next billing date.
 
 By subscribing, you consent to these recurring monthly charges and acknowledge that your subscription will continue to renew automatically until you cancel.
 
@@ -36,6 +38,8 @@ When you cancel:
 - No pro-rata or partial-month refund is provided for a change of mind.
 - Access to the Services continues until the end of the paid billing period.
 
+<!-- LEGAL REVIEW REQUIRED (ENG-1337): proposed wording drafted by an agent, not approved. Do not ship without client/legal sign-off. -->
+
 ### 2.2 Subscribed through the App Store or Google Play
 
 If you subscribed to Stablepass inside the App on an iPhone or iPad, or on an Android device, your subscription is billed and managed by Apple or Google, not by Stablepass.
@@ -43,6 +47,7 @@ If you subscribed to Stablepass inside the App on an iPhone or iPad, or on an An
 - To cancel, open Subscriptions in your iPhone Settings, or Subscriptions in the Google Play app. You cannot cancel a store subscription from your Stablepass account settings.
 - Refund requests for a store subscription are handled by Apple or Google under their own policies. Stablepass cannot issue a refund for a payment it did not take.
 - When you cancel, your access continues until the end of the period you have already paid for.
+- Deleting your Stablepass account does not cancel a subscription billed by Apple or Google. To stop being charged, you must also cancel it in your iPhone Settings or in the Google Play app.
 
 ## 3. Refunds
 
@@ -115,22 +120,25 @@ Please include:
 
 Stablepass may request additional information to assess your claim.
 
-## 8. Introductory Subscription Offer – $9 per Month for First 6 Months
+<!-- LEGAL REVIEW REQUIRED (ENG-1337): proposed wording drafted by an agent, not approved. Do not ship without client/legal sign-off. -->
 
-Stablepass may offer eligible new subscribers an introductory subscription price of $9.00 AUD per month (including GST) for their first six (6) consecutive monthly billing periods (“Introductory Offer”).
+## 8. Free Trial and Subscription Price
 
-The Introductory Offer is available to new subscribers who commence a subscription on or before 30 November 2026, unless withdrawn or extended in accordance with applicable law.
+The standard Stablepass subscription price is A$9.99 per month (including GST). The same monthly price applies whether you subscribe on the Stablepass website, through the Apple App Store or through Google Play.
 
-Under the Introductory Offer:
+Eligible subscribers may start their subscription with a free trial (“Free Trial”). On the Stablepass website the Free Trial lasts 30 days. In the App Store and Google Play, the free trial is offered by Apple or Google, and its length and eligibility are shown in the store before you subscribe.
 
-- You will be charged $9.00 AUD per month for each of your first six consecutive monthly billing periods.
-- After the sixth billing period, your subscription will automatically continue at the standard price of $19.00 AUD per month, unless cancelled before your next billing date.
-- By accepting the offer, you authorise Stablepass and its payment provider to automatically charge your nominated payment method $9.00 per month for the first six months and $19.00 per month thereafter until cancelled.
+Under the Free Trial:
+
+- You will not be charged during the Free Trial. On the Stablepass website, you must provide a payment method before the Free Trial starts.
+- Unless you cancel before the Free Trial ends, your subscription will automatically continue at A$9.99 per month (including GST). Your nominated payment method will be charged when the Free Trial ends, and then on the same date each month until you cancel.
+- By starting a Free Trial, you authorise Stablepass and its payment provider to automatically charge your nominated payment method A$9.99 per month from the end of the Free Trial until cancelled.
+- If you cancel a website subscription during the Free Trial, you keep access until the Free Trial ends and you will not be charged.
+- On the Stablepass website, the Free Trial is available once per Stablepass account. If your account has already used a free trial, the full monthly price is charged when you subscribe.
+- If you subscribe through the App Store or Google Play, Apple or Google decide whether you are eligible for their free trial under their own rules. Those subscriptions, including any free trial, are billed, managed and cancelled through Apple or Google, as described in section 2.2.
 - Your subscription is month-to-month and may be cancelled at any time. Cancellation takes effect at the end of the current paid billing period.
 - If you cancel part-way through a billing period, no pro-rata or partial-month refund will be provided for a change of mind. Nothing in this clause excludes, restricts, or modifies any rights or remedies you may have under the Australian Consumer Law, including any right to a refund or remedy required by law.
-- If you cancel before completing all six discounted months, any remaining discounted months are forfeited. If you later resubscribe, you will not be entitled to resume the Introductory Offer unless Stablepass expressly agrees.
-- The offer is available to new subscribers only, limited to one per person and account, and is not transferable.
-- After the Introductory Offer ends, the subscription continues at $19.00 AUD per month (including GST), subject to any future price changes made in accordance with these Terms and applicable law.
+- The subscription price is subject to any future price changes made in accordance with these Terms and applicable law.
 
 ## 9. Changes to These Terms
 
