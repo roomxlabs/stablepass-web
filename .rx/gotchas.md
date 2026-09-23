@@ -2703,3 +2703,22 @@ The honest figure is quoted at `/checkout`, from Stripe.
 ## `vitest --reporter=basic` is not a reporter in this repo
 vitest 4.x: `--reporter=basic` throws "Failed to load custom Reporter from basic" before any
 test runs, which reads like a broken suite. Use the default reporter, or `--reporter=dot`.
+
+## A Stripe trial must be CARD FIRST — creating it on page load grants free access (ENG-1328, 2026-09-23)
+
+**Symptom:** the $0-invoice note above says "a $0 invoice yields a SetupIntent secret". A trial
+checkout that creates `subscriptions.create({ trial_period_days })` on mount and reads that
+secret gets **null** (`latest_invoice.confirmation_secret` is null) — and, worse, entitles the
+member before any card is entered.
+**Cause (measured in the sandbox, 2026-06-24.dahlia):** a trial sub is `status: "trialing"` at
+birth, its first invoice is `{ status: "paid", amount_due: 0 }`, and its card is collected via
+`subscription.pending_setup_intent`. Stripe fires `invoice.paid` for that A$0 invoice (O2), and
+the be `stripe-webhook` → RevenueCat → B6 chain turns that into `active` + `trial_used_at`. So a
+page view = 30 days free with no card, and the trial is burnt. A `trialing` sub is also never
+`incomplete`, so an incomplete-only reuse list misses it.
+**Do this:** POST 1 returns a standalone `setupIntents.create({ customer, usage: "off_session",
+metadata: { app_user_id, purpose: "stablepass_trial" } })` secret (`intentType: "setup"`; the
+screen calls `confirmSetup` — `confirmPayment` rejects `seti_`). After confirm, POST 2 finds the
+SUCCEEDED SetupIntent and creates the sub with `default_payment_method` + `trial_period_days`
+(idempotency key = the SetupIntent id). List subs with `status: "all"`; any of ours
+`trialing`/`active`/`past_due` → 409, and any with `trial_start` → no second trial.

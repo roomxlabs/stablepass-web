@@ -102,7 +102,7 @@ describe("AccountPage — app_user select", () => {
     expect(subCall).toBeTruthy();
     const columns = subCall!.chain.select.mock.calls[0]![0] as string;
     expect(columns).toBe(
-      "status,trial_ends_at,current_period_end,intro_months_used,stripe_customer_id,canceled_at,provider",
+      "status,trial_ends_at,current_period_end,period_type,stripe_customer_id,canceled_at,provider",
     );
   });
 });

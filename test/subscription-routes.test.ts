@@ -59,6 +59,8 @@ const { getUserMock, fromMock, updateMock, selectMock, tableData, stripeMocks, S
     subscriptionsCreate: vi.fn(),
     subscriptionsList: vi.fn(),
     paymentIntentsCreate: vi.fn(),
+    setupIntentsList: vi.fn(),
+    setupIntentsCreate: vi.fn(),
   };
 
   // A regular `function` (not an arrow) — `new Stripe(key)` in lib/stripe.ts
@@ -75,6 +77,7 @@ const { getUserMock, fromMock, updateMock, selectMock, tableData, stripeMocks, S
       },
       subscriptions: { create: stripeMocks.subscriptionsCreate, list: stripeMocks.subscriptionsList },
       paymentIntents: { create: stripeMocks.paymentIntentsCreate },
+      setupIntents: { list: stripeMocks.setupIntentsList, create: stripeMocks.setupIntentsCreate },
     };
   });
 
@@ -104,20 +107,20 @@ const CHECKOUT_DATA_KEYS = [
   "amountDueNow",
   "clientSecret",
   "currency",
-  "discountAmount",
-  "introMonthsRemaining",
+  "intentType",
   "mode",
   "priceChangesOn",
   "publishableKey",
+  "started",
   "subscriptionId",
+  "trialEndsAt",
   "unitAmount",
 ].sort();
 
-// MOCK Stripe fixtures (what `prices.retrieve` / `coupons.retrieve` return) —
-// NOT application constants. The app never hardcodes an amount.
-const STANDARD_UNIT_AMOUNT = 1900;
-const PROMO_UNIT_AMOUNT = 900;
-const INTRO_AMOUNT_OFF = 1000;
+// MOCK Stripe fixtures (what `prices.retrieve` returns) — NOT application
+// constants. The app never hardcodes an amount. 999 aud mirrors the sandbox's
+// A$9.99 price after O2.
+const STANDARD_UNIT_AMOUNT = 999;
 
 function resetAll() {
   getUserMock.mockReset();
@@ -134,6 +137,8 @@ function resetAll() {
   stripeMocks.subscriptionsCreate.mockReset();
   stripeMocks.subscriptionsList.mockReset();
   stripeMocks.paymentIntentsCreate.mockReset();
+  stripeMocks.setupIntentsList.mockReset();
+  stripeMocks.setupIntentsCreate.mockReset();
   for (const key of Object.keys(tableData)) delete tableData[key];
   // The publishable key must be set for a fully-configured Stripe: it is
   // `undefined` otherwise, and an undefined value is DROPPED by JSON
@@ -151,14 +156,14 @@ function resetAll() {
   };
   stripeMocks.pricesRetrieve.mockImplementation(async (id: string) => {
     if (id === "price_standard") return { unit_amount: STANDARD_UNIT_AMOUNT, currency: "aud" };
-    if (id === "price_promo") return { unit_amount: PROMO_UNIT_AMOUNT, currency: "aud" };
     // Anything else REJECTS, mirroring stripe-node: an absent or unknown price id
     // is an error, not a price. Returning a plausible amount here would make an
     // UNSET `STRIPE_PRICE_ID_STANDARD` env var look like a successful checkout.
     throw new Error(`No such price: ${String(id)}`);
   });
+  // The coupon/intro path is DELETED (ENG-1328) — nothing should ever call this,
+  // so there is no valid id to return here at all.
   stripeMocks.couponsRetrieve.mockImplementation(async (id: string) => {
-    if (/^intro_[1-6]$/.test(id)) return { id, amount_off: INTRO_AMOUNT_OFF, currency: "aud" };
     throw new Error(`No such coupon: ${String(id)}`);
   });
   // Safe defaults so every pre-existing test (which knows nothing about the
@@ -167,19 +172,24 @@ function resetAll() {
   stripeMocks.customersList.mockResolvedValue({ data: [] });
   stripeMocks.customersSearch.mockResolvedValue({ data: [] });
   stripeMocks.subscriptionsList.mockResolvedValue({ data: [] });
+  // Safe default for the CARD-FIRST trial branch (ENG-1328): no pending trial
+  // SetupIntent under the Customer yet. A test that means to hit that branch
+  // sets this explicitly; every other test is deliberately marked ineligible
+  // (`trial_used_at` set) so it never reaches this call at all.
+  stripeMocks.setupIntentsList.mockResolvedValue({ data: [] });
 }
 
 function memberRow(
   overrides: {
     status?: string | null;
     stripe_customer_id?: string | null;
-    intro_months_used?: number | null;
+    trial_used_at?: string | null;
   } = {},
 ) {
   return {
     status: overrides.status ?? "trial",
     stripe_customer_id: overrides.stripe_customer_id === undefined ? null : overrides.stripe_customer_id,
-    intro_months_used: overrides.intro_months_used === undefined ? 0 : overrides.intro_months_used,
+    trial_used_at: overrides.trial_used_at === undefined ? null : overrides.trial_used_at,
   };
 }
 
@@ -206,23 +216,69 @@ function fakeCustomer(id: string, created: number, appUserId = "user-1") {
 // Default `cancel_at_period_end: false` matches our create path (ENG-1027).
 // Pass-era leftovers with `true` must be passed via overrides and must NOT
 // be reused. Default price is STANDARD — promo leftovers are not reusable.
+// Default `status: "incomplete"` — the reusable pending Subscription on the
+// NO-TRIAL (paid) path. `trialStart` defaults null; set it to model a
+// Subscription that has ever trialled (ENG-1328's defence-in-depth
+// eligibility guard) regardless of its current status.
 function subEntry(
   id: string,
   created: number,
   clientSecret: string,
   priceId = "price_standard",
-  overrides: { appUserId?: string | null; cancelAtPeriodEnd?: boolean } = {},
+  overrides: {
+    appUserId?: string | null;
+    cancelAtPeriodEnd?: boolean;
+    status?: string;
+    trialStart?: number | null;
+  } = {},
 ) {
-  const { appUserId = "user-1", cancelAtPeriodEnd = false } = overrides;
+  const { appUserId = "user-1", cancelAtPeriodEnd = false, status = "incomplete", trialStart = null } = overrides;
   return {
     id,
     created,
+    status,
+    trial_start: trialStart,
     items: { data: [{ price: { id: priceId } }] },
     cancel_at_period_end: cancelAtPeriodEnd,
     metadata: appUserId === null ? {} : { app_user_id: appUserId },
     latest_invoice: {
       confirmation_secret: { type: "payment_intent", client_secret: clientSecret },
     },
+  };
+}
+
+// A Stripe SetupIntent as `setupIntents.list` returns it (ENG-1328 CARD-FIRST
+// trial). Default `status: "requires_payment_method"` (still waiting on the
+// member — reusable); default `purpose: "stablepass_trial"` and OUR
+// `app_user_id`, since only a SetupIntent tagged with both is ever ours.
+function setupIntentEntry(
+  id: string,
+  created: number,
+  overrides: {
+    status?: string;
+    paymentMethod?: string | { id: string } | null;
+    appUserId?: string | null;
+    purpose?: string | null;
+    clientSecret?: string | null;
+  } = {},
+) {
+  const {
+    status = "requires_payment_method",
+    paymentMethod = null,
+    appUserId = "user-1",
+    purpose = "stablepass_trial",
+    clientSecret = `${id}_secret`,
+  } = overrides;
+  const metadata: Record<string, string> = {};
+  if (appUserId !== null) metadata.app_user_id = appUserId;
+  if (purpose !== null) metadata.purpose = purpose;
+  return {
+    id,
+    created,
+    status,
+    payment_method: paymentMethod,
+    client_secret: clientSecret,
+    metadata,
   };
 }
 
@@ -250,7 +306,7 @@ describe("POST /api/subscription/checkout", () => {
   it("returns 502 stripe_unavailable when STRIPE_SECRET_KEY is unset (no build-blocking module-scope init)", async () => {
     delete process.env.STRIPE_SECRET_KEY;
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
 
     const res = await checkoutPOST();
     const body = await res.json();
@@ -262,7 +318,7 @@ describe("POST /api/subscription/checkout", () => {
 
   it("non-active member: creates a renewing incomplete Subscription and returns mode:'subscribe'", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stubCreates();
 
     const res = await checkoutPOST();
@@ -281,7 +337,7 @@ describe("POST /api/subscription/checkout", () => {
 
   it("expands latest_invoice.confirmation_secret — the legacy payment_intent path alone yields no secret at 2026-06-24.dahlia", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stubCreates();
 
     await checkoutPOST();
@@ -294,7 +350,7 @@ describe("POST /api/subscription/checkout", () => {
 
   it("new shape only (no payment_intent key): still returns a usable clientSecret", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stubCreates("sub_new", "pi_conf_secret");
 
     const res = await checkoutPOST();
@@ -306,7 +362,7 @@ describe("POST /api/subscription/checkout", () => {
 
   it("legacy shape only: the payment_intent fallback still resolves (older pinned API version)", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stripeMocks.customersCreate.mockResolvedValue({ id: "cus_new" });
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
@@ -322,7 +378,7 @@ describe("POST /api/subscription/checkout", () => {
 
   it("confirmation_secret wins over a legacy payment_intent when both are present", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stripeMocks.customersCreate.mockResolvedValue({ id: "cus_new" });
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
@@ -342,7 +398,7 @@ describe("POST /api/subscription/checkout", () => {
   it("neither shape present: returns a null clientSecret AND logs loudly (never silently dead)", async () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stripeMocks.customersCreate.mockResolvedValue({ id: "cus_new" });
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
@@ -359,13 +415,13 @@ describe("POST /api/subscription/checkout", () => {
     consoleErrorSpy.mockRestore();
   });
 
-  // confirmation_secret is a TAGGED union. A $0 invoice (100%-off coupon, credit
-  // balance) yields a SetupIntent secret; handing a `seti_…` to Elements as a
-  // payment secret fails at confirmPayment, so it must not be accepted.
-  it("confirmation_secret of type setup_intent is REJECTED, not handed to Elements as a payment secret", async () => {
-    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  // confirmation_secret is a TAGGED union. A $0 invoice (a free trial's first
+  // invoice, ENG-1328) yields a SetupIntent secret; Elements needs to know
+  // which kind it is, so this is ACCEPTED with `intentType: "setup"` rather
+  // than rejected.
+  it("confirmation_secret of type setup_intent is accepted as a setup secret (a $0 first invoice)", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stripeMocks.customersCreate.mockResolvedValue({ id: "cus_new" });
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
@@ -376,16 +432,14 @@ describe("POST /api/subscription/checkout", () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body.data.clientSecret).toBeNull();
-    expect(consoleErrorSpy).toHaveBeenCalled();
-
-    consoleErrorSpy.mockRestore();
+    expect(body.data.clientSecret).toBe("seti_x_secret_y");
+    expect(body.data.intentType).toBe("setup");
   });
 
   it("an empty-string client_secret normalises to null rather than serialising an empty string", async () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stripeMocks.customersCreate.mockResolvedValue({ id: "cus_new" });
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
@@ -402,7 +456,7 @@ describe("POST /api/subscription/checkout", () => {
 
   it("customer identity: builds name + address from app_user when no stripe_customer_id exists", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     tableData.app_user = { data: { first_name: "Jane", last_name: "Doe", postcode: "3000" } };
     stubCreates();
 
@@ -422,7 +476,7 @@ describe("POST /api/subscription/checkout", () => {
 
   it("null postcode: omits postal_code entirely instead of sending an empty string", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     tableData.app_user = { data: { first_name: "Jane", last_name: "Doe", postcode: null } };
     stubCreates();
 
@@ -435,7 +489,7 @@ describe("POST /api/subscription/checkout", () => {
 
   it("existing stripe_customer_id: updates the Customer instead of creating a new one", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial", stripe_customer_id: "cus_existing" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }) };
     tableData.app_user = { data: { first_name: "Jane", last_name: "Doe", postcode: "3000" } };
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
@@ -453,7 +507,7 @@ describe("POST /api/subscription/checkout", () => {
 
   it("active member: 409 already_active — no Stripe Customer/Subscription/PaymentIntent create", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "active", stripe_customer_id: "cus_existing" }) };
+    tableData.subscription = { data: memberRow({ status: "active", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }) };
 
     const res = await checkoutPOST();
     const body = await res.json();
@@ -467,7 +521,7 @@ describe("POST /api/subscription/checkout", () => {
 
   it("no mode:'renewal' is reachable: an active member is 409, not a 200 renewal", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "active", stripe_customer_id: "cus_existing" }) };
+    tableData.subscription = { data: memberRow({ status: "active", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }) };
 
     const res = await checkoutPOST();
     const body = await res.json();
@@ -481,7 +535,7 @@ describe("POST /api/subscription/checkout", () => {
   it("prices.retrieve rejecting returns 502 stripe_error (NOT stripe_unavailable — the key is fine)", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
     stripeMocks.pricesRetrieve.mockRejectedValue(new Error("stripe down"));
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
 
     const res = await checkoutPOST();
     const body = await res.json();
@@ -499,7 +553,7 @@ describe("POST /api/subscription/checkout", () => {
   it("prices.retrieve resolving a null unit_amount returns 502 stripe_error without charging", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
     stripeMocks.pricesRetrieve.mockResolvedValue({ unit_amount: null, currency: "aud" });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
 
     const res = await checkoutPOST();
     const body = await res.json();
@@ -510,24 +564,26 @@ describe("POST /api/subscription/checkout", () => {
     expect(stripeMocks.paymentIntentsCreate).not.toHaveBeenCalled();
   });
 
-  it("subscribe response echoes unitAmount, discountAmount, amountDueNow and currency alongside clientSecret", async () => {
+  it("subscribe response echoes unitAmount, amountDueNow and currency alongside clientSecret; no discountAmount/introMonthsRemaining", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial", intro_months_used: 0 }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stubCreates();
 
     const res = await checkoutPOST();
     const body = await res.json();
-    expect(body.data.unitAmount).toBe(1900);
-    expect(body.data.discountAmount).toBe(1000);
-    expect(body.data.amountDueNow).toBe(900);
+    expect(body.data.unitAmount).toBe(999);
+    expect(body.data.amountDueNow).toBe(999);
     expect(body.data.currency).toBe("aud");
     expect(body.data.clientSecret).toBe("pi_new_secret");
     expect(body.data.mode).toBe("subscribe");
+    expect(body.data).not.toHaveProperty("discountAmount");
+    expect(body.data).not.toHaveProperty("introMonthsRemaining");
+    expect(body.data.priceChangesOn).toBeNull();
   });
 
   it("returns 502 stripe_error when Stripe throws creating the Subscription", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial", stripe_customer_id: "cus_existing" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stripeMocks.subscriptionsCreate.mockRejectedValue(new Error("stripe boom"));
 
     const res = await checkoutPOST();
@@ -537,22 +593,9 @@ describe("POST /api/subscription/checkout", () => {
     expect(body.error.code).toBe("stripe_error");
   });
 
-  it("coupon missing amount_off returns 502 stripe_error without charging", async () => {
-    getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial", intro_months_used: 0 }) };
-    stripeMocks.couponsRetrieve.mockResolvedValue({ id: "intro_6", currency: "aud" });
-
-    const res = await checkoutPOST();
-    const body = await res.json();
-
-    expect(res.status).toBe(502);
-    expect(body.error.code).toBe("stripe_error");
-    expect(stripeMocks.subscriptionsCreate).not.toHaveBeenCalled();
-  });
-
   it("CONTRACT: the subscribe response carries exactly the keys the screen reads", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial", stripe_customer_id: "cus_existing" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
       latest_invoice: { confirmation_secret: { type: "payment_intent", client_secret: "pi_new_secret" } },
@@ -569,7 +612,7 @@ describe("POST /api/subscription/checkout", () => {
   // the postal_code Stripe already holds — on every checkout POST.
   it("existing customer with no postcode: omits `address` entirely rather than wiping the stored one", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial", stripe_customer_id: "cus_existing" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }) };
     tableData.app_user = { data: { first_name: "Jane", last_name: "Doe", postcode: null } };
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
@@ -589,7 +632,7 @@ describe("POST /api/subscription/checkout", () => {
   it("GUARDRAIL: never writes `status` (let alone 'active') to the subscription table — only the webhook grants access", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
 
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stubCreates();
 
     expect((await checkoutPOST()).status).toBe(200);
@@ -616,7 +659,7 @@ describe("ENG-582 — repeat visits reuse the same Stripe Customer", () => {
 
   it("two successive POSTs create only ONE Stripe Customer", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stripeMocks.customersList.mockResolvedValue({ data: [] });
     stubCreates();
 
@@ -649,7 +692,10 @@ describe("ENG-582 — repeat visits reuse the same Stripe Customer", () => {
 
   it("two successive POSTs do not create a second Subscription", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    // Ineligible (trial_used_at set): reuse of an "incomplete" pending
+    // Subscription, unrelated to the trial-vs-paying eligibility this test
+    // isn't about (ENG-1328).
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stripeMocks.customersList.mockResolvedValue({ data: [] });
     stubCreates("sub_A", "pi_A_secret_x");
 
@@ -694,7 +740,7 @@ describe("ENG-582 — CONCURRENT loads (the race the strongly-consistent lookups
   // strong consistency cannot help. Only the idempotency keys collapse them.
   async function bothLoadsRaced() {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stripeMocks.customersList.mockResolvedValue({ data: [] });
     stripeMocks.subscriptionsList.mockResolvedValue({ data: [] });
     // Stripe collapses same-key creates server-side; model that here by keying
@@ -770,7 +816,7 @@ describe("ENG-582 — a pending Subscription is only adopted if it is really our
 
   function pendingCustomerAlreadyExists() {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stripeMocks.customersList.mockResolvedValue({ data: [fakeCustomer("cus_A", 1000, "user-1")] });
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_fresh",
@@ -838,7 +884,7 @@ describe("ENG-582 — the DB stripe_customer_id short-circuits any Stripe lookup
 
   it("reuses the DB stripe_customer_id without any Stripe lookup", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial", stripe_customer_id: "cus_db" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", stripe_customer_id: "cus_db", trial_used_at: "2026-01-01T00:00:00Z" }) };
     tableData.app_user = { data: { first_name: "Ada", last_name: "Lovelace", postcode: "2000" } };
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
@@ -870,7 +916,7 @@ describe("ENG-582 — newest-first Customer selection is deterministic and stabl
 
   it("picks ONE customer deterministically and stably when several share the app_user_id", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stripeMocks.customersList.mockResolvedValue({
       data: [
         fakeCustomer("cus_1", 1786857564),
@@ -901,7 +947,7 @@ describe("ENG-582 — newest-first Customer selection is deterministic and stabl
 
   it("breaks a created-second tie deterministically (id descending)", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stripeMocks.customersList.mockResolvedValue({
       data: [fakeCustomer("cus_aaa", 2000), fakeCustomer("cus_zzz", 2000)],
     });
@@ -921,7 +967,7 @@ describe("ENG-582 — newest-first Customer selection is deterministic and stabl
 
   it("ignores customers belonging to a different app_user_id", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stripeMocks.customersList.mockResolvedValue({
       data: [fakeCustomer("cus_other", 5000, "someone-else"), fakeCustomer("cus_mine", 1000, "user-1")],
     });
@@ -946,7 +992,9 @@ describe("ENG-582 — newest-first pending-Subscription selection is determinist
 
   it("picks ONE incomplete subscription deterministically and stably when several exist", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial", stripe_customer_id: "cus_existing" }) };
+    tableData.subscription = {
+      data: memberRow({ status: "trial", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }),
+    };
     stripeMocks.subscriptionsList.mockResolvedValue({
       data: [
         subEntry("sub_b", 2000, "pi_b_secret"),
@@ -969,7 +1017,9 @@ describe("ENG-582 — newest-first pending-Subscription selection is determinist
 
   it("breaks a same-created-second Subscription tie deterministically (id descending)", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial", stripe_customer_id: "cus_existing" }) };
+    tableData.subscription = {
+      data: memberRow({ status: "trial", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }),
+    };
     stripeMocks.subscriptionsList.mockResolvedValue({
       data: [subEntry("sub_aaa", 4000, "pi_aaa_secret"), subEntry("sub_zzz", 4000, "pi_zzz_secret")],
     });
@@ -986,7 +1036,7 @@ describe("ENG-582 — newest-first pending-Subscription selection is determinist
 
   it("ignores an incomplete subscription for a different price", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial", stripe_customer_id: "cus_existing" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stripeMocks.subscriptionsList.mockResolvedValue({
       data: [subEntry("sub_other_price", 5000, "pi_other_secret", "price_other")],
     });
@@ -1013,7 +1063,7 @@ describe("ENG-582 — customers.search fallback when the member has no email", (
 
   it("falls back to customers.search when the member has no email", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: undefined } } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stripeMocks.customersSearch.mockResolvedValue({ data: [fakeCustomer("cus_found", 1000)] });
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
@@ -1037,7 +1087,7 @@ describe("ENG-582 — customers.search fallback when the member has no email", (
     // result — the route re-checks metadata locally, so a widened/parsed-oddly
     // query can never cross-wire billing to another member's Customer.
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: undefined } } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stripeMocks.customersSearch.mockResolvedValue({
       data: [fakeCustomer("cus_someone_else", 9999, "someone-else"), fakeCustomer("cus_mine", 1000, "user-1")],
     });
@@ -1054,7 +1104,7 @@ describe("ENG-582 — customers.search fallback when the member has no email", (
 
   it("search results are also picked newest-first and stably", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: undefined } } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stripeMocks.customersSearch.mockResolvedValue({
       data: [fakeCustomer("cus_b", 2000), fakeCustomer("cus_c", 3000), fakeCustomer("cus_a", 1000)],
     });
@@ -1083,7 +1133,7 @@ describe("ENG-582 — deterministic idempotency key on customers.create", () => 
 
   it("passes a deterministic idempotency key on customers.create, stable per identity and distinct per edit", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     tableData.app_user = { data: { first_name: "Jane", last_name: "Doe", postcode: "3000" } };
     stubCreates();
 
@@ -1123,7 +1173,7 @@ describe("ENG-582 — GUARDRAIL: no RLS-denied write to `subscription` remains",
 
   it("never attempts a write to subscription on subscribe", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stubCreates();
 
     const res = await checkoutPOST();
@@ -1139,7 +1189,7 @@ describe("ENG-582 — GUARDRAIL: no RLS-denied write to `subscription` remains",
 
   it("never attempts a write to subscription on the already_active 409 either", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "active", stripe_customer_id: "cus_existing" }) };
+    tableData.subscription = { data: memberRow({ status: "active", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }) };
 
     const res = await checkoutPOST();
     const body = await res.json();
@@ -1151,170 +1201,398 @@ describe("ENG-582 — GUARDRAIL: no RLS-denied write to `subscription` remains",
   });
 });
 
-describe("ENG-1027 — the intro coupon is chosen server-side", () => {
+describe("ENG-1328 round 2 — pricing v2: CARD-FIRST 30-day free trial", () => {
   beforeEach(resetAll);
   afterEach(() => {
     process.env = ORIGINAL_ENV;
     vi.useRealTimers();
   });
 
-  function freshMember(introMonthsUsed: number | null) {
-    getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", intro_months_used: introMonthsUsed }) };
-    stripeMocks.subscriptionsCreate.mockResolvedValue({
-      id: "sub_new",
-      latest_invoice: { confirmation_secret: { type: "payment_intent", client_secret: "pi_new_secret" } },
-    });
-  }
+  const FULL_PAID_PARAMS = {
+    customer: "cus_existing",
+    items: [{ price: "price_standard" }],
+    payment_behavior: "default_incomplete",
+    cancel_at_period_end: false,
+    payment_settings: { save_default_payment_method: "on_subscription" },
+    expand: ["latest_invoice.confirmation_secret", "latest_invoice.payment_intent"],
+    metadata: { app_user_id: "user-1" },
+  };
 
-  it("used 0 → coupon intro_6, STANDARD price, amountDueNow 900", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-09-06T00:00:00Z"));
-    freshMember(0);
-
-    const res = await checkoutPOST();
-    const body = await res.json();
-
-    expect(res.status).toBe(200);
-    expect(stripeMocks.pricesRetrieve).toHaveBeenCalledWith("price_standard");
-    expect(stripeMocks.pricesRetrieve).not.toHaveBeenCalledWith("price_promo");
-    expect(stripeMocks.couponsRetrieve).toHaveBeenCalledWith("intro_6");
-    const createCall = stripeMocks.subscriptionsCreate.mock.calls[0][0];
-    expect(createCall.items[0].price).toBe("price_standard");
-    expect(createCall.discounts).toEqual([{ coupon: "intro_6" }]);
-    expect(body.data.mode).toBe("subscribe");
-    expect(body.data.unitAmount).toBe(1900);
-    expect(body.data.discountAmount).toBe(1000);
-    expect(body.data.amountDueNow).toBe(900);
-    expect(body.data.introMonthsRemaining).toBe(6);
-    expect(body.data.priceChangesOn).toBeNull();
-  });
-
-  it("used 2 → coupon intro_4, amountDueNow 900", async () => {
-    freshMember(2);
-
-    const res = await checkoutPOST();
-    const body = await res.json();
-
-    expect(stripeMocks.couponsRetrieve).toHaveBeenCalledWith("intro_4");
-    expect(stripeMocks.pricesRetrieve).toHaveBeenCalledWith("price_standard");
-    expect(body.data.amountDueNow).toBe(900);
-    expect(body.data.unitAmount).toBe(1900);
-    expect(body.data.discountAmount).toBe(1000);
-    expect(body.data.introMonthsRemaining).toBe(4);
-    const createCall = stripeMocks.subscriptionsCreate.mock.calls[0][0];
-    expect(createCall.discounts).toEqual([{ coupon: "intro_4" }]);
-  });
-
-  it("used 6 → no coupon retrieve, no discounts, full STANDARD price", async () => {
-    freshMember(6);
-
-    const res = await checkoutPOST();
-    const body = await res.json();
-
-    expect(stripeMocks.couponsRetrieve).not.toHaveBeenCalled();
-    expect(stripeMocks.pricesRetrieve).toHaveBeenCalledWith("price_standard");
-    const createCall = stripeMocks.subscriptionsCreate.mock.calls[0][0];
-    expect(createCall).not.toHaveProperty("discounts");
-    expect(body.data.amountDueNow).toBe(1900);
-    expect(body.data.discountAmount).toBe(0);
-    expect(body.data.introMonthsRemaining).toBe(0);
-    expect(body.data.priceChangesOn).toBeNull();
-    expect(body.data.unitAmount).toBe(1900);
-  });
-
-  it("used 9 → no coupon, remaining 0", async () => {
-    freshMember(9);
-
-    const res = await checkoutPOST();
-    const body = await res.json();
-
-    expect(stripeMocks.couponsRetrieve).not.toHaveBeenCalled();
-    expect(body.data.introMonthsRemaining).toBe(0);
-    expect(body.data.amountDueNow).toBe(1900);
-    expect(body.data.priceChangesOn).toBeNull();
-  });
-
-  it("null used → intro_6 (fail toward the discount)", async () => {
-    freshMember(null);
-
-    const res = await checkoutPOST();
-    const body = await res.json();
-
-    expect(stripeMocks.couponsRetrieve).toHaveBeenCalledWith("intro_6");
-    expect(body.data.introMonthsRemaining).toBe(6);
-    expect(body.data.amountDueNow).toBe(900);
-  });
-
-  it("no subscription row (PGRST116) → intro_6", async () => {
+  // (a) eligible, no pending SetupIntent yet: a SetupIntent is created with the
+  // exact literal params; subscriptions.create is never touched, and nothing
+  // is created in Billing yet (see .rx/gotchas.md, "CARD FIRST").
+  it("(a) eligible, no SetupIntent yet: setupIntents.create gets the exact literal params; subscriptions.create is NOT called", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
     tableData.subscription = {
-      data: null,
-      error: { code: "PGRST116", message: "JSON object requested, multiple (or no) rows returned" },
+      data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: null }),
     };
-    stubCreates();
+    stripeMocks.setupIntentsCreate.mockResolvedValue({ id: "seti_new", client_secret: "seti_new_secret" });
 
     const res = await checkoutPOST();
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(stripeMocks.couponsRetrieve).toHaveBeenCalledWith("intro_6");
-    expect(body.data.introMonthsRemaining).toBe(6);
-    expect(body.data.amountDueNow).toBe(900);
-  });
-
-  it("NaN used → intro_6 (fail toward the discount)", async () => {
-    getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = {
-      data: {
-        status: "lapsed",
-        stripe_customer_id: "cus_existing",
-        intro_months_used: Number.NaN,
+    expect(stripeMocks.setupIntentsCreate).toHaveBeenCalledWith(
+      {
+        customer: "cus_existing",
+        usage: "off_session",
+        payment_method_types: ["card"],
+        metadata: { app_user_id: "user-1", purpose: "stablepass_trial" },
       },
+      expect.objectContaining({ idempotencyKey: expect.any(String) }),
+    );
+    expect(stripeMocks.subscriptionsCreate).not.toHaveBeenCalled();
+    expect(body.data.started).toBe(false);
+    expect(body.data.intentType).toBe("setup");
+    expect(body.data.clientSecret).toBe("seti_new_secret");
+    expect(body.data.amountDueNow).toBe(0);
+    expect(body.data.subscriptionId).toBeNull();
+  });
+
+  // (b) eligible, a pending trial SetupIntent of ours already exists: reused,
+  // never re-created. A SetupIntent belonging to someone else, or lacking the
+  // trial purpose tag, is never adopted as ours.
+  it("(b) eligible: a pending trial SetupIntent of ours is REUSED (create not called)", async () => {
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = {
+      data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: null }),
+    };
+    stripeMocks.setupIntentsList.mockResolvedValue({
+      data: [setupIntentEntry("seti_pending", 1000, { status: "requires_confirmation" })],
+    });
+
+    const res = await checkoutPOST();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(stripeMocks.setupIntentsCreate).not.toHaveBeenCalled();
+    expect(body.data.clientSecret).toBe("seti_pending_secret");
+    expect(body.data.intentType).toBe("setup");
+  });
+
+  // The "confirmed card" guard. A SetupIntent stuck in 3DS (`requires_action`)
+  // or awaiting confirmation already carries a payment_method — only a
+  // SUCCEEDED one may start a trial.
+  it.each([["requires_action"], ["requires_confirmation"], ["processing"], ["canceled"]])(
+    "(b) a trial SetupIntent in %s WITH a payment_method never starts a trial",
+    async (status) => {
+      getUserMock.mockResolvedValue({ data: { user: USER } });
+      tableData.subscription = {
+        data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: null }),
+      };
+      stripeMocks.setupIntentsList.mockResolvedValue({
+        data: [setupIntentEntry("seti_unconfirmed", 1000, { status, paymentMethod: "pm_x" })],
+      });
+      stripeMocks.setupIntentsCreate.mockResolvedValue({ id: "seti_new", client_secret: "seti_new_secret" });
+
+      const res = await checkoutPOST();
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(stripeMocks.subscriptionsCreate).not.toHaveBeenCalled();
+      expect(body.data.started).toBe(false);
+      expect(body.data.intentType).toBe("setup");
+    },
+  );
+
+  it("(b) a SUCCEEDED SetupIntent of another member, or without the trial purpose, never starts a trial", async () => {
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = {
+      data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: null }),
+    };
+    stripeMocks.setupIntentsList.mockResolvedValue({
+      data: [
+        setupIntentEntry("seti_foreign_done", 1000, { status: "succeeded", paymentMethod: "pm_a", appUserId: "someone-else" }),
+        setupIntentEntry("seti_untagged_done", 1001, { status: "succeeded", paymentMethod: "pm_b", purpose: null }),
+      ],
+    });
+    stripeMocks.setupIntentsCreate.mockResolvedValue({ id: "seti_new", client_secret: "seti_new_secret" });
+
+    const res = await checkoutPOST();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(stripeMocks.subscriptionsCreate).not.toHaveBeenCalled();
+    expect(body.data.started).toBe(false);
+  });
+
+  it("(b) a SetupIntent with a different app_user_id or no trial purpose is ignored (a fresh one is made)", async () => {
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = {
+      data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: null }),
+    };
+    stripeMocks.setupIntentsList.mockResolvedValue({
+      data: [
+        setupIntentEntry("seti_foreign", 1000, { appUserId: "someone-else" }),
+        setupIntentEntry("seti_no_purpose", 1000, { purpose: null }),
+      ],
+    });
+    stripeMocks.setupIntentsCreate.mockResolvedValue({ id: "seti_new", client_secret: "seti_new_secret" });
+
+    const res = await checkoutPOST();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(stripeMocks.setupIntentsCreate).toHaveBeenCalledTimes(1);
+    expect(body.data.clientSecret).toBe("seti_new_secret");
+  });
+
+  // (c) a SUCCEEDED trial SetupIntent of ours starts the trial: the create
+  // params are asserted EXACTLY, including the sandbox-measured response shape.
+  it("(c) eligible, succeeded trial SetupIntent: subscriptions.create gets EXACTLY the trial object and the literal idempotency key", async () => {
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = {
+      data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: null }),
+    };
+    stripeMocks.setupIntentsList.mockResolvedValue({
+      data: [setupIntentEntry("seti_done", 1000, { status: "succeeded", paymentMethod: "pm_1" })],
+    });
+    stripeMocks.subscriptionsCreate.mockResolvedValue({
+      id: "sub_t",
+      status: "trialing",
+      trial_start: 1790128864,
+      trial_end: 1792720864,
+      default_payment_method: "pm_1",
+      pending_setup_intent: null,
+      latest_invoice: { status: "paid", amount_due: 0, confirmation_secret: null },
+    });
+
+    const res = await checkoutPOST();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(stripeMocks.subscriptionsCreate).toHaveBeenCalledWith(
+      {
+        customer: "cus_existing",
+        items: [{ price: "price_standard" }],
+        default_payment_method: "pm_1",
+        cancel_at_period_end: false,
+        trial_period_days: 30,
+        metadata: { app_user_id: "user-1" },
+      },
+      { idempotencyKey: "eng1328-trial-user-1-seti_done" },
+    );
+    expect(body.data.started).toBe(true);
+    expect(body.data.trialEndsAt).toBe(new Date(1792720864000).toISOString());
+    expect(body.data.amountDueNow).toBe(0);
+    expect(body.data.subscriptionId).toBe("sub_t");
+  });
+
+  // A payment_method that arrives as an object (not a bare id string) resolves
+  // to its `.id` — the sandbox has returned both shapes.
+  it("(c) a payment_method returned as an object resolves to its .id", async () => {
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = {
+      data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: null }),
+    };
+    stripeMocks.setupIntentsList.mockResolvedValue({
+      data: [setupIntentEntry("seti_done", 1000, { status: "succeeded", paymentMethod: { id: "pm_obj" } })],
+    });
+    stripeMocks.subscriptionsCreate.mockResolvedValue({
+      id: "sub_t",
+      status: "trialing",
+      trial_start: 1790128864,
+      trial_end: 1792720864,
+      latest_invoice: { status: "paid", amount_due: 0, confirmation_secret: null },
+    });
+
+    await checkoutPOST();
+
+    expect(stripeMocks.subscriptionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ default_payment_method: "pm_obj" }),
+      expect.anything(),
+    );
+  });
+
+  // (d) ineligible: unchanged paid flow, no trial keys, setupIntents untouched.
+  it("(d) ineligible member: subscriptions.create gets EXACTLY the paid object; setupIntents is never touched", async () => {
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = {
+      data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }),
     };
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
       latest_invoice: { confirmation_secret: { type: "payment_intent", client_secret: "pi_new_secret" } },
     });
 
-    const body = await (await checkoutPOST()).json();
+    await checkoutPOST();
 
-    expect(stripeMocks.couponsRetrieve).toHaveBeenCalledWith("intro_6");
-    expect(body.data.introMonthsRemaining).toBe(6);
+    const arg = stripeMocks.subscriptionsCreate.mock.calls[0][0];
+    expect(arg).toEqual(FULL_PAID_PARAMS);
+    expect(arg).not.toHaveProperty("trial_period_days");
+    expect(arg).not.toHaveProperty("trial_settings");
+    expect(stripeMocks.setupIntentsList).not.toHaveBeenCalled();
+    expect(stripeMocks.setupIntentsCreate).not.toHaveBeenCalled();
   });
 
-  it("GUARDRAIL: POST.length === 0 — calling POST() with no args still uses the DB coupon", async () => {
-    expect(checkoutPOST.length).toBe(0);
+  // (e) already-live guard — status alone decides, regardless of price / cancel_at_period_end.
+  describe("(e) already-live guard: any of ours trialing/active/past_due is 409, regardless of price/cancel", () => {
+    it.each(["trialing", "active", "past_due"])("status %s → 409 already_active, nothing created", async (status) => {
+      getUserMock.mockResolvedValue({ data: { user: USER } });
+      tableData.subscription = {
+        data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: null }),
+      };
+      stripeMocks.subscriptionsList.mockResolvedValue({
+        data: [subEntry("sub_live", 1000, "pi_x", "price_standard", { status })],
+      });
 
+      const res = await checkoutPOST();
+      const body = await res.json();
+
+      expect(res.status).toBe(409);
+      expect(body.error.code).toBe("already_active");
+      expect(stripeMocks.subscriptionsCreate).not.toHaveBeenCalled();
+      expect(stripeMocks.setupIntentsCreate).not.toHaveBeenCalled();
+    });
+
+    it("a live status with cancel_at_period_end true still 409s", async () => {
+      getUserMock.mockResolvedValue({ data: { user: USER } });
+      tableData.subscription = {
+        data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: null }),
+      };
+      stripeMocks.subscriptionsList.mockResolvedValue({
+        data: [subEntry("sub_live", 1000, "pi_x", "price_standard", { status: "active", cancelAtPeriodEnd: true })],
+      });
+
+      const res = await checkoutPOST();
+      expect(res.status).toBe(409);
+      expect(stripeMocks.subscriptionsCreate).not.toHaveBeenCalled();
+    });
+
+    it("a live status at a different price still 409s (price is irrelevant to the guard)", async () => {
+      getUserMock.mockResolvedValue({ data: { user: USER } });
+      tableData.subscription = {
+        data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: null }),
+      };
+      stripeMocks.subscriptionsList.mockResolvedValue({
+        data: [subEntry("sub_live", 1000, "pi_x", "price_other", { status: "active" })],
+      });
+
+      const res = await checkoutPOST();
+      expect(res.status).toBe(409);
+    });
+
+    it("a DIFFERENT app_user_id's active Subscription does NOT 409 this member", async () => {
+      getUserMock.mockResolvedValue({ data: { user: USER } });
+      tableData.subscription = {
+        data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: null }),
+      };
+      stripeMocks.subscriptionsList.mockResolvedValue({
+        data: [subEntry("sub_other", 1000, "pi_x", "price_standard", { status: "active", appUserId: "someone-else" })],
+      });
+      stripeMocks.setupIntentsCreate.mockResolvedValue({ id: "seti_new", client_secret: "seti_new_secret" });
+
+      const res = await checkoutPOST();
+      expect(res.status).toBe(200);
+    });
+  });
+
+  // (f) defence in depth: a canceled Subscription of ours that has ever
+  // trialled makes an otherwise-eligible member ineligible, even though
+  // `trial_used_at` itself is still null.
+  it("(f) a canceled Subscription of ours with trial_start set makes a null-trial_used_at member ineligible (paid flow, no SI)", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial", intro_months_used: 6 }) };
+    tableData.subscription = {
+      data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: null }),
+    };
+    stripeMocks.subscriptionsList.mockResolvedValue({
+      data: [subEntry("sub_old_trial", 1000, "pi_x", "price_standard", { status: "canceled", trialStart: 1700000000 })],
+    });
+    stripeMocks.subscriptionsCreate.mockResolvedValue({
+      id: "sub_new",
+      latest_invoice: { confirmation_secret: { type: "payment_intent", client_secret: "pi_new_secret" } },
+    });
+
+    const res = await checkoutPOST();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(stripeMocks.setupIntentsList).not.toHaveBeenCalled();
+    expect(stripeMocks.setupIntentsCreate).not.toHaveBeenCalled();
+    expect(stripeMocks.subscriptionsCreate).toHaveBeenCalledTimes(1);
+    const arg = stripeMocks.subscriptionsCreate.mock.calls[0][0];
+    expect(arg).not.toHaveProperty("trial_period_days");
+    expect(body.data.intentType).toBe("payment");
+  });
+
+  // (g) the literal shape of the list call.
+  it("(g) subscriptions.list is called with status:'all' and the 2-entry expand (literal)", async () => {
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = {
+      data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }),
+    };
     stubCreates();
 
-    const body = await (await checkoutPOST()).json();
+    await checkoutPOST();
 
-    expect(body.data.amountDueNow).toBe(1900);
-    expect(body.data.introMonthsRemaining).toBe(0);
+    expect(stripeMocks.subscriptionsList).toHaveBeenCalledWith({
+      customer: "cus_existing",
+      status: "all",
+      limit: 100,
+      expand: ["data.latest_invoice.confirmation_secret", "data.latest_invoice.payment_intent"],
+    });
+  });
+
+  // (h) couponsRetrieve is dead code on both branches.
+  it("(h) couponsRetrieve is never called on either the trial or the non-trial path", async () => {
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = {
+      data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: null }),
+    };
+    stripeMocks.setupIntentsCreate.mockResolvedValue({ id: "seti_new", client_secret: "seti_new_secret" });
+    await checkoutPOST();
     expect(stripeMocks.couponsRetrieve).not.toHaveBeenCalled();
-    expect(fromMock).toHaveBeenCalledWith("subscription");
+
+    resetAll();
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = {
+      data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }),
+    };
+    stubCreates();
+    await checkoutPOST();
+    expect(stripeMocks.couponsRetrieve).not.toHaveBeenCalled();
   });
 
   it("prices.retrieve is ALWAYS called with price_standard, never price_promo", async () => {
-    for (const used of [0, 2, 6, 9]) {
+    for (const trialUsedAt of [null, "2026-01-01T00:00:00Z"]) {
       resetAll();
-      freshMember(used);
+      getUserMock.mockResolvedValue({ data: { user: USER } });
+      tableData.subscription = {
+        data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: trialUsedAt }),
+      };
+      stripeMocks.setupIntentsCreate.mockResolvedValue({ id: "seti_new", client_secret: "seti_new_secret" });
+      stubCreates();
       await checkoutPOST();
       expect(stripeMocks.pricesRetrieve).toHaveBeenCalledWith("price_standard");
       expect(stripeMocks.pricesRetrieve).not.toHaveBeenCalledWith("price_promo");
     }
   });
 
-  it("create has cancel_at_period_end false AND save_default_payment_method on_subscription", async () => {
-    freshMember(0);
+  // (j) the idempotency key SCOPE diverges by eligibility (a SetupIntent key
+  // for an eligible member, a Subscription key for an ineligible one).
+  it("(j) the idempotency key scope diverges by eligibility: SetupIntent key for eligible, Subscription key for ineligible", async () => {
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = {
+      data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: null }),
+    };
+    stripeMocks.setupIntentsCreate.mockResolvedValue({ id: "seti_new", client_secret: "seti_new_secret" });
     await checkoutPOST();
+    const eligibleKey = stripeMocks.setupIntentsCreate.mock.calls[0][1]?.idempotencyKey;
 
-    const createCall = stripeMocks.subscriptionsCreate.mock.calls[0][0];
-    expect(createCall.cancel_at_period_end).toBe(false);
-    expect(createCall.payment_settings.save_default_payment_method).toBe("on_subscription");
+    resetAll();
+    getUserMock.mockResolvedValue({ data: { user: USER } });
+    tableData.subscription = {
+      data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }),
+    };
+    stubCreates();
+    await checkoutPOST();
+    const ineligibleKey = stripeMocks.subscriptionsCreate.mock.calls[0][1]?.idempotencyKey;
+
+    expect(eligibleKey).toBeDefined();
+    expect(ineligibleKey).toBeDefined();
+    expect(eligibleKey).toMatch(/^eng582-trial-setup-user-1-/);
+    expect(ineligibleKey).toMatch(/^eng582-subscription-user-1-/);
+    expect(eligibleKey).not.toBe(ineligibleKey);
   });
 });
 
@@ -1327,7 +1605,9 @@ describe("ENG-1027 — reuse filter (STANDARD price, cancel_at_period_end false,
 
   it("pending with cancel_at_period_end true is NOT reused (create is called)", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial", stripe_customer_id: "cus_existing" }) };
+    tableData.subscription = {
+      data: memberRow({ status: "trial", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }),
+    };
     stripeMocks.subscriptionsList.mockResolvedValue({
       data: [subEntry("sub_pass_era", 1000, "pi_pass_secret", "price_standard", { cancelAtPeriodEnd: true })],
     });
@@ -1346,7 +1626,9 @@ describe("ENG-1027 — reuse filter (STANDARD price, cancel_at_period_end false,
 
   it("pending with cancel_at_period_end false at price_standard IS reused (create not called)", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial", stripe_customer_id: "cus_existing" }) };
+    tableData.subscription = {
+      data: memberRow({ status: "trial", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }),
+    };
     stripeMocks.subscriptionsList.mockResolvedValue({
       data: [subEntry("sub_pending_standard", 1000, "pi_pending_secret", "price_standard")],
     });
@@ -1361,7 +1643,9 @@ describe("ENG-1027 — reuse filter (STANDARD price, cancel_at_period_end false,
 
   it("two sequential POSTs resolve to the same subscriptionId", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial", stripe_customer_id: "cus_existing", intro_months_used: 6 }) };
+    tableData.subscription = {
+      data: memberRow({ status: "trial", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }),
+    };
     stripeMocks.subscriptionsList.mockResolvedValue({ data: [] });
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_std_A",
@@ -1387,7 +1671,9 @@ describe("ENG-1027 — reuse filter (STANDARD price, cancel_at_period_end false,
 
   it("pending at price_promo is NOT reused", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial", stripe_customer_id: "cus_existing" }) };
+    tableData.subscription = {
+      data: memberRow({ status: "trial", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }),
+    };
     stripeMocks.subscriptionsList.mockResolvedValue({
       data: [subEntry("sub_pending_promo", 1000, "pi_pending_secret", "price_promo")],
     });
@@ -1408,7 +1694,9 @@ describe("ENG-1027 — reuse filter (STANDARD price, cancel_at_period_end false,
 
   it("pending missing app_user_id is NOT reused", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial", stripe_customer_id: "cus_existing" }) };
+    tableData.subscription = {
+      data: memberRow({ status: "trial", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }),
+    };
     stripeMocks.subscriptionsList.mockResolvedValue({
       data: [subEntry("sub_foreign", 9999, "pi_foreign_secret", "price_standard", { appUserId: null })],
     });
@@ -1427,7 +1715,9 @@ describe("ENG-1027 — reuse filter (STANDARD price, cancel_at_period_end false,
 
   it("pending quantity 3 is NOT reused; quantity 1 IS reused", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing" }) };
+    tableData.subscription = {
+      data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: "2026-01-01T00:00:00Z" }),
+    };
 
     const bulk = subEntry("sub_bulk", 9999, "pi_bulk_secret", "price_standard");
     bulk.items.data[0] = { ...bulk.items.data[0], quantity: 3 } as (typeof bulk.items.data)[0];
@@ -1459,10 +1749,10 @@ describe("ENG-1027 — money-critical invariants", () => {
     vi.useRealTimers();
   });
 
-  function freshMember(introMonthsUsed: number) {
+  function freshMember(trialUsedAt: string | null) {
     getUserMock.mockResolvedValue({ data: { user: USER } });
     tableData.subscription = {
-      data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", intro_months_used: introMonthsUsed }),
+      data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: trialUsedAt }),
     };
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
@@ -1470,27 +1760,14 @@ describe("ENG-1027 — money-critical invariants", () => {
     });
   }
 
-  it("the idempotency key DIVERGES when remaining/coupon changes inside one time bucket (used 0 vs used 6)", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-09-06T00:00:00Z"));
-
-    freshMember(0);
-    await checkoutPOST();
-    const introKey = stripeMocks.subscriptionsCreate.mock.calls[0][1]?.idempotencyKey;
-
-    stripeMocks.subscriptionsCreate.mockClear();
-    freshMember(6);
-    await checkoutPOST();
-    const fullKey = stripeMocks.subscriptionsCreate.mock.calls[0][1]?.idempotencyKey;
-
-    expect(introKey).toBeDefined();
-    expect(fullKey).toBeDefined();
-    expect(fullKey).not.toBe(introKey);
-  });
+  // The eligible-vs-ineligible idempotency-key-SCOPE divergence is covered by
+  // "(j)" in the ENG-1328 round 2 describe above — the eligible path no
+  // longer calls `subscriptions.create` at all on the first POST (CARD FIRST),
+  // so asserting it here would be asserting the wrong call.
 
   it("an UNSET STRIPE_PRICE_ID_STANDARD is a distinguishable 502 stripe_error (prices.retrieve throws)", async () => {
     delete process.env.STRIPE_PRICE_ID_STANDARD;
-    freshMember(0);
+    freshMember(null);
 
     const res = await checkoutPOST();
     const body = await res.json();
@@ -1502,11 +1779,11 @@ describe("ENG-1027 — money-critical invariants", () => {
     expect(stripeMocks.paymentIntentsCreate).not.toHaveBeenCalled();
   });
 
-  it("GUARDRAIL: a FAILED subscription read (42703 — intro_months_used not deployed) fails CLOSED", async () => {
+  it("GUARDRAIL: a FAILED subscription read (42703 — trial_used_at not deployed) fails CLOSED", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
     tableData.subscription = {
       data: null,
-      error: { code: "42703", message: `column subscription.intro_months_used does not exist` },
+      error: { code: "42703", message: `column subscription.trial_used_at does not exist` },
     };
 
     const res = await checkoutPOST();
@@ -1525,7 +1802,7 @@ describe("ENG-1027 — money-critical invariants", () => {
 
   it("stripe_error and stripe_unavailable stay distinct codes", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
     stripeMocks.pricesRetrieve.mockRejectedValue(new Error("stripe down"));
 
     const errorRes = await checkoutPOST();
@@ -1536,7 +1813,7 @@ describe("ENG-1027 — money-critical invariants", () => {
     resetAll();
     delete process.env.STRIPE_SECRET_KEY;
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "trial" }) };
+    tableData.subscription = { data: memberRow({ status: "trial", trial_used_at: "2026-01-01T00:00:00Z" }) };
 
     const unavailRes = await checkoutPOST();
     const unavailBody = await unavailRes.json();
@@ -1547,16 +1824,18 @@ describe("ENG-1027 — money-critical invariants", () => {
   });
 });
 
-describe("ENG-1027 — the subscription projection is pinned exactly", () => {
+describe("ENG-1328 — the subscription projection is pinned exactly", () => {
   beforeEach(resetAll);
   afterEach(() => {
     process.env = ORIGINAL_ENV;
     vi.useRealTimers();
   });
 
-  it("selects exactly status,stripe_customer_id,intro_months_used", async () => {
+  it("selects exactly status,stripe_customer_id,trial_used_at", async () => {
     getUserMock.mockResolvedValue({ data: { user: USER } });
-    tableData.subscription = { data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", intro_months_used: 0 }) };
+    tableData.subscription = {
+      data: memberRow({ status: "lapsed", stripe_customer_id: "cus_existing", trial_used_at: null }),
+    };
     stripeMocks.subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
       latest_invoice: { confirmation_secret: { type: "payment_intent", client_secret: "pi_new_secret" } },
@@ -1566,11 +1845,11 @@ describe("ENG-1027 — the subscription projection is pinned exactly", () => {
 
     const subSelects = selectMock.mock.calls.filter(([table]) => table === "subscription");
     expect(subSelects).toHaveLength(1);
-    expect(subSelects[0][1]).toBe("status,stripe_customer_id,intro_months_used");
+    expect(subSelects[0][1]).toBe("status,stripe_customer_id,trial_used_at");
   });
 });
 
-describe("ENG-1027 — source guard: Branch B / promo price / renewal are gone", () => {
+describe("ENG-1027/ENG-1328 — source guard: Branch B / promo price / renewal / intro coupon are gone", () => {
   it("the checkout route no longer reads STRIPE_PRICE_ID_PROMO, THIRTY_DAYS_MS, or renewal mode", () => {
     const src = readFileSync(resolve(process.cwd(), "app/api/subscription/checkout/route.ts"), "utf8");
     const code = executableSource(src);
@@ -1579,5 +1858,27 @@ describe("ENG-1027 — source guard: Branch B / promo price / renewal are gone",
     expect(code).not.toContain("THIRTY_DAYS_MS");
     expect(code).not.toMatch(/kind:\s*["']renewal["']/);
     expect(code).not.toMatch(/mode:\s*["']renewal["']/);
+  });
+
+  it("the intro coupon path is entirely gone, and trial_used_at is only ever read, never written", () => {
+    const src = readFileSync(resolve(process.cwd(), "app/api/subscription/checkout/route.ts"), "utf8");
+    const code = executableSource(src);
+
+    expect(code).not.toContain("intro_months_used");
+    expect(code).not.toContain("coupons.retrieve");
+    expect(code).not.toContain("discounts");
+    expect(code).not.toMatch(/\bintro_/);
+    expect(code).not.toContain("INTRO_MONTHS");
+    // Only Stripe Customer/Subscription calls exist in this file; none touch
+    // the DB `subscription` row (RLS denies it silently, ENG-582) — and none
+    // stamp `trial_used_at`, which only the be write-path may set (ENG-1327).
+    expect(code).not.toContain('"subscription").update(');
+    expect(code).not.toContain("'subscription').update(");
+    expect(code).not.toContain('"subscription").upsert(');
+    expect(code).not.toContain('"subscription").insert(');
+    // Distinct from the type declaration (`trial_used_at: string | null` on
+    // `SubscriptionRow`, a READ shape) — this checks specifically for an
+    // object literal assigning a value to the key, the shape a write takes.
+    expect(code).not.toMatch(/trial_used_at:\s*(user|new Date|["'`]|Date\.now)/);
   });
 });
