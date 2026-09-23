@@ -69,13 +69,15 @@ Stablepass does not operate, manage, promote or administer any horse-racing synd
 
 You must obtain independent professional advice where appropriate.
 
+<!-- LEGAL REVIEW REQUIRED (ENG-1337): proposed wording drafted by an agent, not approved. Do not ship without client/legal sign-off. -->
+
 ## 7. Subscription Access and Payments
 
 Certain features of the Platform require a paid subscription. Subscription pricing, billing periods and included features are displayed at or before purchase.
 
 By subscribing, you authorise Stablepass and its payment provider to process recurring charges using your nominated payment method.
 
-Subscription billing, renewal, cancellation, refunds and introductory offers are governed by the Subscription, Refund & Cancellation Policy, which forms part of these Terms.
+Subscription billing, free trials, renewal, cancellation and refunds are governed by the Subscription, Refund & Cancellation Policy, which forms part of these Terms.
 
 Stablepass uses third-party payment processors (such as Stripe). Stablepass does not collect or store complete payment-card details.
 

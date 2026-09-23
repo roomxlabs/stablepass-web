@@ -41,19 +41,25 @@ Deleting your account permanently removes, and does not recover:
 
 Deletion cannot be undone. Stablepass cannot restore a deleted account, and creating a new account later does not bring any of it back.
 
+<!-- LEGAL REVIEW REQUIRED (ENG-1337): proposed wording drafted by an agent, not approved. Do not ship without client/legal sign-off. -->
+
 ## 4. What is retained, and why
 
 A small amount of information survives deletion because Stablepass is required to keep it or because deleting it would let the deletion itself be abused.
 
 - Records of payments already made, including invoices, are retained by Stablepass and its payment provider to meet tax, accounting and financial record-keeping obligations. As part of deletion Stablepass asks its payment provider to unlink those records from your account, so that they are no longer connected to your profile.
 - A record that a deletion happened, with the date and an internal identifier for the deleted account, is retained so Stablepass can demonstrate the request was honoured. That identifier is not linked to any remaining profile and is not used to contact you.
-- A one-way, irreversible form of the phone number used to claim a free trial is retained, so that deleting an account cannot be used to claim the trial repeatedly. It cannot be read back or used to contact you.
+- A one-way, irreversible form of the phone number on the deleted account is retained, so that the same number cannot be attached to a new account. It cannot be read back or used to contact you.
 
 The email address on the deleted account is released, and may be used to register again.
+
+<!-- LEGAL REVIEW REQUIRED (ENG-1337): proposed wording drafted by an agent, not approved. Do not ship without client/legal sign-off. -->
 
 ## 5. Access ends immediately
 
 Deletion takes effect at once. Access to Stablepass ends immediately, and any remaining time on a current subscription is forfeited. It is not refunded, and it is not transferred to another account.
+
+A subscription billed by Stablepass on the website is cancelled as part of the deletion. Deleting your account does not cancel a subscription billed by Apple or Google. If you subscribed in the App Store or Google Play, cancel it in your iPhone Settings or in the Google Play app as well, or you will continue to be charged.
 
 If you would rather keep your remaining time and simply stop using Stablepass, do not delete your account — deletion is the one action here that cannot be reversed.
 
