@@ -2,13 +2,19 @@
 
 // ExploreFeed — the Explore screen (06-explore.html). Composes the W4 shared
 // components (PostCard/ReactionBar/RaceDayBand/TrainerCard) against the W5 BFF
-// (`/api/feed`, `/api/feed/seen`, `/api/posts/:id/playback`). The followed feed now
+// (`/api/feed`, `/api/posts/media`, `/api/posts/:id/playback`). The followed feed now
 // lives on the dedicated /following screen (W13), so Explore is a single view.
 //
 // DATA REALITY: the be `feed` fn returns bare `post` rows (no horse/trainer names),
-// so every page is enriched client-side: a `horse` lookup for the byline, plus the
-// viewer's own `reaction`/`bookmark` rows (RLS returns only the viewer's own).
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+// so every page is enriched: a `horse` lookup for the byline, plus the viewer's
+// own `reaction`/`bookmark` rows (RLS returns only the viewer's own), plus the
+// media mint — all four in parallel (`lib/feed/explore-page.ts`).
+//
+// PAGE 1 ARRIVES SERVER-RENDERED (ENG-1593): `initialPage` is the first page the
+// server already assembled (or the wall, for a lapsed member), so this island
+// does NOT fetch it again on mount. Only when the server could not build it
+// (`null`) does the island fetch page 1 itself, exactly as it used to.
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AccessWall } from "@/components/access-wall";
 import { HlsVideo } from "@/components/hls-video";
 import { useFeedVideoFailure } from "@/lib/feed/use-feed-video-failure";
@@ -20,15 +26,16 @@ import { supabaseBrowser } from "@/lib/supabase/client";
 // Still here for the ASIDE's trainer thumbs (ENG-1057) — the FEED's own photo
 // signing moved into `lib/feed/subject.ts` at ENG-1270.
 import { signPhotoMap, TRAINER_PHOTO_BUCKET } from "@/lib/storage/photos";
-import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@/lib/api/post-media";
-import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
-import { enrichFeedSubjects } from "@/lib/feed/subject";
+import { resolvePostDisplayUrls } from "@/lib/api/post-media";
+import type { PostIntrinsicRow } from "@/lib/feed/post-row";
+import { assembleExplorePage, EXPLORE_PAGE_SIZE, type ExploreInitialPage } from "@/lib/feed/explore-page";
 import { PostHead } from "@/components/post-head";
+import { MediaLoadPriority } from "@/components/post-media-image";
 import type { FeedPost, ReactionEmoji, RaceDayEntry, TrainerSummary } from "@/components/types";
 import { displayHorseNameOrEmpty } from "@/lib/format/horse-name";
 import { apiFetch } from "@/lib/api/client";
 
-const LIMIT = 10;
+const LIMIT = EXPLORE_PAGE_SIZE;
 
 // Bare be `post` row shape (no horse/trainer names — see module comment).
 // `horse_id` / `source_trainer_id` / `subject` / `byline` ride on the shared row
@@ -38,9 +45,9 @@ type PostRow = PostIntrinsicRow;
 // The horse read, its trainer embed and both photo-signing batches MOVED to
 // `lib/feed/subject.ts` at ENG-1270 — one helper for Explore, Following, Saved
 // and the trainer profile, because a null `horse_id` inside `.in()` would
-// otherwise blank every byline on the page (see that module's header).
-type ReactionRow = { post_id: string; emoji: ReactionEmoji };
-type BookmarkRow = { post_id: string };
+// otherwise blank every byline on the page (see that module's header). The
+// reaction/bookmark reads and the media mint moved into
+// `lib/feed/explore-page.ts` at ENG-1593, shared with the server render.
 
 type RaceHorse = { id: string; display_name: string; shares_for_sale?: boolean | null };
 type RaceHorseRow = { horse: RaceHorse | RaceHorse[] | null };
@@ -103,13 +110,25 @@ function one<T>(v: T | T[] | null): T | null {
 // arrives as a boolean — `stripe_customer_id` itself never reaches client JS
 // (.rx/guardrails.md #1). `gated` still comes from the BFF's 402, which is
 // already date-aware via `hasAccess()`; ENG-585 only changes what the wall SAYS.
-export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; everSubscribed: boolean }) {
-  const [posts, setPosts] = useState<FeedPost[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(false);
-  const [loading, setLoading] = useState(true);
+export function ExploreFeed({
+  viewerId,
+  everSubscribed,
+  initialPage = null,
+}: {
+  viewerId: string;
+  everSubscribed: boolean;
+  /** Page 1 as the server built it (ENG-1593); `null` → fetch it here, as before. */
+  initialPage?: ExploreInitialPage | null;
+}) {
+  const seeded = initialPage?.kind === "ok" ? initialPage : null;
+  const [posts, setPosts] = useState<FeedPost[]>(seeded?.posts ?? []);
+  const [cursor, setCursor] = useState<string | null>(seeded?.nextCursor ?? null);
+  const [hasMore, setHasMore] = useState(seeded?.hasMore ?? false);
+  const [loading, setLoading] = useState(initialPage === null);
   const [error, setError] = useState(false);
-  const [gated, setGated] = useState(false);
+  const [gated, setGated] = useState(initialPage?.kind === "gated");
+  // Read once, on the first render: whether the server already handed us page 1.
+  const [serverRendered] = useState(initialPage !== null);
   const [races, setRaces] = useState<RaceDayEntry[]>([]);
   const [trainers, setTrainers] = useState<TrainerSummary[]>([]);
   // Which trainers the viewer already follows — the Follow pill's only input.
@@ -166,60 +185,32 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
         return;
       }
 
-      const ids = rows.map((r) => r.id);
-      const sb = supabaseBrowser();
-
-      // ONE subject-aware identity read for the page (ENG-1270): the horse read
-      // for the non-null `horse_id`s, the trainer read for the trainer-subject
-      // rows, and both signing batches.
-      const [{ identityById, error: identityError }, { data: reactionRows }, { data: bookmarkRows }] = await Promise.all([
-        enrichFeedSubjects(sb, rows),
-        sb.from("reaction").select("post_id,emoji").in("post_id", ids),
-        sb.from("bookmark").select("post_id").in("post_id", ids),
-      ]);
-
-      // An identity read that was REJECTED (not merely empty) must not paint:
-      // every card would read "Unknown horse" over a blank byline and the page
-      // would look fine. Raise the same error state a failed feed fetch raises.
-      if (identityError) {
+      // Identity, reactions, bookmarks and the media mint all start TOGETHER
+      // (ENG-1593) — the mint used to wait for the other three for no reason.
+      const page = await assembleExplorePage(supabaseBrowser(), rows, (r) => resolvePostDisplayUrls(r));
+      if (page.kind === "gated") {
+        setGated(true);
+        return;
+      }
+      if (page.kind === "error") {
         setError(true);
         return;
       }
 
-      const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
-      const mySet = new Set(((bookmarkRows ?? []) as BookmarkRow[]).map((b) => b.post_id));
-      // Photos + their slide counts via ONE POST /api/posts/media; video posters
-      // via playback?posterOnly=1. Absolute URLs pass through. A 402 surfaces the
-      // AccessWall (guardrail 3). `slideCounts` rides in on the same batch, which
-      // is what lets a carousel draw the right dots before it mints a thing.
-      let media: PostDisplayMedia;
-      try {
-        media = await resolvePostDisplayUrls(rows);
-      } catch (e) {
-        if (e instanceof PostMediaError && e.reason === "gated") {
-          setGated(true);
-          return;
-        }
-        media = { urls: new Map(), slideCounts: new Map() };
-      }
-
-      const intrinsics = { signedMedia: media.urls, slideCountByPost: media.slideCounts, reactionByPost: myReaction };
-      const mapped: FeedPost[] = rows.map((r) => ({
-        ...postIntrinsics(r, intrinsics),
-        ...identityById.get(r.id)!,
-        bookmarked: mySet.has(r.id),
-      }));
-
-      setPosts((prev) => (forCursor ? [...prev, ...mapped] : mapped));
+      setPosts((prev) => (forCursor ? [...prev, ...page.posts] : page.posts));
       setCursor(meta.nextCursor ?? null);
       setHasMore(Boolean(meta.hasMore));
-
-      // Best-effort impression tracking — never blocks rendering on failure.
-      apiFetch("/api/feed/seen", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ postIds: ids }),
-      }).catch(() => {});
+      // No `/api/feed/seen` call any more (ENG-1593). The be `feed` function
+      // records the impressions for every UNSEEN row it serves, and the seen
+      // top-up rows it serves already have one — so the second write here was
+      // a guaranteed duplicate, and as a plain INSERT it failed on 23505 for
+      // the whole batch every time.
+    } catch {
+      // A read that THREW (rather than returning an error) — a dead network or
+      // an unexpected shape. The same error state as a failed feed fetch, never
+      // a silent empty page; the server render maps the same case to its
+      // client-fetch fallback.
+      setError(true);
     } finally {
       loadingRef.current = false;
       setLoading(false);
@@ -228,10 +219,12 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
 
   // Fetch the first page on mount — a "synchronize with an external system"
   // effect (a data fetch), not derived render-state.
+  // Skipped when the server already rendered page 1 (or the wall).
   useEffect(() => {
+    if (serverRendered) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial data fetch, not derived state
     fetchPage(null);
-  }, [fetchPage]);
+  }, [fetchPage, serverRendered]);
 
   // Race-day band + "Trainers you follow" aside — loaded once, independent of the tab.
   useEffect(() => {
@@ -472,7 +465,7 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
 
           {!gated && !error && posts.length > 0 && (
             <>
-              {posts.map((p) => {
+              {posts.map((p, index) => {
                 const playbackUrl = playing[p.id];
                 if (playbackUrl) {
                   return (
@@ -508,7 +501,10 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
                   );
                 }
                 return (
-                  <Fragment key={p.id}>
+                  // ENG-1593 — the FIRST card's image is the page's largest
+                  // paint, so it is fetched eagerly at high priority; every card
+                  // below it waits until it nears the viewport.
+                  <MediaLoadPriority.Provider key={p.id} value={index === 0 ? "high" : "lazy"}>
                     <PostCard
                       post={p}
                       viewerId={viewerId}
@@ -523,7 +519,7 @@ export function ExploreFeed({ viewerId, everSubscribed }: { viewerId: string; ev
                         Couldn&rsquo;t load the video.
                       </p>
                     )}
-                  </Fragment>
+                  </MediaLoadPriority.Provider>
                 );
               })}
               <div ref={sentinelRef} />

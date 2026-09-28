@@ -88,6 +88,13 @@ describe("Sidebar nav icons", () => {
     expect(following?.querySelectorAll("circle").length).toBe(0);
   });
 
+  it("marks Explore current at `/` — the app-host root is REWRITTEN to Explore (ENG-1593)", () => {
+    pathname = "/";
+    const { container } = render(<Sidebar user={USER} />);
+    expect(container.querySelector('a[href="/explore"]')?.getAttribute("aria-current")).toBe("page");
+    expect(container.querySelectorAll('[aria-current="page"]').length).toBe(1);
+  });
+
   it("marks the active route with aria-current", () => {
     pathname = "/horses";
     const { container } = render(<Sidebar user={USER} />);
