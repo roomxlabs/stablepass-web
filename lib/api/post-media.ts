@@ -66,6 +66,38 @@ export class PostMediaError extends Error {
   }
 }
 
+/**
+ * HOW a mint request reaches the be (ENG-1593). The browser goes through the
+ * BFF (`/api/posts/media`, `/api/posts/:id/playback`); the server-rendered
+ * first page of /explore calls the edge functions directly with the member's
+ * own session (`lib/api/post-media-server.ts`). Both answer with the SAME
+ * `{ data }` body and the SAME 402 for a lapsed member, which is what lets the
+ * parsing, the gate handling and the post-id-only addressing below stay in ONE
+ * place for both callers.
+ *
+ * Neither method takes a path: the only inputs are post ids.
+ */
+export interface PostMediaTransport {
+  /** The batch mint for up to 50 post ids — `{ postIds }`, nothing else. */
+  batch(postIds: string[]): Promise<Response>;
+  /** One video post's baked poster only (no stream mint). */
+  poster(postId: string): Promise<Response>;
+}
+
+/** The browser's transport: through the BFF, via `apiFetch` (401 eviction). */
+export const bffPostMediaTransport: PostMediaTransport = {
+  batch: (postIds) =>
+    apiFetch("/api/posts/media", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      // Post IDS ONLY. Adding a path here would hand the server something the
+      // caller controls; it ignores `path`/`paths` for exactly that reason,
+      // and this end must not start sending one either.
+      body: JSON.stringify({ postIds }),
+    }),
+  poster: (postId) => apiFetch(`/api/posts/${postId}/playback?posterOnly=1`),
+};
+
 const isAbsoluteUrl = (v: string): boolean => /^(https?:|blob:|data:)/i.test(v);
 
 /**
@@ -88,7 +120,10 @@ function readSlideCount(value: unknown): number {
  * call. The slide count rides along in that same response rather than costing a
  * second round trip (ENG-809 decision 3).
  */
-export async function fetchPostMediaItems(postIds: string[]): Promise<Map<string, PostMediaItem>> {
+export async function fetchPostMediaItems(
+  postIds: string[],
+  transport: PostMediaTransport = bffPostMediaTransport,
+): Promise<Map<string, PostMediaItem>> {
   const unique: string[] = [];
   const seen = new Set<string>();
   for (const id of postIds) {
@@ -102,14 +137,7 @@ export async function fetchPostMediaItems(postIds: string[]): Promise<Map<string
   for (let i = 0; i < unique.length; i += BATCH) {
     const chunk = unique.slice(i, i + BATCH);
     try {
-      const res = await apiFetch("/api/posts/media", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        // Post IDS ONLY. Adding a path here would hand the server something the
-        // caller controls; it ignores `path`/`paths` for exactly that reason,
-        // and this end must not start sending one either.
-        body: JSON.stringify({ postIds: chunk }),
-      });
+      const res = await transport.batch(chunk);
       if (res.status === 402) throw new PostMediaError("gated");
       if (!res.ok) continue;
       const json = await res.json().catch(() => null);
@@ -205,6 +233,7 @@ type DisplayRow = {
  */
 export async function resolvePostDisplayUrls(
   rows: { id: string; type?: string | null; poster_url?: string | null; media_url?: string | null }[],
+  transport: PostMediaTransport = bffPostMediaTransport,
 ): Promise<PostDisplayMedia> {
   const out = new Map<string, string>();
   const slideCounts = new Map<string, number>();
@@ -224,27 +253,33 @@ export async function resolvePostDisplayUrls(
     else photoIds.push(row.id);
   }
 
-  const photos = await fetchPostMediaItems(photoIds);
+  // The photo batch and the video posters run TOGETHER (ENG-1593). They never
+  // depended on each other — the posters used to wait for the whole batch only
+  // because the code awaited it first, which put one extra round trip in front
+  // of every video card on the page. A 402 from EITHER still rejects the lot
+  // with PostMediaError('gated'), exactly as before.
+  const [photos] = await Promise.all([
+    fetchPostMediaItems(photoIds, transport),
+    Promise.all(
+      videoIds.map(async (id) => {
+        try {
+          const res = await transport.poster(id);
+          if (res.status === 402) throw new PostMediaError("gated");
+          if (!res.ok) return;
+          const json = await res.json().catch(() => null);
+          const posterUrl = json?.data?.posterUrl;
+          if (typeof posterUrl === "string" && posterUrl.length > 0) out.set(id, posterUrl);
+        } catch (e) {
+          if (e instanceof PostMediaError) throw e;
+          // Network / parse failure → skip this id (placeholder).
+        }
+      }),
+    ),
+  ]);
   for (const [id, item] of photos) {
     out.set(id, item.mediaUrl);
     slideCounts.set(id, item.slideCount);
   }
-
-  await Promise.all(
-    videoIds.map(async (id) => {
-      try {
-        const res = await apiFetch(`/api/posts/${id}/playback?posterOnly=1`);
-        if (res.status === 402) throw new PostMediaError("gated");
-        if (!res.ok) return;
-        const json = await res.json().catch(() => null);
-        const posterUrl = json?.data?.posterUrl;
-        if (typeof posterUrl === "string" && posterUrl.length > 0) out.set(id, posterUrl);
-      } catch (e) {
-        if (e instanceof PostMediaError) throw e;
-        // Network / parse failure → skip this id (placeholder).
-      }
-    }),
-  );
 
   return { urls: out, slideCounts };
 }

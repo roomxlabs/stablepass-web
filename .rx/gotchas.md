@@ -2722,3 +2722,51 @@ screen calls `confirmSetup` — `confirmPayment` rejects `seti_`). After confirm
 SUCCEEDED SetupIntent and creates the sub with `default_payment_method` + `trial_period_days`
 (idempotency key = the SetupIntent id). List subs with `status: "all"`; any of ours
 `trialing`/`active`/`past_due` → 409, and any with `trial_start` → no second trial.
+
+## `/explore` IS e2e-able locally now — serve the be edge functions yourself (ENG-1593, 29 Sep 2026)
+**Supersedes "The local `feed` edge function is a STUB" above.** The local stack runs no
+edge runtime by default (`docker ps` shows no `supabase_edge_runtime_*`), so every
+`edgeFetch` 404s/401s and Explore looks empty. Serve the REAL functions from the be
+checkout on the ticket's base: `cd ../stablepass-be-release && ../stablepass-be/node_modules/.bin/supabase functions serve --no-verify-jwt`
+(background it). `feed`, `post-media` and `playback` then work end to end.
+Three traps once it is up:
+- **Signed urls point at `http://kong:8000`** (the edge runtime's own `SUPABASE_URL`),
+  which the browser cannot resolve — every minted photo/poster is a broken image. In
+  Playwright, `page.route(/^http:\/\/kong:8000\//, …)` + `route.fetch({ url: <rewritten to 127.0.0.1:54321> })` + `route.fulfill`.
+  (`route.continue({ url })` to a different host did not work.) Wrap it in try/catch —
+  a closing context throws "Fetch response has been disposed".
+- **The feed is unseen-first and every load writes impressions**, so your seeded posts
+  sink below the shared DB's fixtures after ONE load. Delete the member's `impression`
+  rows (service role) before each load you measure or assert on.
+- `feed_page` orders by `published_at desc` — seed with `now - n seconds`, not a future time.
+
+## `lsof` cannot see sockets in the agent sandbox — `playwright.config.ts` never reuses a `next start` (ENG-1593)
+`lsof -ti :<port>` returns nothing (even unsandboxed), so the config's ownership check
+always says "not mine" and tries to start its OWN dev server on your port. To drive a
+production build (`next build && next start --port N`), verify the server's cwd with
+`ls -l /proc/<pid>/cwd` (pid from `ss -ltnp`) and run with a throwaway config OUTSIDE the
+commit (`use.baseURL` only, no `webServer`). Perf numbers from a dev server are meaningless.
+
+## Streamed Suspense content is in the DOM BEFORE it is visible (ENG-1593)
+A server-rendered boundary arrives as `<div hidden id="S:0">…` and is swapped in later —
+and React 19.2 THROTTLES reveals (up to ~300ms after first paint, see `$RT` in the inline
+`$RC` script). So `querySelector(".post-web")`, an `<img>` `load` event, or even
+`naturalWidth > 0` can all fire for a card the member cannot see yet. Measure and assert
+VISIBILITY: `el.closest("[hidden]") === null` (sampled per animation frame), and in
+Playwright use `toBeVisible()`. The first cut of ENG-1593's perf spec credited the
+server render with ~250ms it had not earned this way.
+
+## A member-wide `loading.tsx` turns `notFound()` into HTTP 200 (ENG-1593)
+`app/(member)/loading.tsx` streams the shell before the page's data exists, so the status
+line is already sent when `horses/[id]` / `trainers/[id]` call `notFound()`: they now
+render the not-found UI with `<meta name="robots" content="noindex">` inside a **200**
+(verified: base 404, branch 200). The layout's `redirect("/signin")` is ABOVE the boundary
+and is still a real 307. If a ticket needs a real 404 status on a member page, it needs
+that page OUT of the member-wide loading boundary.
+
+## The marketing build guard reads COMMENTS through `.next` sourcemaps (ENG-1593)
+`test/marketing-marquee.test.ts` "ships no confirmation copy in the built output" scans
+`.next`, including `*.js.map` `sourcesContent` — so the phrase "on its way" in a code
+COMMENT anywhere in the app (ENG-1593's skeleton comment said "data is still on its
+way") reds it after a build. Grep your diff for the guard's banned phrases before
+building.

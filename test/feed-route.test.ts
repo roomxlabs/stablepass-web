@@ -68,16 +68,42 @@ describe("GET /api/feed", () => {
     expect(edgeFetchMock).not.toHaveBeenCalled();
   });
 
-  it("returns 402 when the subscription has lapsed, without calling the edge fn", async () => {
+  // ENG-1593 — the edge `feed` fn IS the gate now; the route no longer reads
+  // `subscription` at all. A lapsed fixture is set up here on purpose (proving
+  // the route does not consult it), and the edge fn is stubbed to answer 200 —
+  // which is only reachable at all if the route FORWARDED, i.e. never blocked
+  // on the (lapsed) row.
+  it("forwards to the edge fn regardless of the subscription row — the BFF no longer gates", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
     singleMock.mockResolvedValue({ data: { status: "lapsed", trial_ends_at: null, current_period_end: null } });
+    edgeFetchMock.mockResolvedValue(
+      fakeRes(200, { data: [{ id: "p1" }], meta: { nextCursor: null, hasMore: false } }),
+    );
+
+    const res = await GET(req("http://localhost/api/feed"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data).toEqual([{ id: "p1" }]);
+    expect(edgeFetchMock).toHaveBeenCalledTimes(1);
+    // The gate moved — this route never reads `subscription` for itself.
+    expect(fromMock.mock.calls.some((c) => c[0] === "subscription")).toBe(false);
+  });
+
+  // The edge fn's own 402 is the ONLY gate this route relays now.
+  it("returns 402 (GATED envelope) when the edge fn reports subscription_required, even with an active-looking row", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    singleMock.mockResolvedValue({ data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } });
+    edgeFetchMock.mockResolvedValue(fakeRes(402, { error: { code: "subscription_required" } }));
 
     const res = await GET(req("http://localhost/api/feed"));
     const body = await res.json();
 
     expect(res.status).toBe(402);
-    expect(body.error.code).toBe("subscription_required");
-    expect(edgeFetchMock).not.toHaveBeenCalled();
+    // The exact GATED() envelope (lib/api/envelope.ts) — code, message and status.
+    expect(body).toEqual({
+      error: { code: "subscription_required", message: "An active or trial subscription is required." },
+    });
   });
 
   it("returns 200 with the edge fn's data + meta when subscribed", async () => {
@@ -95,18 +121,6 @@ describe("GET /api/feed", () => {
     expect(body.meta).toEqual({ nextCursor: "c", hasMore: true });
   });
 
-  it("returns 402 when the edge fn reports subscription_required", async () => {
-    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    singleMock.mockResolvedValue({ data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } });
-    edgeFetchMock.mockResolvedValue(fakeRes(402, {}));
-
-    const res = await GET(req("http://localhost/api/feed"));
-    const body = await res.json();
-
-    expect(res.status).toBe(402);
-    expect(body.error.code).toBe("subscription_required");
-  });
-
   it("returns 400 invalid_cursor when the edge fn rejects the cursor", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
     singleMock.mockResolvedValue({ data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } });
@@ -119,18 +133,6 @@ describe("GET /api/feed", () => {
     expect(body.error.code).toBe("invalid_cursor");
   });
 
-  it("returns 402 when the trial expired even though status is still trial", async () => {
-    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    singleMock.mockResolvedValue({ data: { status: "trial", trial_ends_at: "2020-01-01T00:00:00Z", current_period_end: null } });
-
-    const res = await GET(req("http://localhost/api/feed"));
-    const body = await res.json();
-
-    expect(res.status).toBe(402);
-    expect(body.error.code).toBe("subscription_required");
-    expect(edgeFetchMock).not.toHaveBeenCalled();
-  });
-
   it("returns 200 for an active member whose current_period_end is null", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
     singleMock.mockResolvedValue({ data: { status: "active", trial_ends_at: null, current_period_end: null } });
@@ -141,30 +143,6 @@ describe("GET /api/feed", () => {
     const res = await GET(req("http://localhost/api/feed"));
 
     expect(res.status).toBe(200);
-  });
-
-  it("returns 402 for an active member whose current_period_end has passed", async () => {
-    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    singleMock.mockResolvedValue({ data: { status: "active", trial_ends_at: null, current_period_end: "2020-01-01T00:00:00Z" } });
-
-    const res = await GET(req("http://localhost/api/feed"));
-    const body = await res.json();
-
-    expect(res.status).toBe(402);
-    expect(body.error.code).toBe("subscription_required");
-    expect(edgeFetchMock).not.toHaveBeenCalled();
-  });
-
-  it("selects the expiry columns, not just status", async () => {
-    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
-    singleMock.mockResolvedValue({ data: { status: "trial", trial_ends_at: "2099-01-01T00:00:00Z", current_period_end: null } });
-    edgeFetchMock.mockResolvedValue(
-      fakeRes(200, { data: [{ id: "p1" }], meta: { nextCursor: null, hasMore: false } }),
-    );
-
-    await GET(req("http://localhost/api/feed"));
-
-    expect(subSelectMock).toHaveBeenCalledWith("status,trial_ends_at,current_period_end");
   });
 
   it("never forwards shares= to the edge fn (Explore omits for-sale posts)", async () => {

@@ -4,8 +4,11 @@
 // never receives a token or the backend URL.
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { preconnect } from "react-dom";
 import { supabaseServer } from "@/lib/supabase/server";
-import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
+import { getViewer } from "@/lib/auth/viewer";
+import { hasAccess, type AccessRow } from "@/lib/api/access";
+import { readSubscriptionState } from "@/lib/api/subscription-state";
 import { ExpiryBanner } from "./expiry-banner";
 import { InstallPrompt } from "./install-prompt";
 import { Sidebar, type SidebarUser } from "./sidebar";
@@ -56,21 +59,47 @@ function trialLabel(sub: AccessRow | null): string | null {
 }
 
 export default async function MemberLayout({ children }: { children: React.ReactNode }) {
-  const sb = await supabaseServer();
-  const { data: { user } } = await sb.auth.getUser();
+  // ENG-1593 — warm the connections the first card needs BEFORE any of it is
+  // known. Every minted photo/poster and every browser-side read lives on the
+  // Supabase origin; a cold TLS handshake there used to sit on the critical
+  // path of the first image. Two hints because the pools differ: <img> loads
+  // use the no-CORS pool, supabase-js `fetch` the anonymous-CORS one.
+  // Member layout, not the root, so the marketing brochure pays for neither.
+  const supabaseOrigin = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (supabaseOrigin) {
+    preconnect(supabaseOrigin);
+    preconnect(supabaseOrigin, { crossOrigin: "anonymous" });
+  }
+
+  // ONE verified auth call per request (lib/auth/viewer.ts): the page below
+  // reuses this answer instead of paying for its own `getUser()`.
+  const user = await getViewer();
   if (!user) redirect("/signin");
 
-  const { data: profile } = await sb
-    .from("app_user").select("name,email").eq("id", user.id).maybeSingle();
-  // ACCESS_COLUMNS (not a hand-written column list) because the expiry banner
-  // below runs the row through `hasAccess()` — the shared gate. Selecting fewer
-  // columns than that helper reads is invisible to `tsc` (`sb` is untyped) and
-  // fails CLOSED at runtime, so the constant is the structural fix: widening
-  // the rule widens every select that feeds it. `trial_ends_at` also still
-  // feeds the sidebar chip below.
-  const { data: subscription } = await sb
-    .from("subscription").select(ACCESS_COLUMNS).eq("user_id", user.id).maybeSingle();
-  const sub = subscription as AccessRow | null;
+  const sb = await supabaseServer();
+  // ENG-1593 — the profile and the subscription are independent reads, so they
+  // run together instead of back to back. The subscription goes through
+  // `readSubscriptionState`, the per-request `cache()`d read, so the page under
+  // this layout (which needs the same row) makes NO second query for it.
+  //
+  // That helper selects SUBSCRIPTION_COLUMNS, a superset of ACCESS_COLUMNS, so
+  // `hasAccess()` below still sees every column it reads (the ENG-585 reason
+  // this layout used the constant rather than a hand-written list).
+  const [{ data: profile }, { sub: fullSub }] = await Promise.all([
+    sb.from("app_user").select("name,email").eq("id", user.id).maybeSingle(),
+    readSubscriptionState(user.id),
+  ]);
+  // Narrowed to the ACCESS columns before it goes anywhere near a client
+  // component: the full row carries `stripe_customer_id`, which must never
+  // reach browser JS (.rx/guardrails.md #1) — the ExpiryBanner is a client
+  // island and would otherwise serialise it into the page.
+  const sub: AccessRow | null = fullSub
+    ? {
+        status: fullSub.status,
+        trial_ends_at: fullSub.trial_ends_at,
+        current_period_end: fullSub.current_period_end,
+      }
+    : null;
 
   const name = profile?.name?.trim() || profile?.email?.split("@")[0] || "Member";
   const email = profile?.email || user.email || "";

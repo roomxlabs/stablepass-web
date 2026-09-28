@@ -23,7 +23,7 @@
 // 300s, so a long-lived tab expires over and over, and a budget that never
 // reset would fix only the FIRST expiry and then sit on a permanent
 // placeholder — visually identical to the bug this file exists to remove.
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { remintPostMedia } from "@/lib/api/post-media";
 
@@ -51,6 +51,19 @@ export interface PostMediaImageProps {
   placeholder?: ReactNode;
 }
 
+/**
+ * How urgently a feed's image should load (ENG-1593). A SCREEN sets it around a
+ * card; the card itself stays unaware. Explore marks its first card `"high"`
+ * (the page's largest paint: eager, `fetchpriority="high"`) and every card
+ * after it `"lazy"`. `null` — the default, and every screen that sets nothing —
+ * leaves the element exactly as it always was: no hint at all.
+ *
+ * Only slide 0 is ever `high`: a carousel's later slides are off-screen by
+ * construction, so they load lazily whatever the card's priority.
+ */
+export type MediaPriority = "high" | "lazy" | null;
+export const MediaLoadPriority = createContext<MediaPriority>(null);
+
 /** The no-media placeholder, unchanged from what the media box always drew. */
 const Placeholder = () => <div style={{ width: "100%", height: "100%" }} />;
 
@@ -61,6 +74,13 @@ export function PostMediaImage({
   slideIndex = 0,
   placeholder,
 }: PostMediaImageProps) {
+  const priority = useContext(MediaLoadPriority);
+  const loadHints =
+    priority === "high" && slideIndex === 0
+      ? ({ loading: "eager", fetchPriority: "high" } as const)
+      : priority !== null
+        ? ({ loading: "lazy" } as const)
+        : {};
   const [url, setUrl] = useState<string | null>(src ?? null);
   const [failed, setFailed] = useState(false);
   // A ref, not state: the cap must be read AND set inside one error handler
@@ -132,6 +152,7 @@ export function PostMediaImage({
     <img
       src={url}
       alt=""
+      {...loadHints}
       onLoad={() => {
         // A successful render returns the retry budget. This is what makes
         // recovery DURABLE rather than one-shot, and it is deliberate — not a
