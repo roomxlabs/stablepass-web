@@ -395,3 +395,82 @@ describe("VideoCarousel — one player feed-wide (8)", () => {
     await waitFor(() => expect(document.querySelectorAll("video")).toHaveLength(1));
   });
 });
+
+describe("VideoCarousel — a 402 on a lazy slide poster mint (guardrail 3)", () => {
+  const slide = (i: number) => document.querySelector(`[data-video-index="${i}"]`) as HTMLElement;
+
+  it("control: a 200 on ?posterOnly=1&videoIndex=1 draws that slide's poster <img>", async () => {
+    global.fetch = buildFetch() as unknown as typeof fetch;
+    render(<CarouselHarness post={videoPost()} />);
+    await screen.findByTestId("video-dots");
+    await waitFor(() =>
+      expect(slide(1).querySelector("img")).toHaveAttribute("src", "https://sb.local/posters/v-1.jpg"),
+    );
+  });
+
+  it("a 402 leaves slide 1 on the empty ground — no <img>, no gated url, no pill — and keeps all 3 dots", async () => {
+    const fetchMock = buildFetch({ posterStatus: { 1: 402 } });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    render(<CarouselHarness post={videoPost()} />);
+    await screen.findByTestId("video-dots");
+
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.map(([u]) => String(u))).toContain(
+        "/api/posts/v/playback?posterOnly=1&videoIndex=1",
+      ),
+    );
+    // Let the refused mint settle before asserting nothing arrived: await the
+    // actual fetch responses, then one macrotask for the state updates.
+    await act(async () => {
+      await Promise.all(fetchMock.mock.results.map((r) => r.value));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(within(slide(1)).getByTestId("video-slide-empty")).toBeInTheDocument();
+    expect(slide(1).querySelector("img")).toBeNull();
+    expect(document.body.innerHTML).not.toContain("v-1.jpg");
+    expect(screen.queryByRole("alert")).toBeNull();
+    // A 402 is not a 404: the slide is not hidden, so the count cannot leak "gated" vs "missing".
+    expect(within(screen.getByTestId("video-dots")).getAllByRole("button")).toHaveLength(3);
+    expect(screen.getByTestId("media-video-count")).toHaveTextContent("1/3");
+  });
+});
+
+describe("VideoCarousel — swiping away from a playing slide stops it", () => {
+  it("a scroll that settles on slide 2 unmounts slide 1's <video>", async () => {
+    global.fetch = buildFetch() as unknown as typeof fetch;
+    const user = userEvent.setup();
+    render(<CarouselHarness post={videoPost()} />);
+    await screen.findByTestId("video-dots");
+
+    await user.click(screen.getByRole("button", { name: "Play video 1 of 3" }));
+    await waitFor(() => expect(document.querySelector('[data-video-index="0"] video')).not.toBeNull());
+
+    const track = screen.getByTestId("video-track");
+    Object.defineProperty(track, "scrollLeft", { value: 360, configurable: true });
+    fireEvent.scroll(track);
+
+    await waitFor(() => expect(screen.getByTestId("media-video-count")).toHaveTextContent("2/3"));
+    await waitFor(() => expect(document.querySelector("video")).toBeNull());
+  });
+});
+
+describe("VideoCarousel — a 404 stream mint hides that slide", () => {
+  it("hides slide 2 after its stream mint 404s and recomputes the dots", async () => {
+    global.fetch = buildFetch({ streamStatus: { 1: 404 } }) as unknown as typeof fetch;
+    const user = userEvent.setup();
+    render(<CarouselHarness post={videoPost()} />);
+    await screen.findByTestId("video-dots");
+
+    await user.click(screen.getByRole("button", { name: "Go to video 2 of 3" }));
+    await user.click(screen.getByRole("button", { name: "Play video 2 of 3" }));
+
+    await waitFor(() =>
+      expect(within(screen.getByTestId("video-dots")).getAllByRole("button")).toHaveLength(2),
+    );
+    expect(document.querySelector('[data-video-index="1"]')).toBeNull();
+    expect(document.querySelector("video")).toBeNull();
+    // onMissing hides the slide INSTEAD of raising the error pill.
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
