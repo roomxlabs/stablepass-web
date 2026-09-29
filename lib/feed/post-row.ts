@@ -124,6 +124,7 @@ export type PostIntrinsicKey =
   | "label"
   | "media"
   | "slideCount"
+  | "videoCount"
   | "watermarked"
   | "count"
   | "reacted";
@@ -155,8 +156,8 @@ export type PostIntrinsicsContext = {
    */
   signedMedia: Map<string, string>;
   /**
-   * `post id -> slideCount`, from the page's batch mint. Absent is the legacy
-   * single-photo case.
+   * `post id -> slideCount` (photo) or `videoCount` (video, ENG-1599), from the
+   * page's batch mint. Absent is the legacy single-photo / single-video case.
    */
   slideCountByPost: ReadonlyMap<string, number>;
   /** `post id -> the VIEWER's own reaction`, from the batched `reaction` read. */
@@ -211,7 +212,12 @@ export function postIntrinsics(row: PostIntrinsicRow, ctx: PostIntrinsicsContext
     },
     // `?? 1` is the legacy no-rows case, which the be also reports as
     // `slideCount: 1` (ENG-809 decision 3).
-    slideCount: ctx.slideCountByPost.get(row.id) ?? 1,
+    // ONE batch count, split by media type (ENG-1599): the be answers a photo
+    // post with `slideCount` and a video post with `videoCount`, and
+    // `resolvePostDisplayUrls` puts both in the same map. A video post is never
+    // a photo carousel, so its `slideCount` is 1 whatever the map says.
+    slideCount: row.type === "video" ? 1 : (ctx.slideCountByPost.get(row.id) ?? 1),
+    videoCount: row.type === "video" ? (ctx.slideCountByPost.get(row.id) ?? 1) : 1,
     watermarked: row.watermarked,
     count: row.like_count,
     reacted: ctx.reactionByPost.get(row.id) ?? null,

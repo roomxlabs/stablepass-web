@@ -580,3 +580,35 @@ describe("(f) GUARDRAIL — every one of the five feeds imports HlsVideo and car
     expect(src).not.toContain("autoPlay");
   });
 });
+
+// (g) — NOT the "second video stops the first" case (see the header comment on
+// why that one is skipped here). This is the migration guard ENG-1599 needs
+// instead: every one of the five feeds now holds its player state in the ONE
+// shared hook, not a private `playing`/`playError` pair of its own.
+//
+// A describe.each(CASES) case titled "starting a second video stops the first
+// — one player feed-wide" was considered and is DELIBERATELY NOT ADDED here.
+// CASES is the shared fixture array (a)-(f) reuse, and every one of those
+// cases asserts EXACTLY one "Play video" button via `findByRole` (singular
+// match, throws on two). Seeding a second video row into the shared `listing`/
+// `tables` fixtures to prove "the second stops the first" would therefore red
+// every one of (a)-(f) across all five feeds — not a simple addition, and not
+// worth carrying a SECOND, feed-local set of fixtures just for this one case.
+// The "one player feed-wide" property itself is NOT uncovered: it is pinned at
+// the hook level by test/video-carousel.test.tsx's case (8), which plays a
+// plain single-video card and a video-carousel post under the SAME
+// `useFeedPlayback()` instance and proves the first unmounts when the second
+// starts — the same mechanism every one of these five screens now shares.
+describe("(g) GUARDRAIL — every feed shares the ONE playback hook, not a private playing map", () => {
+  it.each(MEMBER_FEED_FILES)("%s imports useFeedPlayback and holds no private playing/playError state", (relPath) => {
+    const src = stripComments(readFileSync(join(process.cwd(), relPath), "utf8"));
+    // Positive anchor first, same reasoning as (f) above.
+    expect(src).toContain('import { useFeedPlayback } from "@/lib/feed/use-feed-playback";');
+    // The old per-feed `playing` map this hook replaces (ENG-1599). Its
+    // sibling `playError` map is a `Record<string, boolean>` and is not
+    // distinguishable by TYPE ALONE from other maps a screen might hold, so
+    // this greps the ONE shape that is unambiguously the retired hook's own:
+    // `playing`'s `Record<string, string>`.
+    expect(src).not.toContain("useState<Record<string, string>>");
+  });
+});

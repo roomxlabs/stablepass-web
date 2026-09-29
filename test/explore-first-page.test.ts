@@ -179,9 +179,11 @@ describe("loadExploreFirstPage — ENG-1593 server-rendered page 1", () => {
     expect(feedCall.url).not.toMatch(/shares=/);
     expect((feedCall.init?.headers as Record<string, string>).Authorization).toBe("Bearer t");
 
-    // The batch asks for ONLY the photo id — the video took the poster path.
+    // The batch asks for the photo id AND the video id — ENG-1599 rides the
+    // video's `videoCount` on the same batch request; the video still takes
+    // the SEPARATE poster path below for its actual poster url.
     const postMediaCall = callFor(fetchMock, "/functions/v1/post-media");
-    expect(JSON.parse(String(postMediaCall.init?.body))).toEqual({ postIds: ["p1"] });
+    expect(JSON.parse(String(postMediaCall.init?.body))).toEqual({ postIds: ["p1", "v1"] });
 
     // The poster call: { postId, posterOnly: true } — never a batch.
     const playbackCall = callFor(fetchMock, "/functions/v1/playback");

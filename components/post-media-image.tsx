@@ -43,6 +43,13 @@ export interface PostMediaImageProps {
    */
   slideIndex?: number;
   /**
+   * ENG-1599 — which VIDEO of a multi-video post this poster belongs to (with
+   * `video`). A carousel slide re-mints its OWN video's poster by this ordinal;
+   * re-minting index 0 for slide 2 would swap in the wrong video's frame on
+   * expiry. Omitted or 0 is the single-video card, unchanged.
+   */
+  videoIndex?: number;
+  /**
    * What to draw with no url — before the first mint, and after a failed retry.
    * Defaults to the empty box the media ground has always drawn. The carousel
    * overrides it so a dead slide keeps its own `.photo-slide-empty` styling
@@ -72,11 +79,12 @@ export function PostMediaImage({
   src,
   video = false,
   slideIndex = 0,
+  videoIndex = 0,
   placeholder,
 }: PostMediaImageProps) {
   const priority = useContext(MediaLoadPriority);
   const loadHints =
-    priority === "high" && slideIndex === 0
+    priority === "high" && slideIndex === 0 && videoIndex === 0
       ? ({ loading: "eager", fetchPriority: "high" } as const)
       : priority !== null
         ? ({ loading: "lazy" } as const)
@@ -125,7 +133,7 @@ export function PostMediaImage({
     }
     retried.current = true;
     const mine = generation.current;
-    const fresh = await remintPostMedia(postId, { video, slideIndex });
+    const fresh = await remintPostMedia(postId, { video, slideIndex, videoIndex });
     // A newer src landed from the screen while this was in flight. That url is
     // authoritative and already rendering; this result is stale. Dropping it
     // matters most in the failure case: writing setFailed(true) here would

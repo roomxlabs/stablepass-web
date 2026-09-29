@@ -809,6 +809,30 @@ a { color: inherit; text-decoration: none; }
   cursor: pointer;
 }
 .post-media-web .photo-dot.active { background: var(--brand-green); }
+/* ENG-1599 — the VIDEO carousel: the photo carousel's track, dots and counted
+   chip, reused as-is (owner: no mockup). A video slide is positioned so its own
+   play button centres on IT — without this, every slide's absolutely-placed
+   button would resolve against the scrolling track and stack on slide 1. */
+.post-media-web .video-slide { position: relative; }
+/* While a slide plays, its native control bar owns the bottom edge: the dots
+   lift clear of the scrubber rather than sit on it. */
+.post-media-web .photo-dots.lifted { bottom: 56px; }
+/* Prev/next for a desktop pointer that cannot swipe. The play button's disc
+   (same fill, same ink) at half size, hidden until the media is hovered or the
+   arrow itself has keyboard focus; a touch screen swipes and never sees them. */
+.post-media-web .carousel-arrow {
+  position: absolute; top: 50%; transform: translateY(-50%); z-index: 3;
+  width: 32px; height: 32px; padding: 0; border-radius: 50%; border: none;
+  background: rgba(255,255,255,0.95); color: var(--brand-green-dark);
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+  opacity: 0; transition: opacity 0.15s ease;
+}
+.post-media-web .carousel-arrow.prev { left: 12px; }
+.post-media-web .carousel-arrow.next { right: 12px; }
+.post-media-web .carousel-arrow .ic { width: 18px; height: 18px; }
+.post-media-web:hover .carousel-arrow,
+.post-media-web .carousel-arrow:focus-visible { opacity: 1; }
+@media (hover: none) { .post-media-web .carousel-arrow { display: none; } }
 /* ROUND 5 / ENG-613 row 5 — the Follow pill, matching Instagram exactly, and the
    same component and corner as mobile's M3. Transparent fill with a white rim is
    a DRI decision that KNOWINGLY costs contrast on a bright frame: do not add a

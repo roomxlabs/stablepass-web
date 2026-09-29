@@ -122,6 +122,45 @@ describe("resolvePostDisplayUrls — ENG-1593 the photo batch and video posters 
   });
 });
 
+describe("resolvePostDisplayUrls — ENG-1599 a video post's batch videoCount", () => {
+  it("lands { postId, videoCount: 3 } in slideCounts and never in urls", async () => {
+    const transport: PostMediaTransport = {
+      batch: vi.fn(async () =>
+        jsonResponse(200, { data: { items: [{ postId: "v1", videoCount: 3 }], expiresAt: "x" } }),
+      ),
+      poster: vi.fn(),
+    };
+
+    const result = await resolvePostDisplayUrls(
+      [{ id: "v1", type: "video", poster_url: null, media_url: null }],
+      transport,
+    );
+
+    // The video post rides in the SAME batch, by id only.
+    expect(transport.batch).toHaveBeenCalledTimes(1);
+    expect(transport.batch).toHaveBeenCalledWith(["v1"]);
+    expect(result.slideCounts.get("v1")).toBe(3);
+    expect(result.urls.has("v1")).toBe(false);
+  });
+
+  it("keeps the poster url and adds the count when the video post also has a baked poster", async () => {
+    const transport: PostMediaTransport = {
+      batch: vi.fn(async () =>
+        jsonResponse(200, { data: { items: [{ postId: "v1", videoCount: 2 }], expiresAt: "x" } }),
+      ),
+      poster: vi.fn(async () => jsonResponse(200, { data: { posterUrl: "https://sb.local/poster-v1.jpg" } })),
+    };
+
+    const result = await resolvePostDisplayUrls(
+      [{ id: "v1", type: "video", poster_url: "posters/v1.jpg", media_url: null }],
+      transport,
+    );
+
+    expect(result.slideCounts.get("v1")).toBe(2);
+    expect(result.urls.get("v1")).toBe("https://sb.local/poster-v1.jpg");
+  });
+});
+
 describe("bffPostMediaTransport — the default, no-arg transport goes through global fetch", () => {
   it("mints the batch via EXACTLY /api/posts/media, POST, body { postIds } only", async () => {
     global.fetch = vi.fn(async () =>
