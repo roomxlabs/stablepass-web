@@ -50,6 +50,16 @@ export interface HlsVideoProps extends Omit<VideoHTMLAttributes<HTMLVideoElement
    * a `NotAllowedError`/`AbortError` from `play()` (see `startPlayback`).
    */
   onFatalError?: () => void;
+  /**
+   * ENG-1599 — the browser DECLINED to start playback (`NotAllowedError` from
+   * the explicit `play()`): the stream is fine, the element is loaded and
+   * paused. Never a failure, so it never reaches `onFatalError`. The video
+   * carousel uses it after an auto-advance, where the `play()` lands outside any
+   * gesture (Safari with sound), to draw its own play button over the poster.
+   * The native `onEnded` prop needs no wiring here — it passes straight through
+   * `rest` to the element.
+   */
+  onPlayBlocked?: () => void;
 }
 
 /** Is this an HLS manifest? The query string carries the Mux token, so strip it first. */
@@ -57,7 +67,7 @@ function isHlsSrc(src: string): boolean {
   return src.split("?")[0].endsWith(".m3u8");
 }
 
-export function HlsVideo({ src, onFatalError, ...rest }: HlsVideoProps) {
+export function HlsVideo({ src, onFatalError, onPlayBlocked, ...rest }: HlsVideoProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   // The callback lives in a ref so the transport effect below keys on `src`
@@ -68,6 +78,11 @@ export function HlsVideo({ src, onFatalError, ...rest }: HlsVideoProps) {
   useEffect(() => {
     onFatalErrorRef.current = onFatalError;
   }, [onFatalError]);
+  // Same reason as `onFatalErrorRef`: the transport effect must key on `src` alone.
+  const onPlayBlockedRef = useRef(onPlayBlocked);
+  useEffect(() => {
+    onPlayBlockedRef.current = onPlayBlocked;
+  }, [onPlayBlocked]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -105,7 +120,11 @@ export function HlsVideo({ src, onFatalError, ...rest }: HlsVideoProps) {
       if (cancelled) return;
       void Promise.resolve(video.play()).catch((err: unknown) => {
         const name = err instanceof Error ? err.name : "";
-        if (name === "NotAllowedError" || name === "AbortError") return;
+        if (name === "NotAllowedError") {
+          if (!cancelled) onPlayBlockedRef.current?.();
+          return;
+        }
+        if (name === "AbortError") return;
         fail();
       });
     };

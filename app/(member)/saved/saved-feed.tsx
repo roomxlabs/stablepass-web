@@ -9,7 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
 import { AccessWall } from "@/components/access-wall";
 import { HlsVideo } from "@/components/hls-video";
-import { useFeedVideoFailure } from "@/lib/feed/use-feed-video-failure";
+import { useFeedPlayback } from "@/lib/feed/use-feed-playback";
 import { PostCard, mediaBoxProps } from "@/components/post-card";
 import { PostHead } from "@/components/post-head";
 import { ReactionBar } from "@/components/reaction-bar";
@@ -18,7 +18,6 @@ import { PostMediaError, resolvePostDisplayUrls, type PostDisplayMedia } from "@
 import { postIntrinsics, type PostIntrinsicRow } from "@/lib/feed/post-row";
 import { enrichFeedSubjects } from "@/lib/feed/subject";
 import type { FeedPost, ReactionEmoji } from "@/components/types";
-import { apiFetch } from "@/lib/api/client";
 
 const LIMIT = 10;
 
@@ -46,12 +45,10 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [gated, setGated] = useState(false);
-  const [playing, setPlaying] = useState<Record<string, string>>({});
-  const [playError, setPlayError] = useState<Record<string, boolean>>({});
-  // The ONE fatal-transport handler, shared by all five feeds (ENG-1063).
-  // It was copy-pasted verbatim into each of them; see the hook for why that
-  // mattered even though nothing was wrong with the behaviour.
-  const onFatalVideo = useFeedVideoFailure(setPlaying, setPlayError);
+  // The ONE player state, shared by all five feeds (ENG-1599, grown from
+  // ENG-1063's failure hook): one playing `postId:videoIndex` feed-wide, the
+  // pill map, and the mint. See the hook for why a copy per feed was the bug.
+  const playback = useFeedPlayback();
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const loadingRef = useRef(false);
@@ -222,20 +219,6 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
     }
   }
 
-  async function play(postId: string) {
-    setPlayError((prev) => ({ ...prev, [postId]: false }));
-    try {
-      const res = await apiFetch(`/api/posts/${postId}/playback`);
-      if (res.status !== 200) { setPlayError((prev) => ({ ...prev, [postId]: true })); return; }
-      const body = await res.json().catch(() => null);
-      const url = body?.data?.playbackUrl as string | undefined;
-      if (!url) { setPlayError((prev) => ({ ...prev, [postId]: true })); return; }
-      setPlaying((prev) => ({ ...prev, [postId]: url }));
-    } catch {
-      setPlayError((prev) => ({ ...prev, [postId]: true }));
-    }
-  }
-
   // Only "empty" when there's genuinely nothing more — a full page that was
   // entirely RLS-hidden leaves posts=[] with hasMore=true, and must keep paging
   // (via the always-rendered sentinel below), not flash a false empty state.
@@ -271,7 +254,7 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
         {!gated && !error && posts.length > 0 && (
           <>
             {posts.map((p) => {
-              const playbackUrl = playing[p.id];
+              const playbackUrl = playback.inlineUrl(p);
               if (playbackUrl) {
                 return (
                   <article className="post-web" key={p.id}>
@@ -290,7 +273,7 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
                         // Deliberately NO `autoPlay`: HlsVideo issues its own explicit play()
                         // once the transport is ready (ENG-1056), which is what Safari honours
                         // on a freshly-mounted, click-initiated element.
-                        onFatalError={() => onFatalVideo(p.id)}
+                        onFatalError={() => playback.onFatal(p.id)}
                       />
                     </div>
                     <ReactionBar
@@ -312,9 +295,10 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
                     viewerId={viewerId}
                     onReact={(e) => react(p.id, e)}
                     onBookmark={() => unsave(p.id)}
-                    onPlay={() => play(p.id)}
+                    onPlay={() => void playback.play(p.id)}
+                    playback={playback}
                   />
-                  {playError[p.id] && (
+                  {playback.failed(p.id) && (
                     <p role="alert" style={{ color: "var(--red)", marginTop: -16, marginBottom: 24, fontSize: 13.5 }}>
                       Couldn&rsquo;t load the video.
                     </p>

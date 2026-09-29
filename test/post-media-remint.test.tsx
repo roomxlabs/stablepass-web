@@ -3,6 +3,7 @@ import { render, fireEvent, waitFor } from "@testing-library/react";
 import { PostMediaImage } from "@/components/post-media-image";
 import { PostCard } from "@/components/post-card";
 import { MediaPlayer } from "@/components/media-player";
+import { remintPostMedia } from "@/lib/api/post-media";
 import type { FeedPost } from "@/components/types";
 
 beforeEach(() => {
@@ -385,6 +386,50 @@ describe("PostMediaImage — the uncovered machinery", () => {
 
     // The stale null resolved AFTER the new src landed: it must be dropped.
     expect(container.querySelector("img")?.getAttribute("src")).toBe("https://cdn/page-fresh.jpg");
+  });
+});
+
+// ENG-1599 — `remintPostMedia`'s `videoIndex`: a carousel slide's poster
+// re-mints by ITS OWN video ordinal, the same rule ENG-815 already applies to
+// a photo carousel's `slideIndex`.
+describe("remintPostMedia — ENG-1599 a video re-mints by its OWN videoIndex", () => {
+  it("mints /api/posts/p/playback?posterOnly=1&videoIndex=2 with videoIndex:2", async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { posterUrl: "https://cdn/fresh-2.jpg" } }),
+    })) as unknown as typeof fetch;
+
+    const url = await remintPostMedia("p", { video: true, videoIndex: 2 });
+
+    expect(url).toBe("https://cdn/fresh-2.jpg");
+    expect(global.fetch).toHaveBeenCalledWith("/api/posts/p/playback?posterOnly=1&videoIndex=2", {
+      cache: "no-store",
+    });
+  });
+
+  it("{ video: true } alone still mints the bare posterOnly route (videoIndex 0, omitted)", async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { posterUrl: "https://cdn/fresh-0.jpg" } }),
+    })) as unknown as typeof fetch;
+
+    const url = await remintPostMedia("p", { video: true });
+
+    expect(url).toBe("https://cdn/fresh-0.jpg");
+    expect(global.fetch).toHaveBeenCalledWith("/api/posts/p/playback?posterOnly=1", {
+      cache: "no-store",
+    });
+  });
+
+  it("an out-of-range videoIndex (7) returns null and makes no request", async () => {
+    global.fetch = vi.fn() as unknown as typeof fetch;
+
+    const url = await remintPostMedia("p", { video: true, videoIndex: 7 });
+
+    expect(url).toBeNull();
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 });
 

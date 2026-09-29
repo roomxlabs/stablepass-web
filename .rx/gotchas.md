@@ -2770,3 +2770,39 @@ that page OUT of the member-wide loading boundary.
 COMMENT anywhere in the app (ENG-1593's skeleton comment said "data is still on its
 way") reds it after a build. Grep your diff for the guard's banned phrases before
 building.
+
+## Local edge functions are NOT served by default — serve them from a be worktree (ENG-1599)
+With only `supabase start` running, `POST /functions/v1/post-media` and `/playback` answer
+**503**, so the BFF's batch/poster mints fail and every multi-slide card silently renders
+single. `npx supabase functions serve` (the CLI is not on PATH; npx works) from a be
+checkout on the branch whose contract you need (e.g. a `git worktree add --detach` of
+`origin/feature/release-v1`) brings them up on the running stack. `posterOnly` mints work
+without Mux keys; the STREAM mint does not (no signing key locally) — stub only that half.
+- **Trap:** locally-served functions sign Storage urls against the container-internal
+  `http://kong:8000/…`, which the browser cannot resolve — every minted poster is a broken
+  image, and `img.complete === true` still passes (a broken image is "complete"). Route
+  `http://kong:8000/**` to `http://127.0.0.1:54321` in the spec, and assert
+  `naturalWidth > 0`, never `complete`.
+
+## Playwright Firefox has NO H.264 decoder — it cannot PLAY a Mux stream (ENG-1599)
+`MediaSource.isTypeSupported('video/mp4; codecs="avc1.42E01E"')` is false in Playwright's
+Firefox build, and every Mux rendition is H.264, so a real HLS stream fatals into the pill.
+Firefox still proves the hls.js TRANSPORT (the manifest XHR). To test playback behaviour
+(ended → auto-advance, one player at a time) stub the mint with a VP8 WebM (plays natively;
+`e2e/fixtures/eng-1599-clip.webm`, made with sharp frames piped into Playwright's bundled
+`~/.cache/ms-playwright/ffmpeg-*/ffmpeg-linux -f image2pipe -c:v mjpeg -i pipe:0 -c:v vp8`).
+
+## `subscription.status` is `active | lapsed | canceled` — there is no `expired` (ENG-1599)
+A lapsed-member e2e must set `status: "lapsed"`; `"expired"` violates the CHECK.
+
+## The batch's `slideCounts` map carries `videoCount` for VIDEO posts (ENG-1599)
+`resolvePostDisplayUrls` now sends video post ids in the same `{postIds}` batch and puts
+the be's `{postId, videoCount}` into `PostDisplayMedia.slideCounts`; `postIntrinsics`
+splits it by `post.type` (`videoCount` for video, `slideCount` for photo). That is why no
+screen's plumbing changed — but a test asserting the batch body is PHOTO ids only is stale.
+
+## `next dev` StrictMode double-loads member lists — per-mount mint counts double (ENG-1599)
+Every profile/list feed fetches page 1 twice in dev (the page's own `?posterOnly=1` mints
+appear twice), so a carousel mounts twice and "mint index 1 exactly once" reads as twice.
+Assert WHICH indices were minted (a set), not how many requests; and never reset an
+`asked` ref unconditionally in an effect, or StrictMode's effect re-run re-arms it.

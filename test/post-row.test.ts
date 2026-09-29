@@ -30,7 +30,7 @@ type EveryKeyRequired<T> = T extends Required<T> ? true : never;
 const _everyIntrinsicIsRequired: EveryKeyRequired<PostIntrinsics> = true;
 void _everyIntrinsicIsRequired;
 
-/** The ten card fields the shared mapper owns. Sorted, for a stable compare. */
+/** The eleven card fields the shared mapper owns (ENG-1599 added `videoCount`). Sorted, for a stable compare. */
 const INTRINSIC_KEYS = [
   "body",
   "count",
@@ -38,6 +38,7 @@ const INTRINSIC_KEYS = [
   "label",
   "media",
   "slideCount",
+  "videoCount",
   "postedAgo",
   "reacted",
   "title",
@@ -110,8 +111,26 @@ describe("POST_INTRINSIC_COLUMNS", () => {
 describe("postIntrinsics", () => {
   // The house gotcha: `undefined` values vanish from a JSON response and
   // per-field assertions miss a dropped key entirely. Pin the SET.
-  it("emits exactly the ten intrinsic keys — no more, no fewer", () => {
+  it("emits exactly the eleven intrinsic keys — no more, no fewer", () => {
     expect(Object.keys(postIntrinsics(row(), ctx())).sort()).toEqual(INTRINSIC_KEYS);
+  });
+
+  // ENG-1599 — a video row reads its `videoCount` off the SAME batched map a
+  // photo row reads `slideCount` off (`slideCountByPost`), and a video is never
+  // a photo carousel: its `slideCount` is forced to 1 whatever the map says.
+  it("reads videoCount for a video row from the batched map, and forces its slideCount to 1", () => {
+    const out = postIntrinsics(
+      row({ id: "v1", type: "video" }),
+      ctx({ slideCountByPost: new Map([["v1", 3]]) }),
+    );
+    expect(out.videoCount).toBe(3);
+    expect(out.slideCount).toBe(1);
+  });
+
+  it("defaults videoCount to 1 for a photo row, whatever the batched map says", () => {
+    const out = postIntrinsics(row({ type: "photo" }), ctx({ slideCountByPost: new Map([["p1", 4]]) }));
+    expect(out.videoCount).toBe(1);
+    expect(out.slideCount).toBe(4);
   });
 
   it("copies every post-intrinsic column onto the card fields", () => {

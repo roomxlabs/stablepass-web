@@ -171,6 +171,15 @@ export interface FeedPost {
    * than the silently-dropped photo a row count would produce.
    */
   slideCount?: number;
+  /**
+   * How many READY videos a VIDEO post carries, from the batch mint's
+   * `videoCount` (ENG-1596 / ENG-1599). Above 1 draws the video carousel; 1 —
+   * or absent, on a surface that resolved no count — is the single-video card,
+   * exactly as before. Unlike `slideCount` it is a true row count, and the
+   * client walks `videoIndex` 0..videoCount-1 (the be's contract). Absent on
+   * every non-video post.
+   */
+  videoCount?: number;
   watermarked: boolean;
   raceBadge?: { text: string; kind?: "race-day" | "result" } | null;
   count: number; // post.like_count

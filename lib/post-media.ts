@@ -34,7 +34,7 @@
  * visibility mechanism beside the one the card already lacks.
  */
 import { useEffect, useRef, useState } from "react";
-import { fetchPostMediaSlide } from "@/lib/api/post-media";
+import { fetchPostMediaSlide, fetchVideoPoster, MAX_VIDEO_INDEX } from "@/lib/api/post-media";
 
 /**
  * The highest addressable slide ordinal. Mirrors the be's own bound — the
@@ -152,4 +152,101 @@ export function usePostSlides(postId: string, slideCount: number, active: number
   }, [postId, seenPost, active, total]);
 
   return minted;
+}
+
+// ---------------------------------------------------------------------------
+// ENG-1599 — the VIDEO carousel's posters.
+
+/** The most videos a post can carry (`post_video.sort_order` 0..4, ENG-1596). */
+export const MAX_VIDEO_COUNT = MAX_VIDEO_INDEX + 1;
+
+/**
+ * The batch's `videoCount`, made safe to draw with: a whole number in 1..5.
+ * Unlike `slideCount` it IS a row count (the be counts READY `post_video`
+ * rows), but it arrives off an untyped body all the same, and anything unusable
+ * degrades to 1 — the single-video card, never a broken carousel.
+ */
+export function clampVideoCount(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 1;
+  const whole = Math.floor(value);
+  if (whole < 1) return 1;
+  return Math.min(MAX_VIDEO_COUNT, whole);
+}
+
+export interface VideoPosters {
+  /** `videoIndex -> poster url` for the videos minted so far (never index 0). */
+  posters: ReadonlyMap<number, string>;
+  /** Indices the be answered 404 for — nothing playable there; hide the slide. */
+  missing: ReadonlySet<number>;
+}
+
+/**
+ * Mint the ACTIVE video's poster and the one after it, once each — the
+ * `usePostSlides` pattern, pointed at `playback?posterOnly=1&videoIndex=i`.
+ *
+ * Index 0 is excluded by construction: its poster arrived with the page
+ * (`resolvePostDisplayUrls` mints it as the card's own poster). So a mounted
+ * 3-video carousel costs ONE extra mint (index 1), and each swipe at most one
+ * more — never all five at once.
+ *
+ * A `missing` (404) index is recorded so the carousel can hide it and recompute
+ * its dots. A `refused` one (402 included) simply has no poster: the slide draws
+ * the media ground, and nothing about it distinguishes "gated" from "not yet".
+ * Neither is retried, for the same reason `usePostSlides` does not retry.
+ */
+export function useVideoPosters(postId: string, videoCount: number, active: number): VideoPosters {
+  const total = clampVideoCount(videoCount);
+  const [posters, setPosters] = useState<ReadonlyMap<number, string>>(() => new Map());
+  const [missing, setMissing] = useState<ReadonlySet<number>>(() => new Set());
+  const asked = useRef<Set<number>>(new Set());
+  // The post the in-flight mints belong to. NOT a per-effect `cancelled` flag:
+  // the effect re-runs on every swipe, and cancelling there would drop a mint
+  // that is already marked asked — a fast swipe would leave that slide without
+  // its poster for the life of the mount. Only a change of POST discards.
+  const livePost = useRef(postId);
+
+  // Reset for a DIFFERENT post — the same render-time adjustment as above.
+  const [seenPost, setSeenPost] = useState(postId);
+  if (postId !== seenPost) {
+    setSeenPost(postId);
+    setPosters(new Map());
+    setMissing(new Set());
+  }
+  useEffect(() => {
+    // Only on a REAL change of post. Unconditional, this reset re-arms every
+    // index when React re-runs the effect without a change (StrictMode in dev
+    // mounts effects twice), and each poster was minted twice (ENG-1599 e2e).
+    if (livePost.current === seenPost) return;
+    asked.current = new Set();
+    livePost.current = seenPost;
+  }, [seenPost]);
+
+  useEffect(() => {
+    const wanted = [active, active + 1].filter(
+      (i) => i >= 1 && i < total && i <= MAX_VIDEO_INDEX && !asked.current.has(i),
+    );
+    if (wanted.length === 0) return;
+    for (const i of wanted) asked.current.add(i);
+
+    void Promise.all(
+      wanted.map(async (i) => {
+        const result = await fetchVideoPoster(postId, i);
+        if (livePost.current !== postId) return;
+        if (result.kind === "missing") {
+          setMissing((prev) => (prev.has(i) ? prev : new Set(prev).add(i)));
+          return;
+        }
+        if (result.kind !== "ok" || !result.url) return;
+        const url = result.url;
+        setPosters((prev) => {
+          if (prev.get(i) === url) return prev;
+          const next = new Map(prev);
+          next.set(i, url);
+          return next;
+        });
+      }),
+    );
+  }, [postId, seenPost, active, total]);
+
+  return { posters, missing };
 }
