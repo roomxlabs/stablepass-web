@@ -72,8 +72,14 @@ export interface FeedPlayback {
   /** Does ANY video of this post carry the error pill? */
   failed(postId: string): boolean;
   play(postId: string, videoIndex?: number, opts?: PlayOptions): Promise<PlayOutcome>;
-  /** Stop this video if it is the playing one (a swipe away, an auto-advance block). */
+  /** Stop this video if it is the playing one, and void its mint if in flight. */
   stop(postId: string, videoIndex?: number): void;
+  /**
+   * Stop every OTHER video of this post — playing, or still minting. The
+   * carousel calls it whenever the slide on screen changes, so swiping away
+   * stops a playing slide AND a tap whose mint has not landed yet.
+   */
+  keepOnly(postId: string, videoIndex: number): void;
   /** A dead transport: unmount the player, raise the pill (ENG-1063's rule). */
   onFatal(postId: string, videoIndex?: number): void;
   /** A fresh first page: nothing playing, no pills. */
@@ -86,6 +92,9 @@ export function useFeedPlayback(): FeedPlayback {
   const [playing, setPlaying] = useState<Playing>(null);
   const [errors, setErrors] = useState<Record<string, true>>({});
   const seq = useRef(0);
+  // The key whose mint is in flight — so `stop()` can void it (a swipe away
+  // before the mint lands must not mount a player off screen).
+  const inFlight = useRef<string | null>(null);
 
   const clearError = useCallback((key: string) => {
     setErrors((prev) => {
@@ -104,6 +113,7 @@ export function useFeedPlayback(): FeedPlayback {
     async (postId: string, videoIndex = 0, opts?: PlayOptions): Promise<PlayOutcome> => {
       const key = playbackKey(postId, videoIndex);
       const mine = ++seq.current;
+      inFlight.current = key;
       clearError(key);
       // Stop whatever else is playing NOW, at the tap — not when this mint
       // lands — so there is never a moment with two players running.
@@ -126,6 +136,7 @@ export function useFeedPlayback(): FeedPlayback {
           raise(key);
           return "failed";
         }
+        inFlight.current = null;
         setPlaying({ key, url });
         return "playing";
       } catch {
@@ -139,7 +150,22 @@ export function useFeedPlayback(): FeedPlayback {
 
   const stop = useCallback((postId: string, videoIndex = 0) => {
     const key = playbackKey(postId, videoIndex);
+    if (inFlight.current === key) {
+      seq.current += 1; // its answer is now "superseded"
+      inFlight.current = null;
+    }
     setPlaying((prev) => (prev?.key === key ? null : prev));
+  }, []);
+
+  const keepOnly = useCallback((postId: string, videoIndex: number) => {
+    const keep = playbackKey(postId, videoIndex);
+    const prefix = `${postId}:`;
+    const pendingKey = inFlight.current;
+    if (pendingKey !== null && pendingKey.startsWith(prefix) && pendingKey !== keep) {
+      seq.current += 1;
+      inFlight.current = null;
+    }
+    setPlaying((prev) => (prev && prev.key.startsWith(prefix) && prev.key !== keep ? null : prev));
   }, []);
 
   const onFatal = useCallback(
@@ -155,6 +181,7 @@ export function useFeedPlayback(): FeedPlayback {
 
   const reset = useCallback(() => {
     seq.current += 1; // any mint still in flight belongs to the old page
+    inFlight.current = null;
     setPlaying(null);
     setErrors({});
   }, []);
@@ -174,8 +201,9 @@ export function useFeedPlayback(): FeedPlayback {
       failed: (postId) => Object.keys(errors).some((k) => k.startsWith(`${postId}:`)),
       play,
       stop,
+      keepOnly,
       onFatal,
       reset,
     };
-  }, [playing, errors, play, stop, onFatal, reset]);
+  }, [playing, errors, play, stop, keepOnly, onFatal, reset]);
 }

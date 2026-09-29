@@ -176,8 +176,9 @@ export interface FeedPost {
    * `videoCount` (ENG-1596 / ENG-1599). Above 1 draws the video carousel; 1 —
    * or absent, on a surface that resolved no count — is the single-video card,
    * exactly as before. Unlike `slideCount` it is a true row count, and the
-   * client walks `videoIndex` 0..videoCount-1 (the be's contract). Absent on
-   * every non-video post.
+   * client walks `videoIndex` 0..videoCount-1 (the be's contract). Always 1 on
+   * a non-video post (`postIntrinsics`), and ignored there: only a VIDEO post
+   * can be a video carousel.
    */
   videoCount?: number;
   watermarked: boolean;

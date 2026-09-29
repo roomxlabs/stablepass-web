@@ -46,9 +46,9 @@ async function handle(req: Request, { params }: { params: Promise<{ id: string }
   let posterOnly = false;
   let videoIndex: number | undefined | typeof INVALID;
   if (req.method === "GET") {
-    const params = new URL(req.url).searchParams;
-    posterOnly = params.get("posterOnly") === "1";
-    videoIndex = parseQueryIndex(params.get("videoIndex"));
+    const search = new URL(req.url).searchParams;
+    posterOnly = search.get("posterOnly") === "1";
+    videoIndex = parseQueryIndex(search.get("videoIndex"));
   } else {
     try {
       const body = await req.json();

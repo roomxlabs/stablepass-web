@@ -97,6 +97,9 @@ export function VideoCarousel({ postId, videoCount, firstPoster = null, playback
   // The slide whose `play()` the browser declined — draws our play button.
   const [blocked, setBlocked] = useState<number | null>(null);
 
+  // Keyed on `active`, not `current`: the poster hook's `missing` is what
+  // derives `current`, so it cannot also be its input. The cost is one page turn
+  // of prefetch lag right after a hidden slide — see `current` below.
   const { posters, missing } = useVideoPosters(postId, total, active);
 
   // The slides actually drawn. A 404 at an index hides that slide and the dots
@@ -137,28 +140,41 @@ export function VideoCarousel({ postId, videoCount, firstPoster = null, playback
   const pendingTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(pendingTimer.current), []);
 
+  /** The track position the scroll offset says is on screen, or null (no layout). */
+  const settledPos = (): number | null => {
+    const el = trackRef.current;
+    const width = el?.clientWidth;
+    // 0 in jsdom (no layout) — bail rather than clobber what a dot just set.
+    if (!el || !width) return null;
+    return Math.min(visible.length - 1, Math.max(0, Math.round(el.scrollLeft / width)));
+  };
+
   const goTo = (p: number) => {
     const target = visible[p];
     if (target === undefined) return;
     setActive(target);
+    // Already there: `scrollTo` will not move, so no event would ever clear a
+    // guard — set none.
+    if (p === pos) return;
     pending.current = p;
     clearTimeout(pendingTimer.current);
     pendingTimer.current = setTimeout(() => {
+      // The grace ran out (a finger interrupted the scroll, and its final
+      // event was one we ignored): trust where the track actually came to rest.
       pending.current = null;
+      const at = settledPos();
+      if (at !== null && visible[at] !== undefined) setActive(visible[at]);
     }, 800);
     scrollToPos(p, "smooth");
   };
 
   const onScroll = () => {
-    const el = trackRef.current;
-    if (!el) return;
-    const width = el.clientWidth;
-    // 0 in jsdom (no layout) — bail rather than clobber what a dot just set.
-    if (!width) return;
-    const p = Math.min(visible.length - 1, Math.max(0, Math.round(el.scrollLeft / width)));
+    const p = settledPos();
+    if (p === null) return;
     if (pending.current !== null) {
       if (p !== pending.current) return;
       pending.current = null;
+      clearTimeout(pendingTimer.current);
     }
     setActive(visible[p]);
   };
@@ -176,10 +192,12 @@ export function VideoCarousel({ postId, videoCount, firstPoster = null, playback
     scrollToPos(posRef.current, "auto");
   }, [layout, scrollToPos]);
 
-  // Swiping away from a playing slide stops it.
+  // Swiping away from a slide stops it — whether it is playing or its mint is
+  // still in flight (which would otherwise mount a player off screen).
+  const keepOnly = playback?.keepOnly;
   useEffect(() => {
-    if (playingIndex !== null && playingIndex !== current) playback?.stop(postId, playingIndex);
-  }, [current, playingIndex, playback, postId]);
+    keepOnly?.(postId, current);
+  }, [keepOnly, postId, current, playingIndex]);
 
   const startPlay = useCallback(
     (i: number) => {
@@ -240,6 +258,9 @@ export function VideoCarousel({ postId, videoCount, firstPoster = null, playback
                     // Deliberately no autoplay attribute: HlsVideo issues its own
                     // explicit play() once the stream is attached.
                     onEnded={() => onEnded(i)}
+                    // Started from the native control bar instead of our button:
+                    // the blocked overlay must not sit over a playing video.
+                    onPlay={() => setBlocked((b) => (b === i ? null : b))}
                     onFatalError={() => playback?.onFatal(postId, i)}
                     onPlayBlocked={() => setBlocked(i)}
                   />
