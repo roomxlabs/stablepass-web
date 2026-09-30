@@ -7,7 +7,7 @@
 import { ok, fail, UNAUTH, GATED } from "@/lib/api/envelope";
 import { hasAccess, ACCESS_COLUMNS } from "@/lib/api/access";
 import { POST_INTRINSIC_COLUMNS } from "@/lib/feed/post-row";
-import { PROFILE_FEED_PAGE_SIZE, parseProfileCursor, profileFeedMeta } from "@/lib/feed/profile-cursor";
+import { PROFILE_FEED_PAGE_SIZE, parseProfileCursor, profileCursorFilter, profileFeedMeta } from "@/lib/feed/profile-cursor";
 import { supabaseServer } from "@/lib/supabase/server";
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -20,9 +20,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   if (!hasAccess(sub)) return GATED();
 
   // ENG-1633 — `?cursor=` pages (the contract's shape): the last row's
-  // `published_at`, validated before it reaches a filter. Absent = page 1.
+  // `<published_at>|<id>` keyset, both halves validated (ISO / UUID) before
+  // they reach a filter. Absent = page 1.
   const cursor = parseProfileCursor(new URL(req.url).searchParams.get("cursor"));
-  if (cursor === undefined) return fail("invalid_cursor", "cursor must be a timestamp.", 400);
+  if (cursor === undefined) return fail("invalid_cursor", "cursor is malformed.", 400);
 
   // The post columns come from the ONE shared constant (ENG-794) — the same
   // trick as `ACCESS_COLUMNS`, and the reason a new `post` column is now one
@@ -38,11 +39,16 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     .select(POST_INTRINSIC_COLUMNS)
     .eq("horse_id", id)
     .eq("status", "published");
-  if (cursor) query = query.lt("published_at", cursor);
-  const { data: posts } = await query
+  if (cursor) query = query.or(profileCursorFilter(cursor));
+  const { data: posts, error } = await query
     .order("published_at", { ascending: false })
+    .order("id", { ascending: false })
     .limit(PROFILE_FEED_PAGE_SIZE);
 
-  const rows = (posts ?? []) as { published_at?: string | null }[];
+  // A rejected read (e.g. a filter PostgREST refused) is a 5xx, never an empty
+  // page with `hasMore: false` — that would silently end the list (ENG-1633).
+  if (error) return fail("feed_failed", "Couldn't load these updates.", 500);
+
+  const rows = (posts ?? []) as { id?: string | null; published_at?: string | null }[];
   return ok(rows, profileFeedMeta(rows));
 }

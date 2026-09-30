@@ -177,6 +177,12 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
   const fetchPage = useCallback(async (forCursor: string | null) => {
     if (loadingRef.current) return;
     loadingRef.current = true;
+    // Gated on ANY page (a mid-session lapse on page N+1 included): the wall,
+    // and every held playback url dropped NOW, not at its next timer (ENG-1633).
+    const goGated = () => {
+      resetPlayback();
+      setGated(true);
+    };
     setLoading(true);
     setError(false);
     if (!forCursor) {
@@ -190,7 +196,7 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
 
       const res = await apiFetch(`/api/feed/following?${params}`);
       if (res.status === 402) {
-        setGated(true);
+        goGated();
         return;
       }
       if (!res.ok) {
@@ -249,7 +255,7 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
         media = await resolvePostDisplayUrls(rows);
       } catch (e) {
         if (e instanceof PostMediaError && e.reason === "gated") {
-          setGated(true);
+          goGated();
           return;
         }
         media = { urls: new Map(), slideCounts: new Map() };

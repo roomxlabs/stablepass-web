@@ -50,6 +50,7 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
   // ENG-1063's failure hook): one playing `postId:videoIndex` feed-wide, the
   // pill map, and the mint. See the hook for why a copy per feed was the bug.
   const playback = useFeedPlayback();
+  const resetPlayback = playback.reset;
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const loadingRef = useRef(false);
@@ -57,6 +58,12 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
   const fetchPage = useCallback(async (forCursor: string | null) => {
     if (loadingRef.current) return;
     loadingRef.current = true;
+    // Gated on ANY page (a mid-session lapse on page N+1 included): the wall,
+    // and every held playback url dropped NOW, not at its next timer (ENG-1633).
+    const goGated = () => {
+      resetPlayback();
+      setGated(true);
+    };
     setLoading(true);
     setError(false);
     const sb = supabaseBrowser();
@@ -76,7 +83,7 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
         // lapsed and canceled rows, and it additionally catches expired ones. It
         // can only wall MORE members, never reveal content to one.
         if (!hasAccess(sub as AccessRow | null)) {
-          setGated(true);
+          goGated();
           return;
         }
       }
@@ -143,7 +150,7 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
         media = await resolvePostDisplayUrls(postRows);
       } catch (e) {
         if (e instanceof PostMediaError && e.reason === "gated") {
-          setGated(true);
+          goGated();
           return;
         }
         media = { urls: new Map(), slideCounts: new Map() };
@@ -163,7 +170,7 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
       loadingRef.current = false;
       setLoading(false);
     }
-  }, [viewerId]);
+  }, [viewerId, resetPlayback]);
 
   useEffect(() => {
     fetchPage(null);

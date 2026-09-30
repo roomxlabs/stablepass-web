@@ -75,8 +75,17 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
     if (forCursor && loadingRef.current) return;
     const gen = forCursor ? generation.current : ++generation.current;
     const cancelled = () => gen !== generation.current;
-    // A failed page 1 is the error state; a failed LATER page only stops paging.
+    // A failed page 1 is the error state; a 5xx / network failure on a LATER
+    // page only stops paging — it must not blank the posts already on screen.
     const fail = () => (forCursor ? setHasMore(false) : setError(true));
+    // A 402 (or a gated media batch) is different: the member lapsed, so it goes
+    // to the gated/error state on ANY page and drops every held playback URL
+    // (guardrail 3; the same as explore/following/saved). Never a silent end.
+    const gated = () => {
+      resetPlayback();
+      setHasMore(false);
+      setError(true);
+    };
     loadingRef.current = true;
     if (forCursor) setLoadingMore(true);
     else {
@@ -90,7 +99,7 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
       const qs = params.toString();
       const res = await apiFetch(`/api/trainers/${trainerId}/feed${qs ? `?${qs}` : ""}`);
       if (!res.ok) {
-        if (!cancelled()) fail();
+        if (!cancelled()) (res.status === 402 ? gated : fail)();
         return;
       }
       const body = await res.json();
@@ -131,7 +140,7 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
         media = await resolvePostDisplayUrls(rows);
       } catch (e) {
         if (e instanceof PostMediaError && e.reason === "gated") {
-          if (!cancelled()) fail();
+          if (!cancelled()) gated();
           return;
         }
         media = { urls: new Map(), slideCounts: new Map() };
@@ -185,6 +194,9 @@ export function TrainerPosts({ trainerId, trainerName, stableName = null, stable
         setPosts((prev) => (forCursor ? [...prev, ...mapped] : mapped));
         commitPaging();
       }
+    } catch {
+      // Network failure (fetch threw): page 1 → error, a later page → stop paging.
+      if (!cancelled()) fail();
     } finally {
       if (!cancelled()) {
         loadingRef.current = false;

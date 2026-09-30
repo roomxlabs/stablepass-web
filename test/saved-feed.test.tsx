@@ -3,6 +3,12 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { installIntersectionObserver, intersect, liveObservers } from "./support/intersection-observer";
 import { SavedFeed } from "@/app/(member)/saved/saved-feed";
+import { resetSpy } from "./support/playback-reset-spy";
+
+// The real player hook, with `reset()` observable (ENG-1633 S3).
+vi.mock("@/lib/feed/use-feed-playback", async (importOriginal) =>
+  (await import("./support/playback-reset-spy")).withResetSpy(await importOriginal()),
+);
 import { WALL_COPY } from "@/components/access-wall";
 
 const VIEWER_ID = "8f3c1a2b-1234-4abc-9def-0123456789ab";
@@ -663,6 +669,50 @@ describe("SavedFeed — ENG-1633 next page at <= 5 cards left", () => {
       await new Promise((r) => setTimeout(r, 20));
       expect(ltMock).toHaveBeenCalledTimes(1);
       expect(reads).toBe(2);
+    } finally {
+      restoreIO();
+    }
+  });
+
+  it("S3: a page-2 media batch answering 402 draws the wall AND resets playback", async () => {
+    const page1 = Array.from({ length: 10 }, (_, i) => ({
+      created_at: `2026-07-${String(20 - i).padStart(2, "0")}T00:00:00.000Z`,
+      post: { ...BOOKMARKS[0].post, id: `sp${i + 1}` },
+    }));
+    const page2 = [{ created_at: "2026-07-01T00:00:00.000Z", post: { ...BOOKMARKS[0].post, id: "sg1", media_url: "posts/sg1.jpg" } }];
+    fromMock.mockImplementation((table: string) => {
+      if (table === "bookmark") {
+        const obj: Record<string, unknown> = {};
+        let isPageTwo = false;
+        obj.select = vi.fn(() => obj);
+        obj.lt = vi.fn(() => { isPageTwo = true; return obj; });
+        obj.order = vi.fn(() => obj);
+        obj.limit = vi.fn(() => obj);
+        obj.then = (onF: (v: unknown) => unknown, onR?: (e: unknown) => unknown) =>
+          Promise.resolve({ data: isPageTwo ? page2 : page1, error: null }).then(onF, onR);
+        return obj;
+      }
+      if (table === "subscription") return chainable({ data: subRow, error: null });
+      if (table === "horse") return chainable({ data: HORSES, error: null });
+      return chainable({ data: [], error: null });
+    });
+    const inner = global.fetch;
+    global.fetch = vi.fn((input: string | URL, init?: RequestInit) => {
+      if (String(input) === "/api/posts/media" && String(init?.body ?? "").includes("sg1")) {
+        return Promise.resolve({ ok: false, status: 402, json: async () => ({ error: { code: "subscription_required" } }) });
+      }
+      return (inner as unknown as (i: string | URL, n?: RequestInit) => Promise<unknown>)(input, init);
+    }) as unknown as typeof fetch;
+    const restoreIO = installIntersectionObserver();
+    try {
+      render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+      await waitFor(() => expect(document.querySelectorAll("article.post-web")).toHaveLength(10));
+      await waitFor(() => expect(liveObservers().length).toBeGreaterThan(0));
+      const before = resetSpy.mock.calls.length;
+
+      intersect(document.querySelectorAll("article.post-web")[5]);
+      expect(await screen.findByText(WALL_COPY.neverSubscribed.title)).toBeInTheDocument();
+      expect(resetSpy.mock.calls.length).toBeGreaterThan(before);
     } finally {
       restoreIO();
     }

@@ -38,7 +38,8 @@
  *     dropped, so the feed holds at most two (plus the one playing).
  *   - SHORT-LIVED, AND TREATED SO. Each entry keeps the be's `expiresAt` (300 s)
  *     and is re-minted REMINT_MARGIN_MS before it lapses while it is still
- *     wanted; `play()` never uses one inside that margin — it mints fresh, as it
+ *     wanted — and the tab is VISIBLE: a hidden tab lets it lapse and re-mints
+ *     the wanted set on return; `play()` never uses one inside that margin — it mints fresh, as it
  *     always did. The margin is two minutes, not seconds, because hls.js keeps
  *     fetching rendition playlists on the SAME token after the tap.
  *   - SILENT. A pre-mint that answers anything but 200 (402 included) stores
@@ -128,6 +129,11 @@ type Playing = { key: string; url: string } | null;
 /** One pre-minted url, held in memory only, with its be-issued expiry. */
 type Minted = { url: string; expiresAt: number };
 
+/** The tab is in the background — no pre-mint work is done for it (ENG-1633). */
+function isHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
 /** Usable for a tap: known expiry, and more than the margin left on it. */
 function isFresh(m: Minted | undefined, now = Date.now()): m is Minted {
   return m !== undefined && m.expiresAt - now > REMINT_MARGIN_MS;
@@ -213,6 +219,11 @@ export function useFeedPlayback(): FeedPlayback {
         setTimeout(() => {
           timers.current.delete(key);
           minted.current.delete(key);
+          // A hidden tab re-mints nothing (a background tab would otherwise
+          // mint every ~3 min for as long as it stays open). The url simply
+          // lapses; `visibilitychange` re-mints the wanted set on return, and a
+          // tap before that mints fresh, as `play()` always does for a stale one.
+          if (isHidden()) return;
           if (wanted.current.has(key)) premintRef.current(postId, videoIndex);
         }, delay),
       );
@@ -265,6 +276,21 @@ export function useFeedPlayback(): FeedPlayback {
   );
 
   const prefetch = useCallback((postIds: string[]) => applyWanted(postIds), [applyWanted]);
+
+  // Back from a hidden tab: re-mint whatever is still wanted and was left to
+  // lapse while hidden (`premint` skips a key that is still fresh or pending).
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const onVisibility = () => {
+      if (isHidden()) return;
+      for (const key of wanted.current) {
+        const at = key.lastIndexOf(":");
+        premint(key.slice(0, at), Number(key.slice(at + 1)));
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [premint]);
 
   const focus = useCallback(
     (postId: string, videoIndex: number) => {

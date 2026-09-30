@@ -152,6 +152,12 @@ export function ExploreFeed({
   const fetchPage = useCallback(async (forCursor: string | null) => {
     if (loadingRef.current) return;
     loadingRef.current = true;
+    // Gated on ANY page (a mid-session lapse on page N+1 included): the wall,
+    // and every held playback url dropped NOW, not at its next timer (ENG-1633).
+    const goGated = () => {
+      resetPlayback();
+      setGated(true);
+    };
     setLoading(true);
     setError(false);
     if (!forCursor) {
@@ -166,7 +172,7 @@ export function ExploreFeed({
 
       const res = await apiFetch(`/api/feed?${params}`);
       if (res.status === 402) {
-        setGated(true);
+        goGated();
         return;
       }
       if (!res.ok) {
@@ -188,7 +194,7 @@ export function ExploreFeed({
       // (ENG-1593) — the mint used to wait for the other three for no reason.
       const page = await assembleExplorePage(supabaseBrowser(), rows, (r) => resolvePostDisplayUrls(r));
       if (page.kind === "gated") {
-        setGated(true);
+        goGated();
         return;
       }
       if (page.kind === "error") {

@@ -3,6 +3,12 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { installIntersectionObserver, intersect, liveObservers } from "./support/intersection-observer";
 import { ExploreFeed } from "@/app/(member)/explore/explore-feed";
+import { resetSpy } from "./support/playback-reset-spy";
+
+// The real player hook, with `reset()` observable (ENG-1633 S3).
+vi.mock("@/lib/feed/use-feed-playback", async (importOriginal) =>
+  (await import("./support/playback-reset-spy")).withResetSpy(await importOriginal()),
+);
 import { WALL_COPY } from "@/components/access-wall";
 import type { FeedPost } from "@/components/types";
 import type { ExploreInitialPage } from "@/lib/feed/explore-page";
@@ -1254,6 +1260,30 @@ describe("ExploreFeed — ENG-1593 server-rendered initialPage", () => {
         (c) => String(c[0]).startsWith("/api/feed") || String(c[0]).startsWith("/api/posts/media"),
       ),
     ).toBe(false);
+  });
+
+  it("ENG-1633 S3: page 2 answering 402 draws the wall AND resets playback (held urls dropped now)", async () => {
+    const fetchMock = vi.fn((input: string | URL) => {
+      if (String(input) === "/api/feed?limit=10&cursor=c1") {
+        return Promise.resolve({ ok: false, status: 402, json: async () => ({ error: { code: "subscription_required" } }) });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const restoreIO = installIntersectionObserver();
+    try {
+      const seeded = Array.from({ length: 8 }, (_, i) => ({ ...SEEDED_POST_1, id: `sg${i + 1}`, horseName: `Gate ${i + 1}` }));
+      render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} initialPage={{ kind: "ok", posts: seeded, nextCursor: "c1", hasMore: true }} />);
+      expect(await screen.findByText("Gate 1")).toBeInTheDocument();
+      await waitFor(() => expect(liveObservers().length).toBeGreaterThan(0));
+      const before = resetSpy.mock.calls.length;
+
+      intersect(document.querySelectorAll("article.post-web")[3]);
+      expect(await screen.findByText(WALL_COPY.neverSubscribed.title)).toBeInTheDocument();
+      expect(resetSpy.mock.calls.length).toBeGreaterThan(before);
+    } finally {
+      restoreIO();
+    }
   });
 
   it("ENG-1633 guardrail 3: a 'gated' initialPage makes NO /api/posts/*/playback request and draws no poster media", async () => {

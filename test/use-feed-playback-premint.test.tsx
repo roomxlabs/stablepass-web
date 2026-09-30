@@ -160,6 +160,76 @@ describe("useFeedPlayback pre-mint — re-mint before expiry, only while wanted"
     expect(calls).toHaveLength(2);
   });
 
+  describe("a HIDDEN tab re-mints nothing (S2)", () => {
+    let visibility: DocumentVisibilityState;
+    const setVisibility = (v: DocumentVisibilityState) => {
+      visibility = v;
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+    beforeEach(() => {
+      visibility = "visible";
+      vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    });
+
+    it("hidden for an hour: ZERO re-mints; the url lapses; back to visible re-mints the wanted set ONCE", async () => {
+      const calls = mockPlaybackFetch();
+      const { result } = renderHook(() => useFeedPlayback());
+      act(() => result.current.prefetch(["a"]));
+      await settle();
+      expect(calls).toHaveLength(1);
+
+      act(() => setVisibility("hidden"));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_600_000);
+      });
+      expect(calls).toHaveLength(1);
+
+      act(() => setVisibility("visible"));
+      await settle();
+      expect(calls).toEqual(["/api/posts/a/playback", "/api/posts/a/playback"]);
+      // …and the normal cadence resumes from there.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(181_000);
+      });
+      expect(calls).toHaveLength(3);
+    });
+
+    it("a tap in a hidden-then-shown tab whose url lapsed mints fresh (never plays a stale url)", async () => {
+      const calls = mockPlaybackFetch();
+      const { result } = renderHook(() => useFeedPlayback());
+      act(() => result.current.prefetch(["a"]));
+      await settle();
+      act(() => {
+        visibility = "hidden"; // hidden, but no event yet: the listener can't pre-empt the tap
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_600_000);
+      });
+      visibility = "visible";
+      await act(async () => {
+        await result.current.play("a");
+      });
+      expect(calls).toEqual(["/api/posts/a/playback", "/api/posts/a/playback"]);
+      expect(result.current.urlFor("a")).toBe("https://stream.test/api/posts/a/playback#2.m3u8");
+    });
+
+    it("becoming visible with nothing wanted mints nothing; a still-fresh url is not re-minted", async () => {
+      const calls = mockPlaybackFetch();
+      const { result } = renderHook(() => useFeedPlayback());
+      act(() => setVisibility("hidden"));
+      act(() => setVisibility("visible"));
+      await settle();
+      expect(calls).toHaveLength(0);
+
+      act(() => result.current.prefetch(["a"]));
+      await settle();
+      act(() => setVisibility("hidden"));
+      act(() => setVisibility("visible"));
+      await settle();
+      expect(calls).toHaveLength(1);
+    });
+  });
+
   it("prefetch([a]) then prefetch([b]) drops a's entry: play(a) makes a NEW request", async () => {
     const calls = mockPlaybackFetch();
     const { result } = renderHook(() => useFeedPlayback());
