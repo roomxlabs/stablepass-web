@@ -19,6 +19,23 @@
 // Seeded fixture data only: one trainer + horse, six photo posts and two video
 // posts with baked posters, and an explicitly entitled throwaway member (a
 // seeded member is LAPSED by default — .rx/gotchas.md).
+//
+// ENG-1633 (PF-W1) extends every load with three more measurements, recorded
+// for BOTH builds so the PR can show before/after:
+//   posterOnly    `/api/posts/:id/playback?posterOnly=1` requests during the
+//                 load (after: 0 — slot-0 posters ride in the batch, ENG-1629)
+//   tapToPlay     click on the first video card's Play → its <video> playing
+//                 (currentTime > 0). The STREAM mint is stubbed (no Mux signing
+//                 key locally) with a fixed PERF_MINT_MS delay (default 250 ms,
+//                 a stand-in for the BFF → edge → Mux round trip) and a VP8
+//                 clip; identical for both builds.
+//   mintsAfterTap stream-mint requests made BY the tap (after: 0 — the url was
+//                 pre-minted while the card was on screen)
+//   nextPageAt    cards still below the viewport when page 2 was requested,
+//                 scrolling one card at a time (after: <= 5; before: ~0, the
+//                 end-of-list sentinel), and pageTwoRequests (must be 1).
+// Sixteen posts are seeded (two pages of 10), videos at 1 and 4, so there is a
+// page 2 to prefetch.
 import { test, expect, type Browser, type Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -35,7 +52,49 @@ const LABEL = process.env.PERF_LABEL ?? "run";
 
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
-type Marks = { ttfb: number; shell?: number; skeleton?: number; card?: number; media?: number };
+type Marks = {
+  ttfb: number;
+  shell?: number;
+  skeleton?: number;
+  card?: number;
+  media?: number;
+  // ENG-1633
+  posterOnly?: number;
+  tapToPlay?: number;
+  mintsAfterTap?: number;
+  nextPageAt?: number | null;
+  pageTwoRequests?: number;
+};
+
+const MINT_MS = Number(process.env.PERF_MINT_MS ?? 250);
+const CLIP = readFileSync(join(__dirname, "fixtures", "eng-1599-clip.webm"));
+const CLIP_ORIGIN = "https://media.stablepass.test";
+
+/**
+ * Stub ONLY the stream half of the playback mint (the local stack has no Mux
+ * signing key — .rx/gotchas.md ENG-1599); `posterOnly` goes to the real be.
+ * Every stream mint waits MINT_MS, so a tap that must mint pays it and a tap on
+ * a pre-minted url does not — which is exactly the difference being measured.
+ */
+async function stubStreamMint(page: Page, streams: string[]) {
+  await page.route("**/api/posts/*/playback**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("posterOnly") === "1") return route.continue();
+    streams.push(url.pathname + url.search);
+    await new Promise((r) => setTimeout(r, MINT_MS));
+    const expiresAt = new Date(Date.now() + 300_000).toISOString();
+    try {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: { playbackUrl: `${CLIP_ORIGIN}/clip.webm`, posterUrl: null, expiresAt } }),
+      });
+    } catch {
+      // The context closed mid-flight.
+    }
+  });
+  await page.route(`${CLIP_ORIGIN}/**`, (route) => route.fulfill({ status: 200, contentType: "video/webm", body: CLIP }));
+}
 
 // VISIBLE, not merely present. A streamed Suspense segment lands in the DOM
 // inside `<div hidden id="S:…">` and is revealed a moment later, so "the node
@@ -97,6 +156,16 @@ async function oneLoad(browser: Browser, baseURL: string, storageState: string, 
   const page = await ctx.newPage();
   await page.addInitScript(INIT);
   await routeKong(page);
+  // ENG-1633 — every playback request, split poster / stream, and page-2 reads.
+  let posterOnly = 0;
+  const streams: string[] = [];
+  const pageTwo: number[] = [];
+  page.on("request", (req) => {
+    const url = new URL(req.url());
+    if (/^\/api\/posts\/[^/]+\/playback$/.test(url.pathname) && url.searchParams.get("posterOnly") === "1") posterOnly++;
+    if (url.pathname === "/api/feed" && url.searchParams.has("cursor")) pageTwo.push(Date.now());
+  });
+  await stubStreamMint(page, streams);
   // PERF_LATENCY=<ms> adds a round-trip delay to every BROWSER request (CDP
   // network emulation) — localhost has ~0ms RTT, which hides exactly the serial
   // round trips this ticket removes. Server→Supabase hops stay local either way.
@@ -121,8 +190,48 @@ async function oneLoad(browser: Browser, baseURL: string, storageState: string, 
     const nav = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming;
     return { ttfb: nav.responseStart, ...(window as unknown as { __m: Record<string, number> }).__m };
   });
+  // Let page 1's own requests (and, after, the pre-mint) settle before counting.
+  await page.waitForLoadState("networkidle");
+  const posterOnlyOnLoad = posterOnly;
+
+  // tap → play, on the first VIDEO card (the seeded video at index 1).
+  const videoCard = page.locator(".feed-col article.post-web").filter({ has: page.getByRole("button", { name: "Play video", exact: true }) }).first();
+  await videoCard.scrollIntoViewIfNeeded();
+  // The pre-mint (after) is driven by the card being on screen; give it the
+  // same settle both builds get.
+  await page.waitForLoadState("networkidle");
+  const before = streams.length;
+  const t0 = Date.now();
+  await videoCard.getByRole("button", { name: "Play video", exact: true }).click();
+  const video = page.locator(".feed-col article.post-web video").first();
+  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.currentTime).catch(() => 0), { timeout: 20_000, intervals: [16] }).toBeGreaterThan(0);
+  const tapToPlay = Date.now() - t0;
+  const mintsAfterTap = streams.length - before;
+
+  // Page 2: scroll ONE card at a time; note how many cards were still below the
+  // viewport when the page-2 read went out.
+  let nextPageAt: number | null = null;
+  for (let i = 0; i < 12 && pageTwo.length === 0; i++) {
+    const cards = page.locator(".feed-col article.post-web");
+    const n = await cards.count();
+    if (i >= n) break;
+    await cards.nth(i).evaluate((el) => el.scrollIntoView({ block: "start", behavior: "instant" }));
+    await page.waitForTimeout(150);
+    if (pageTwo.length > 0) {
+      nextPageAt = await page.evaluate(() =>
+        Array.from(document.querySelectorAll(".feed-col article.post-web")).filter(
+          (el) => el.getBoundingClientRect().top >= window.innerHeight,
+        ).length,
+      );
+    }
+  }
+  await page.waitForLoadState("networkidle");
+  // Scroll the rest of the way: the sentinel must NOT fire a second page-2 read.
+  await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" }));
+  await page.waitForTimeout(300);
+  const pageTwoRequests = pageTwo.length;
   await ctx.close();
-  return marks as Marks;
+  return { ...(marks as Marks), posterOnly: posterOnlyOnLoad, tapToPlay, mintsAfterTap, nextPageAt, pageTwoRequests };
 }
 
 test.skip(process.env.ENG1593_PERF !== "1", "measurement run only — set ENG1593_PERF=1 against `next start`");
@@ -147,7 +256,7 @@ test("ENG-1593 first-feed timing on /explore", async ({ browser, baseURL, page }
 
   const postIds: string[] = [];
   const now = Date.now();
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 16; i++) {
     const video = i === 1 || i === 4;
     const { data: post, error } = await admin
       .from("post")
@@ -177,6 +286,19 @@ test("ENG-1593 first-feed timing on /explore", async ({ browser, baseURL, page }
       .update(video ? { poster_url: key } : { media_url: key })
       .eq("id", post.id);
     if (setErr) throw setErr;
+    // ENG-1633 — a real multi-video-era post: slot 0 in `post_video`, ready,
+    // with its baked poster, which is what the ENG-1629 batch signs as
+    // `posterUrl`. (The mirror trigger keeps `post`'s columns in step.)
+    if (video) {
+      const { error: pvErr } = await admin.from("post_video").insert({
+        post_id: post.id,
+        sort_order: 0,
+        status: "ready",
+        mux_playback_id: `pb-eng1593-${stamp}-${i}`,
+        poster_url: key,
+      });
+      if (pvErr) throw pvErr;
+    }
   }
 
   const email = `eng1593-perf-${stamp}@stablepass.test`;
@@ -217,6 +339,12 @@ test("ENG-1593 first-feed timing on /explore", async ({ browser, baseURL, page }
         skeleton: pick("skeleton").length ? median(pick("skeleton")) : null,
         card: median(pick("card")),
         media: median(pick("media")),
+        // ENG-1633
+        posterOnly: median(pick("posterOnly")),
+        tapToPlay: median(pick("tapToPlay")),
+        mintsAfterTap: median(pick("mintsAfterTap")),
+        nextPageAt: pick("nextPageAt").length ? median(pick("nextPageAt")) : null,
+        pageTwoRequests: median(pick("pageTwoRequests")),
       },
       raw: runs,
     };

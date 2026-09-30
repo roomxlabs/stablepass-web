@@ -2806,3 +2806,20 @@ Every profile/list feed fetches page 1 twice in dev (the page's own `?posterOnly
 appear twice), so a carousel mounts twice and "mint index 1 exactly once" reads as twice.
 Assert WHICH indices were minted (a set), not how many requests; and never reset an
 `asked` ref unconditionally in an effect, or StrictMode's effect re-run re-arms it.
+
+## Perf e2e: SSR `posterOnly` mints are invisible to Playwright — count them in the edge-function log (ENG-1633)
+Explore page 1 is SSR'd (ENG-1593), so its poster mints go server → edge `playback`
+directly, and a browser request counter reads 0 on BOTH builds. To prove "0 posterOnly",
+serve the be functions yourself (`npx supabase functions serve` from a be worktree) and
+count `serving the request with supabase/functions/playback` lines per run window in its
+log. Measured: before 3 per load, after 0. Also note that the perf spec deletes its fixture in
+`finally`: a worker that dies mid-run leaves a `Perfpace <stamp>` horse and 16 posts in
+the local DB, and those re-rank every later explore screenshot.
+
+## Client-minted expiries are SERVER time — never compare them raw to `Date.now()` (ENG-1633)
+`/playback` returns `expiresAt` from the server clock. A member's clock a few minutes
+ahead made every pre-minted url look expired, and the re-mint timer spun at its 1 s
+floor. Convert to a local deadline with the response `Date` header
+(`Date.now() + (expiresAt - Date(header))`), and never store a url already inside the
+re-mint margin. Also, any hook that arms timers from an async result must invalidate
+in-flight work on UNMOUNT (a generation bump), not just clear the existing timers.

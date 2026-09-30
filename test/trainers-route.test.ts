@@ -18,6 +18,7 @@ const { getUserMock, fromMock, tableData, fromCalls, storageFromMock, createSign
     const chain: Record<string, unknown> = {
       select: vi.fn(() => chain),
       eq: vi.fn(() => chain),
+      lt: vi.fn(() => chain),
       order: vi.fn(() => chain),
       limit: vi.fn(() => chain),
       single: vi.fn(async () => result()),
@@ -325,5 +326,79 @@ describe("GET /api/trainers/:id/feed", () => {
     expect(postChain.select.mock.calls[0][0]).toBe(
       "id, type, title, body, label, media_url, poster_url, mux_playback_id, aspect_ratio, watermarked, like_count, published_at, subject, byline, horse_id, source_trainer_id, horse:horse_id(display_name, racing_name, photo_url)",
     );
+  });
+  // ENG-1633 — `?cursor=` paging. The cursor is a `published_at` timestamp.
+  describe("ENG-1633 paging", () => {
+    const entitled = () => {
+      getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+      tableData.subscription = { data: { status: "active", trial_ends_at: null, current_period_end: "2099-01-01T00:00:00Z" } };
+    };
+    const postChain = () => {
+      const i = fromMock.mock.calls.findIndex((c) => c[0] === "post");
+      return i < 0 ? null : (fromMock.mock.results[i].value as { lt: ReturnType<typeof vi.fn>; limit: ReturnType<typeof vi.fn> });
+    };
+    const rows = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ id: `p${i}`, published_at: `2026-07-${String(30 - i).padStart(2, "0")}T00:00:00.000Z` }));
+    const feed = (qs = "") => trainerFeedGET(new Request(`http://localhost/api/trainers/t1/feed${qs}`), params("t1"));
+
+    it("a malformed cursor is 400 invalid_cursor, and never reaches a post query", async () => {
+      entitled();
+      tableData.post = { data: [] };
+      const res = await feed("?cursor=not-a-date");
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.code).toBe("invalid_cursor");
+      expect(postChain()).toBeNull();
+    });
+
+    it("the gate comes FIRST: a lapsed member with a malformed cursor still gets 402", async () => {
+      getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+      tableData.subscription = { data: { status: "lapsed", trial_ends_at: null, current_period_end: null } };
+      const res = await feed("?cursor=not-a-date");
+      expect(res.status).toBe(402);
+      expect((await res.json()).error.code).toBe("subscription_required");
+    });
+
+    it("no session with a malformed cursor is still 401", async () => {
+      getUserMock.mockResolvedValue({ data: { user: null } });
+      expect((await feed("?cursor=zzz")).status).toBe(401);
+    });
+
+    it("a valid cursor filters published_at < cursor", async () => {
+      entitled();
+      tableData.post = { data: [] };
+      await feed("?cursor=2026-07-10T00:00:00.000Z");
+      expect(postChain()!.lt).toHaveBeenCalledWith("published_at", "2026-07-10T00:00:00.000Z");
+    });
+
+    it("page 1 (no cursor) applies no lt filter", async () => {
+      entitled();
+      tableData.post = { data: [] };
+      await feed();
+      expect(postChain()!.lt).not.toHaveBeenCalled();
+      expect(postChain()!.limit).toHaveBeenCalledWith(20);
+    });
+
+    it("a full page of 20 -> meta { hasMore: true, nextCursor: <last published_at> }", async () => {
+      entitled();
+      const page = rows(20);
+      tableData.post = { data: page };
+      const body = await (await feed()).json();
+      expect(body.data).toHaveLength(20);
+      expect(body.meta).toEqual({ hasMore: true, nextCursor: page[19].published_at });
+    });
+
+    it("fewer than 20 rows -> meta { hasMore: false, nextCursor: null }", async () => {
+      entitled();
+      tableData.post = { data: rows(19) };
+      const body = await (await feed()).json();
+      expect(body.meta).toEqual({ hasMore: false, nextCursor: null });
+    });
+
+    it("an empty page -> meta { hasMore: false, nextCursor: null }", async () => {
+      entitled();
+      tableData.post = { data: [] };
+      const body = await (await feed()).json();
+      expect(body.meta).toEqual({ hasMore: false, nextCursor: null });
+    });
   });
 });

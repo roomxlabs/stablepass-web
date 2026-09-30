@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { installIntersectionObserver, intersect, liveObservers } from "./support/intersection-observer";
 import { SavedFeed } from "@/app/(member)/saved/saved-feed";
 import { WALL_COPY } from "@/components/access-wall";
 
@@ -616,5 +617,54 @@ describe("SavedFeed — ENG-1270 a rejected identity read never paints", () => {
     expect(await screen.findByText(/couldn.t load your saved posts/i)).toBeInTheDocument();
     expect(screen.queryByText("Unknown horse")).not.toBeInTheDocument();
     expect(document.querySelector("article.post-web")).toBeNull();
+  });
+});
+
+describe("SavedFeed — ENG-1633 next page at <= 5 cards left", () => {
+  it("reads page 2 ONCE, keyset from the last created_at, when the 5th-from-last card appears", async () => {
+    const page1 = Array.from({ length: 10 }, (_, i) => ({
+      created_at: `2026-07-${String(20 - i).padStart(2, "0")}T00:00:00.000Z`,
+      post: { ...BOOKMARKS[0].post, id: `sp${i + 1}` },
+    }));
+    const ltMock = vi.fn();
+    let reads = 0;
+    fromMock.mockImplementation((table: string) => {
+      if (table === "bookmark") {
+        const obj: Record<string, unknown> = {};
+        let isPageTwo = false;
+        obj.select = vi.fn(() => obj);
+        obj.lt = vi.fn((...args: unknown[]) => { ltMock(...args); isPageTwo = true; return obj; });
+        obj.order = vi.fn(() => obj);
+        obj.limit = vi.fn(() => obj);
+        obj.then = (onF: (v: unknown) => unknown, onR?: (e: unknown) => unknown) => {
+          reads += 1;
+          return Promise.resolve({ data: isPageTwo ? [] : page1, error: null }).then(onF, onR);
+        };
+        return obj;
+      }
+      if (table === "subscription") return chainable({ data: subRow, error: null });
+      if (table === "horse") return chainable({ data: HORSES, error: null });
+      return chainable({ data: [], error: null });
+    });
+    const restoreIO = installIntersectionObserver();
+    try {
+      render(<SavedFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+      await waitFor(() => expect(document.querySelectorAll("article.post-web")).toHaveLength(10));
+      await waitFor(() => expect(liveObservers().length).toBeGreaterThan(0));
+      expect(reads).toBe(1);
+
+      const articles = Array.from(document.querySelectorAll("article.post-web"));
+      // 10 posts -> the trigger is index 5.
+      expect(intersect(articles[5])).toBeGreaterThan(0);
+      await waitFor(() => expect(ltMock).toHaveBeenCalledTimes(1));
+      expect(ltMock).toHaveBeenCalledWith("created_at", "2026-07-11T00:00:00.000Z");
+
+      intersect(articles[5]);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(ltMock).toHaveBeenCalledTimes(1);
+      expect(reads).toBe(2);
+    } finally {
+      restoreIO();
+    }
   });
 });

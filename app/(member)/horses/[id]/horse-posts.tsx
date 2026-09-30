@@ -5,10 +5,13 @@
 // a direct read, not the be feed fn), enriches with the viewer's own
 // reaction/bookmark rows, and wires <PostCard>'s react/bookmark/play callbacks
 // via supabaseBrowser — the same fetch/enrich/mutate shape as W6 explore-feed,
-// scoped to one horse and without tabs/paging.
-import { useEffect, useState } from "react";
+// scoped to one horse and without tabs. Pages by `?cursor=` since ENG-1633, with
+// page N+1 started at <= 5 cards left and playback pre-minted for the card on
+// screen (useFeedPrefetch) — the same as the other four feeds.
+import { useCallback, useEffect, useRef, useState } from "react";
 import { HlsVideo } from "@/components/hls-video";
 import { useFeedPlayback } from "@/lib/feed/use-feed-playback";
+import { useFeedPrefetch } from "@/lib/feed/use-feed-prefetch";
 import { PostCard, PostAvatar, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { supabaseBrowser } from "@/lib/supabase/client";
@@ -46,70 +49,123 @@ export function HorsePosts({ horseId, horseName, trainerName, stableName = null,
   // ENG-1063's failure hook): one playing `postId:videoIndex` feed-wide, the
   // pill map, and the mint. See the hook for why a copy per feed was the bug.
   const playback = useFeedPlayback();
+  const resetPlayback = playback.reset;
+  // Paging (ENG-1633). `loadingMore` is page 2+ only: page 1 keeps `loading`,
+  // which is what draws the skeleton.
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const loadingRef = useRef(false);
+  // Bumped when the horse (or its identity props) changes: an answer for the
+  // previous horse must not land on this one — the old effect's `cancelled`.
+  const generation = useRef(0);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
+  const fetchPage = useCallback(async (forCursor: string | null) => {
+    if (forCursor && loadingRef.current) return;
+    const gen = forCursor ? generation.current : ++generation.current;
+    const cancelled = () => gen !== generation.current;
+    // A failed page 1 is the error state; a failed LATER page only stops paging
+    // — it must not blank the posts already on screen.
+    const fail = () => (forCursor ? setHasMore(false) : setError(true));
+    loadingRef.current = true;
+    if (forCursor) setLoadingMore(true);
+    else {
       setLoading(true);
       setError(false);
-      try {
-        const res = await apiFetch(`/api/horses/${horseId}/feed`);
-        if (!res.ok) {
-          if (!cancelled) setError(true);
-          return;
-        }
-        const body = await res.json();
-        const rows = (body.data ?? []) as PostRow[];
-        if (rows.length === 0) {
-          if (!cancelled) setPosts([]);
-          return;
-        }
-
-        const ids = rows.map((r) => r.id);
-        const sb = supabaseBrowser();
-        const [{ data: reactionRows }, { data: bookmarkRows }] = await Promise.all([
-          sb.from("reaction").select("post_id,emoji").in("post_id", ids),
-          sb.from("bookmark").select("post_id").in("post_id", ids),
-        ]);
-        const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
-        const mySet = new Set(((bookmarkRows ?? []) as BookmarkRow[]).map((b) => b.post_id));
-        // Photos + their slide counts via ONE POST /api/posts/media; video posters
-        // via playback?posterOnly=1. Absolute URLs pass through. A 402 surfaces the
-        // AccessWall (guardrail 3). `slideCounts` rides in on the same batch, which
-        // is what lets a carousel draw the right dots before it mints a thing.
-        let media: PostDisplayMedia;
-        try {
-          media = await resolvePostDisplayUrls(rows);
-        } catch (e) {
-          if (e instanceof PostMediaError && e.reason === "gated") {
-            // Profile pages already wall at the page level; mid-session 402 → error.
-            if (!cancelled) setError(true);
-            return;
-          }
-          media = { urls: new Map(), slideCounts: new Map() };
-        }
-
-        const intrinsics = { signedMedia: media.urls, slideCountByPost: media.slideCounts, reactionByPost: myReaction };
-        const mapped: FeedPost[] = rows.map((r) => ({
-          ...postIntrinsics(r, intrinsics),
-          horseId,
-          horseName,
-          trainerName,
-          stableName,
-          stableLocation,
-          horsePhotoUrl,
-          trainerPhotoUrl,
-          bookmarked: mySet.has(r.id),
-        }));
-        if (!cancelled) setPosts(mapped);
-      } finally {
-        if (!cancelled) setLoading(false);
+      resetPlayback();
+    }
+    try {
+      const params = new URLSearchParams();
+      if (forCursor) params.set("cursor", forCursor);
+      const qs = params.toString();
+      const res = await apiFetch(`/api/horses/${horseId}/feed${qs ? `?${qs}` : ""}`);
+      if (!res.ok) {
+        if (!cancelled()) fail();
+        return;
       }
-    })();
+      const body = await res.json();
+      const rows = (body.data ?? []) as PostRow[];
+      const meta = (body.meta ?? {}) as { nextCursor?: string | null; hasMore?: boolean };
+      // Committed only where the rows land (the rule the other feeds follow).
+      const commitPaging = () => {
+        setCursor(meta.nextCursor ?? null);
+        setHasMore(Boolean(meta.hasMore));
+      };
+      if (rows.length === 0) {
+        if (!cancelled()) {
+          if (!forCursor) setPosts([]);
+          commitPaging();
+        }
+        return;
+      }
+
+      const ids = rows.map((r) => r.id);
+      const sb = supabaseBrowser();
+      const [{ data: reactionRows }, { data: bookmarkRows }] = await Promise.all([
+        sb.from("reaction").select("post_id,emoji").in("post_id", ids),
+        sb.from("bookmark").select("post_id").in("post_id", ids),
+      ]);
+      const myReaction = new Map(((reactionRows ?? []) as ReactionRow[]).map((r) => [r.post_id, r.emoji]));
+      const mySet = new Set(((bookmarkRows ?? []) as BookmarkRow[]).map((b) => b.post_id));
+      // Photos, slide counts AND slot-0 video posters via ONE POST /api/posts/media
+      // (ENG-1633; posterOnly only where the batch had none). Absolute URLs pass through. A 402 surfaces the
+      // AccessWall (guardrail 3). `slideCounts` rides in on the same batch, which
+      // is what lets a carousel draw the right dots before it mints a thing.
+      let media: PostDisplayMedia;
+      try {
+        media = await resolvePostDisplayUrls(rows);
+      } catch (e) {
+        if (e instanceof PostMediaError && e.reason === "gated") {
+          // Profile pages already wall at the page level; mid-session 402 → error.
+          if (!cancelled()) fail();
+          return;
+        }
+        media = { urls: new Map(), slideCounts: new Map() };
+      }
+
+      const intrinsics = { signedMedia: media.urls, slideCountByPost: media.slideCounts, reactionByPost: myReaction };
+      const mapped: FeedPost[] = rows.map((r) => ({
+        ...postIntrinsics(r, intrinsics),
+        horseId,
+        horseName,
+        trainerName,
+        stableName,
+        stableLocation,
+        horsePhotoUrl,
+        trainerPhotoUrl,
+        bookmarked: mySet.has(r.id),
+      }));
+      if (!cancelled()) {
+        setPosts((prev) => (forCursor ? [...prev, ...mapped] : mapped));
+        commitPaging();
+      }
+    } finally {
+      if (!cancelled()) {
+        loadingRef.current = false;
+        setLoading(false);
+        setLoadingMore(false);
+      }
+    }
+  }, [horseId, horseName, trainerName, stableName, stableLocation, horsePhotoUrl, trainerPhotoUrl, resetPlayback]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial data fetch, not derived state
+    void fetchPage(null);
     return () => {
-      cancelled = true;
+      generation.current += 1;
+      loadingRef.current = false;
     };
-  }, [horseId, horseName, trainerName, stableName, stableLocation, horsePhotoUrl, trainerPhotoUrl]);
+  }, [fetchPage]);
+
+  useFeedPrefetch({
+    sentinelRef,
+    posts,
+    playback,
+    canLoadMore: hasMore && !loading && !loadingMore && !error,
+    cursor,
+    loadMore: () => void fetchPage(cursor),
+  });
 
   async function react(postId: string, emoji: ReactionEmoji) {
     const target = posts.find((p) => p.id === postId);
@@ -216,6 +272,9 @@ export function HorsePosts({ horseId, horseName, trainerName, stableName = null,
           </div>
         );
       })}
+      {/* End-of-list sentinel (ENG-1633): the paging fallback, and the anchor
+          under whose parent useFeedPrefetch finds these cards. */}
+      <div ref={sentinelRef} />
     </>
   );
 }

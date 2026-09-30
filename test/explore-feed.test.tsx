@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { installIntersectionObserver, intersect, liveObservers } from "./support/intersection-observer";
 import { ExploreFeed } from "@/app/(member)/explore/explore-feed";
 import { WALL_COPY } from "@/components/access-wall";
 import type { FeedPost } from "@/components/types";
@@ -1188,28 +1189,52 @@ describe("ExploreFeed — ENG-1593 server-rendered initialPage", () => {
       Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [], meta: { nextCursor: null, hasMore: false } }) }),
     );
     global.fetch = fetchMock as unknown as typeof fetch;
-    let fire: ((entries: { isIntersecting: boolean }[]) => void) | null = null;
-    const original = globalThis.IntersectionObserver;
-    globalThis.IntersectionObserver = class {
-      constructor(cb: (entries: { isIntersecting: boolean }[]) => void) {
-        fire = cb;
-      }
-      observe() {}
-      disconnect() {}
-    } as unknown as typeof IntersectionObserver;
+    // Two observers now watch the feed (paging + card visibility); the mock keeps
+    // every one, and the sentinel is fired through whichever observes it.
+    const restoreIO = installIntersectionObserver();
     try {
       const initialPage: ExploreInitialPage = { kind: "ok", posts: [SEEDED_POST_1], nextCursor: "c1", hasMore: true };
       render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} initialPage={initialPage} />);
       expect(await screen.findByText("Server Horse One")).toBeInTheDocument();
-      await waitFor(() => expect(fire).not.toBeNull());
-      fire!([{ isIntersecting: true }]);
+      await waitFor(() => expect(liveObservers().length).toBeGreaterThan(0));
+      const sentinel = document.querySelector(".post-web")!.parentElement!.lastElementChild!;
+      expect(intersect(sentinel)).toBeGreaterThan(0);
       await waitFor(() =>
         expect(fetchMock.mock.calls.map((c) => String(c[0]))).toContain("/api/feed?limit=10&cursor=c1"),
       );
       // Page 1 was never re-fetched.
       expect(fetchMock.mock.calls.some((c) => String(c[0]) === "/api/feed?limit=10")).toBe(false);
     } finally {
-      globalThis.IntersectionObserver = original;
+      restoreIO();
+    }
+  });
+
+  it("ENG-1633: page 2 is requested ONCE when the 5th-from-last card comes into view (not again)", async () => {
+    const fetchMock = vi.fn((_input: string | URL) =>
+      Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [], meta: { nextCursor: null, hasMore: false } }) }),
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const restoreIO = installIntersectionObserver();
+    try {
+      const seeded = Array.from({ length: 8 }, (_, i) => ({ ...SEEDED_POST_1, id: `sp${i + 1}`, horseName: `Seed ${i + 1}` }));
+      const initialPage: ExploreInitialPage = { kind: "ok", posts: seeded, nextCursor: "c1", hasMore: true };
+      render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} initialPage={initialPage} />);
+      expect(await screen.findByText("Seed 1")).toBeInTheDocument();
+      await waitFor(() => expect(liveObservers().length).toBeGreaterThan(0));
+
+      const articles = Array.from(document.querySelectorAll("article.post-web"));
+      expect(articles).toHaveLength(8);
+      // 8 posts -> the trigger is index 3 (5th from last).
+      expect(intersect(articles[3])).toBeGreaterThan(0);
+      const pageTwo = () => fetchMock.mock.calls.filter((c) => String(c[0]) === "/api/feed?limit=10&cursor=c1");
+      await waitFor(() => expect(pageTwo()).toHaveLength(1));
+
+      intersect(articles[3]);
+      intersect(document.querySelector("article.post-web")!.parentElement!.lastElementChild!);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(pageTwo()).toHaveLength(1);
+    } finally {
+      restoreIO();
     }
   });
 
@@ -1229,6 +1254,21 @@ describe("ExploreFeed — ENG-1593 server-rendered initialPage", () => {
         (c) => String(c[0]).startsWith("/api/feed") || String(c[0]).startsWith("/api/posts/media"),
       ),
     ).toBe(false);
+  });
+
+  it("ENG-1633 guardrail 3: a 'gated' initialPage makes NO /api/posts/*/playback request and draws no poster media", async () => {
+    const fetchMock = vi.fn((_input: string | URL) =>
+      Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) }),
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} initialPage={{ kind: "gated" }} />);
+
+    expect(await screen.findByText(WALL_COPY.neverSubscribed.title)).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetchMock.mock.calls.some((c) => /\/api\/posts\/[^/]+\/playback/.test(String(c[0])))).toBe(false);
+    expect(document.querySelector("video")).toBeNull();
+    expect(document.querySelector("img")).toBeNull();
   });
 
   it("the FIRST card loads eager/high-priority, every card after it stays lazy with no fetchpriority", async () => {
