@@ -9,9 +9,12 @@
 // minting another post's — or a draft's — objects:
 //
 //   POST { postIds: string[] }            1..50, never a path
-//   200 { data: { items: [{ postId, mediaUrl, slideCount } | { postId, videoCount }], expiresAt } }
+//   200 { data: { items: [{ postId, mediaUrl, slideCount }
+//                        | { postId, videoCount, posterUrl, posterExpiresAt }], expiresAt } }
 //       (a VIDEO post's item carries `videoCount` — its READY videos — and no
-//        url at all; ENG-1596. A video post with nothing playable is absent.)
+//        media url; ENG-1596. Since ENG-1629 it also carries its slot-0 baked
+//        POSTER, signed with the batch (`null` when there is none). A video post
+//        with nothing playable is absent.)
 //   402 → PostMediaError('gated')         reactivate wall (must not silent-empty)
 //   other non-ok / network → empty Map    placeholder, never a crash
 //
@@ -154,6 +157,13 @@ interface PostMediaBatch {
   items: Map<string, PostMediaItem>;
   /** `post id -> videoCount` for the VIDEO posts in the batch (ENG-1596). */
   videoCounts: Map<string, number>;
+  /**
+   * `post id -> slot-0 poster url` for the VIDEO posts whose batch item carried
+   * one (ENG-1629, PF-B2). ABSENT — not null — for a video post the be could not
+   * sign a poster for (no baked poster, slot 0 not ready, a legacy row-less
+   * post): that absence is exactly what sends the caller to `posterOnly`.
+   */
+  videoPosters: Map<string, string>;
 }
 
 /**
@@ -174,7 +184,7 @@ async function fetchPostMediaBatch(
     seen.add(id);
     unique.push(id);
   }
-  const out: PostMediaBatch = { items: new Map(), videoCounts: new Map() };
+  const out: PostMediaBatch = { items: new Map(), videoCounts: new Map(), videoPosters: new Map() };
   if (unique.length === 0) return out;
 
   for (let i = 0; i < unique.length; i += BATCH) {
@@ -198,6 +208,11 @@ async function fetchPostMediaBatch(
           });
         } else if (videoCount !== undefined) {
           out.videoCounts.set(postId, readSlideCount(videoCount));
+          // The be signs this with the batch (300 s, like every url in it) and
+          // never passes an absolute stored value through, so it is a minted url
+          // or null — `null`/missing/garbage all leave the post to `posterOnly`.
+          const posterUrl = (item as { posterUrl?: unknown })?.posterUrl;
+          if (typeof posterUrl === "string" && posterUrl.length > 0) out.videoPosters.set(postId, posterUrl);
         }
       }
     } catch (e) {
@@ -286,7 +301,9 @@ type DisplayRow = {
 /**
  * Resolve display images for a page of posts, plus each post's slide count.
  * - Absolute URL → passthrough keyed by post id
- * - Video with a poster key → GET playback?posterOnly=1 (no Mux stream)
+ * - Video → its slot-0 poster from the SAME batch (ENG-1629 `posterUrl`); only
+ *   a video post with a poster key whose batch item came back WITHOUT one falls
+ *   back to GET playback?posterOnly=1 (no Mux stream) — ENG-1633
  * - Photo/other with a non-absolute key → ONE batched fetchPostMediaItems
  * - Voice with no poster / text with no media → skip
  *
@@ -322,29 +339,34 @@ export async function resolvePostDisplayUrls(
     else photoIds.push(row.id);
   }
 
-  // The photo batch and the video posters run TOGETHER (ENG-1593). They never
-  // depended on each other — the posters used to wait for the whole batch only
-  // because the code awaited it first, which put one extra round trip in front
-  // of every video card on the page. A 402 from EITHER still rejects the lot
-  // with PostMediaError('gated'), exactly as before.
-  const [batch] = await Promise.all([
-    fetchPostMediaBatch([...photoIds, ...countIds], transport),
-    Promise.all(
-      videoIds.map(async (id) => {
-        try {
-          const res = await transport.poster(id);
-          if (res.status === 402) throw new PostMediaError("gated");
-          if (!res.ok) return;
-          const json = await res.json().catch(() => null);
-          const posterUrl = json?.data?.posterUrl;
-          if (typeof posterUrl === "string" && posterUrl.length > 0) out.set(id, posterUrl);
-        } catch (e) {
-          if (e instanceof PostMediaError) throw e;
-          // Network / parse failure → skip this id (placeholder).
-        }
-      }),
-    ),
-  ]);
+  // ONE request for the page (ENG-1633). Since ENG-1629 the batch signs every
+  // video post's slot-0 poster alongside the photos, so a page of N video posts
+  // no longer costs N `posterOnly` round trips — it costs none. A 402 still
+  // rejects the lot with PostMediaError('gated'), exactly as before, so a lapsed
+  // member's page carries no poster url at all (guardrail 3).
+  const batch = await fetchPostMediaBatch([...photoIds, ...countIds], transport);
+  for (const [id, url] of batch.videoPosters) out.set(id, url);
+
+  // The FALLBACK, per post, only where the batch had no poster to give: a legacy
+  // row-less video post, a slot 0 still encoding, or a batch that failed outright
+  // (5xx / network — which never throws). This is the pre-ENG-1633 path,
+  // unchanged, for exactly the posts the new keys cannot serve.
+  const fallbackIds = videoIds.filter((id) => !batch.videoPosters.has(id));
+  await Promise.all(
+    fallbackIds.map(async (id) => {
+      try {
+        const res = await transport.poster(id);
+        if (res.status === 402) throw new PostMediaError("gated");
+        if (!res.ok) return;
+        const json = await res.json().catch(() => null);
+        const posterUrl = json?.data?.posterUrl;
+        if (typeof posterUrl === "string" && posterUrl.length > 0) out.set(id, posterUrl);
+      } catch (e) {
+        if (e instanceof PostMediaError) throw e;
+        // Network / parse failure → skip this id (placeholder).
+      }
+    }),
+  );
   for (const [id, item] of batch.items) {
     out.set(id, item.mediaUrl);
     slideCounts.set(id, item.slideCount);

@@ -18,6 +18,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AccessWall } from "@/components/access-wall";
 import { HlsVideo } from "@/components/hls-video";
 import { useFeedPlayback } from "@/lib/feed/use-feed-playback";
+import { useFeedPrefetch } from "@/lib/feed/use-feed-prefetch";
 import { PostCard, mediaBoxProps } from "@/components/post-card";
 import { ReactionBar } from "@/components/reaction-bar";
 import { RaceDayBand } from "@/components/race-day-band";
@@ -151,6 +152,12 @@ export function ExploreFeed({
   const fetchPage = useCallback(async (forCursor: string | null) => {
     if (loadingRef.current) return;
     loadingRef.current = true;
+    // Gated on ANY page (a mid-session lapse on page N+1 included): the wall,
+    // and every held playback url dropped NOW, not at its next timer (ENG-1633).
+    const goGated = () => {
+      resetPlayback();
+      setGated(true);
+    };
     setLoading(true);
     setError(false);
     if (!forCursor) {
@@ -165,7 +172,7 @@ export function ExploreFeed({
 
       const res = await apiFetch(`/api/feed?${params}`);
       if (res.status === 402) {
-        setGated(true);
+        goGated();
         return;
       }
       if (!res.ok) {
@@ -187,7 +194,7 @@ export function ExploreFeed({
       // (ENG-1593) — the mint used to wait for the other three for no reason.
       const page = await assembleExplorePage(supabaseBrowser(), rows, (r) => resolvePostDisplayUrls(r));
       if (page.kind === "gated") {
-        setGated(true);
+        goGated();
         return;
       }
       if (page.kind === "error") {
@@ -319,18 +326,17 @@ export function ExploreFeed({
     })();
   }, []);
 
-  // Infinite scroll — a sentinel div at the bottom of the list loads the next page.
-  useEffect(() => {
-    if (typeof IntersectionObserver === "undefined") return;
-    if (!hasMore || loading || gated || error) return;
-    const el = sentinelRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver((entries) => {
-      if (entries[0]?.isIntersecting) fetchPage(cursor);
-    }, { rootMargin: "200px" });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [hasMore, loading, gated, error, cursor, fetchPage]);
+  // Infinite scroll, EARLY (ENG-1633): page N+1 starts with <= 5 cards left
+  // below the viewport (the sentinel is the fallback), one request per page;
+  // the same observer pass pre-mints playback for the card on screen + the next.
+  useFeedPrefetch({
+    sentinelRef,
+    posts,
+    playback,
+    canLoadMore: hasMore && !loading && !gated && !error,
+    cursor,
+    loadMore: () => void fetchPage(cursor),
+  });
 
   async function react(postId: string, emoji: ReactionEmoji) {
     const target = posts.find((p) => p.id === postId);

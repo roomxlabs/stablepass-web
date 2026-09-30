@@ -10,15 +10,6 @@ beforeEach(() => {
   vi.restoreAllMocks();
 });
 
-/** A promise this test resolves on its own schedule, to prove call ORDER. */
-function deferred<T>() {
-  let resolve!: (v: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
-
 function jsonResponse(status: number, body: unknown): Response {
   return {
     ok: status >= 200 && status < 300,
@@ -27,38 +18,100 @@ function jsonResponse(status: number, body: unknown): Response {
   } as unknown as Response;
 }
 
-describe("resolvePostDisplayUrls — ENG-1593 the photo batch and video posters run TOGETHER", () => {
-  it("calls transport.poster(videoId) WITHOUT waiting for the batch promise to resolve", async () => {
-    const batchGate = deferred<Response>();
-    const posterCalls: string[] = [];
+const batchOf = (items: unknown[]) => jsonResponse(200, { data: { items, expiresAt: "x" } });
+const posterOk = (id: string) =>
+  jsonResponse(200, { data: { posterUrl: `https://sb.local/fallback-${id}.jpg` } });
+const videoRow = (id: string, poster_url: string | null = `posters/${id}.jpg`) =>
+  ({ id, type: "video", poster_url, media_url: null }) as const;
 
+describe("resolvePostDisplayUrls — ENG-1633 video posters come from the ONE batch", () => {
+  it("(i) batch video items with posterUrl: transport.poster is NEVER called", async () => {
     const transport: PostMediaTransport = {
-      batch: vi.fn(() => batchGate.promise),
-      poster: vi.fn((postId: string) => {
-        posterCalls.push(postId);
-        return Promise.resolve(
-          jsonResponse(200, { data: { posterUrl: "https://sb.local/poster-v1.jpg" } }),
-        );
-      }),
+      batch: vi.fn(async () =>
+        batchOf([
+          { postId: "v1", videoCount: 1, posterUrl: "https://sb.local/batch-v1.jpg", posterExpiresAt: "x" },
+          { postId: "v2", videoCount: 2, posterUrl: "https://sb.local/batch-v2.jpg", posterExpiresAt: "x" },
+        ]),
+      ),
+      poster: vi.fn(),
     };
-
-    const resultPromise = resolvePostDisplayUrls(
-      [{ id: "v1", type: "video", poster_url: "posters/v1.jpg", media_url: null }],
-      transport,
-    );
-
-    // Flush microtasks without ever resolving the batch — the poster call
-    // must already have fired, since the two never depended on each other.
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(posterCalls).toEqual(["v1"]);
-
-    // Only NOW does the (still-pending) batch resolve.
-    batchGate.resolve(jsonResponse(200, { data: { items: [], expiresAt: "x" } }));
-    const result = await resultPromise;
-    expect(result.urls.get("v1")).toBe("https://sb.local/poster-v1.jpg");
+    const result = await resolvePostDisplayUrls([videoRow("v1"), videoRow("v2")], transport);
+    expect(transport.batch).toHaveBeenCalledTimes(1);
+    expect(transport.poster).not.toHaveBeenCalled();
+    expect(result.urls.get("v1")).toBe("https://sb.local/batch-v1.jpg");
+    expect(result.urls.get("v2")).toBe("https://sb.local/batch-v2.jpg");
+    expect(result.slideCounts.get("v2")).toBe(2);
   });
 
+  it("(ii) a video item with posterUrl null falls back to transport.poster for exactly that id", async () => {
+    const transport: PostMediaTransport = {
+      batch: vi.fn(async () =>
+        batchOf([
+          { postId: "v1", videoCount: 1, posterUrl: "https://sb.local/batch-v1.jpg", posterExpiresAt: "x" },
+          { postId: "v2", videoCount: 1, posterUrl: null, posterExpiresAt: null },
+        ]),
+      ),
+      poster: vi.fn(async (id: string) => posterOk(id)),
+    };
+    const result = await resolvePostDisplayUrls([videoRow("v1"), videoRow("v2")], transport);
+    expect(transport.poster).toHaveBeenCalledTimes(1);
+    expect(transport.poster).toHaveBeenCalledWith("v2");
+    expect(result.urls.get("v1")).toBe("https://sb.local/batch-v1.jpg");
+    expect(result.urls.get("v2")).toBe("https://sb.local/fallback-v2.jpg");
+  });
+
+  it("(iii) a batch 402 rejects PostMediaError('gated') and the poster is never called", async () => {
+    const transport: PostMediaTransport = {
+      batch: vi.fn(async () => jsonResponse(402, { error: { code: "subscription_required" } })),
+      poster: vi.fn(async (id: string) => posterOk(id)),
+    };
+    await expect(resolvePostDisplayUrls([videoRow("v1")], transport)).rejects.toMatchObject({
+      name: "PostMediaError",
+      reason: "gated",
+    });
+    expect(transport.poster).not.toHaveBeenCalled();
+  });
+
+  it("(iv) a batch 500 falls back to transport.poster for every video with a poster key", async () => {
+    const transport: PostMediaTransport = {
+      batch: vi.fn(async () => jsonResponse(500, {})),
+      poster: vi.fn(async (id: string) => posterOk(id)),
+    };
+    const result = await resolvePostDisplayUrls(
+      [videoRow("v1"), videoRow("v2"), videoRow("v3", null)],
+      transport,
+    );
+    expect((transport.poster as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]).sort()).toEqual([
+      "v1",
+      "v2",
+    ]);
+    expect(result.urls.get("v1")).toBe("https://sb.local/fallback-v1.jpg");
+    expect(result.urls.get("v2")).toBe("https://sb.local/fallback-v2.jpg");
+    expect(result.urls.has("v3")).toBe(false);
+  });
+
+  it("(v) a video row with NO poster key but a batch poster uses the batch poster, never calls poster", async () => {
+    const transport: PostMediaTransport = {
+      batch: vi.fn(async () =>
+        batchOf([{ postId: "v1", videoCount: 1, posterUrl: "https://sb.local/batch-v1.jpg", posterExpiresAt: "x" }]),
+      ),
+      poster: vi.fn(),
+    };
+    const result = await resolvePostDisplayUrls([videoRow("v1", null)], transport);
+    expect(result.urls.get("v1")).toBe("https://sb.local/batch-v1.jpg");
+    expect(transport.poster).not.toHaveBeenCalled();
+  });
+
+  it("a fallback poster 402 still rejects the resolve as 'gated'", async () => {
+    const transport: PostMediaTransport = {
+      batch: vi.fn(async () => batchOf([{ postId: "v1", videoCount: 1, posterUrl: null, posterExpiresAt: null }])),
+      poster: vi.fn(async () => jsonResponse(402, { error: { code: "subscription_required" } })),
+    };
+    await expect(resolvePostDisplayUrls([videoRow("v1")], transport)).rejects.toMatchObject({ reason: "gated" });
+  });
+});
+
+describe("resolvePostDisplayUrls — the photo batch and video posters still merge from ONE resolve", () => {
   it("merges a photo batch item (url + slideCount) with a video poster from the SAME resolve", async () => {
     const transport: PostMediaTransport = {
       batch: vi.fn(async () =>

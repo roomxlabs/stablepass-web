@@ -10,6 +10,7 @@ import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
 import { AccessWall } from "@/components/access-wall";
 import { HlsVideo } from "@/components/hls-video";
 import { useFeedPlayback } from "@/lib/feed/use-feed-playback";
+import { useFeedPrefetch } from "@/lib/feed/use-feed-prefetch";
 import { PostCard, mediaBoxProps } from "@/components/post-card";
 import { PostHead } from "@/components/post-head";
 import { ReactionBar } from "@/components/reaction-bar";
@@ -49,6 +50,7 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
   // ENG-1063's failure hook): one playing `postId:videoIndex` feed-wide, the
   // pill map, and the mint. See the hook for why a copy per feed was the bug.
   const playback = useFeedPlayback();
+  const resetPlayback = playback.reset;
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const loadingRef = useRef(false);
@@ -56,6 +58,12 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
   const fetchPage = useCallback(async (forCursor: string | null) => {
     if (loadingRef.current) return;
     loadingRef.current = true;
+    // Gated on ANY page (a mid-session lapse on page N+1 included): the wall,
+    // and every held playback url dropped NOW, not at its next timer (ENG-1633).
+    const goGated = () => {
+      resetPlayback();
+      setGated(true);
+    };
     setLoading(true);
     setError(false);
     const sb = supabaseBrowser();
@@ -75,7 +83,7 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
         // lapsed and canceled rows, and it additionally catches expired ones. It
         // can only wall MORE members, never reveal content to one.
         if (!hasAccess(sub as AccessRow | null)) {
-          setGated(true);
+          goGated();
           return;
         }
       }
@@ -142,7 +150,7 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
         media = await resolvePostDisplayUrls(postRows);
       } catch (e) {
         if (e instanceof PostMediaError && e.reason === "gated") {
-          setGated(true);
+          goGated();
           return;
         }
         media = { urls: new Map(), slideCounts: new Map() };
@@ -162,24 +170,23 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
       loadingRef.current = false;
       setLoading(false);
     }
-  }, [viewerId]);
+  }, [viewerId, resetPlayback]);
 
   useEffect(() => {
     fetchPage(null);
   }, [fetchPage]);
 
-  // Infinite scroll — a sentinel at the bottom loads the next page.
-  useEffect(() => {
-    if (typeof IntersectionObserver === "undefined") return;
-    if (!hasMore || loading || gated || error) return;
-    const el = sentinelRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver((entries) => {
-      if (entries[0]?.isIntersecting) fetchPage(cursor);
-    }, { rootMargin: "200px" });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [hasMore, loading, gated, error, cursor, fetchPage]);
+  // Infinite scroll, EARLY (ENG-1633): page N+1 starts with <= 5 cards left
+  // below the viewport (the sentinel is the fallback), one request per page;
+  // the same observer pass pre-mints playback for the card on screen + the next.
+  useFeedPrefetch({
+    sentinelRef,
+    posts,
+    playback,
+    canLoadMore: hasMore && !loading && !gated && !error,
+    cursor,
+    loadMore: () => void fetchPage(cursor),
+  });
 
   async function react(postId: string, emoji: ReactionEmoji) {
     const target = posts.find((p) => p.id === postId);
@@ -309,10 +316,12 @@ export function SavedFeed({ viewerId, everSubscribed }: { viewerId: string; ever
           </>
         )}
 
-        {/* Infinite-scroll sentinel — rendered whenever more pages remain, even at
-            posts.length === 0, so a fully RLS-hidden page auto-advances instead of
-            showing a false "empty". */}
-        {!gated && !error && hasMore && <div ref={sentinelRef} />}
+        {/* Infinite-scroll sentinel — rendered even at posts.length === 0, so a
+            fully RLS-hidden page auto-advances instead of showing a false
+            "empty". Rendered whether or not more pages remain (ENG-1633): its
+            parent is where useFeedPrefetch finds the cards to pre-mint for;
+            whether it pages is `canLoadMore`'s call. */}
+        {!gated && !error && <div ref={sentinelRef} />}
       </div>
     </div>
   );

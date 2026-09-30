@@ -18,7 +18,9 @@
 // without the cards knowing about each other.
 //
 //   - Tap to play: mints `/api/posts/:id/playback?videoIndex=i` (index 0 keeps
-//     the bare url). Still NO autoplay on load — nothing plays until a tap.
+//     the bare url) — or, since ENG-1633, starts from the url the feed already
+//     pre-minted for the slide on screen. Still NO autoplay on load — nothing
+//     plays until a tap.
 //   - Auto-advance: when a slide's video ends, scroll to the next slide and play
 //     it. That `play()` lands outside any gesture, and a browser may refuse it
 //     (`NotAllowedError`, e.g. Safari with sound): the slide then shows its
@@ -198,6 +200,15 @@ export function VideoCarousel({ postId, videoCount, firstPoster = null, playback
   useEffect(() => {
     keepOnly?.(postId, current);
   }, [keepOnly, postId, current, playingIndex]);
+
+  // ENG-1633 — the feed pre-mints the playback url of the card on screen (and
+  // the next one); for a carousel that is the SLIDE on screen, so a tap on
+  // video 3 starts as instantly as one on video 0. Only an ordinal is sent; the
+  // url stays in the hook's memory and nothing plays until a tap.
+  const focus = playback?.focus;
+  useEffect(() => {
+    focus?.(postId, current);
+  }, [focus, postId, current]);
 
   const startPlay = useCallback(
     (i: number) => {

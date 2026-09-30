@@ -3,12 +3,13 @@
 // chronological — unlike /api/feed this does NOT go through the be feed fn, so it
 // works end-to-end against the local Postgres stack. Each post carries its horse's
 // name so the byline is per-horse (a trainer's updates span their whole stable).
-import { ok, UNAUTH, GATED } from "@/lib/api/envelope";
+import { ok, fail, UNAUTH, GATED } from "@/lib/api/envelope";
 import { hasAccess, ACCESS_COLUMNS } from "@/lib/api/access";
 import { POST_INTRINSIC_COLUMNS } from "@/lib/feed/post-row";
+import { PROFILE_FEED_PAGE_SIZE, parseProfileCursor, profileCursorFilter, profileFeedMeta } from "@/lib/feed/profile-cursor";
 import { supabaseServer } from "@/lib/supabase/server";
 
-export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
@@ -17,7 +18,13 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const { data: sub } = await sb.from("subscription").select(ACCESS_COLUMNS).eq("user_id", user.id).single();
   if (!hasAccess(sub)) return GATED();
 
-  const { data: posts } = await sb
+  // ENG-1633 — `?cursor=` pages (the contract's shape): the last row's
+  // `<published_at>|<id>` keyset, both halves validated (ISO / UUID) before
+  // they reach a filter. Absent = page 1.
+  const cursor = parseProfileCursor(new URL(req.url).searchParams.get("cursor"));
+  if (cursor === undefined) return fail("invalid_cursor", "cursor is malformed.", 400);
+
+  let query = sb
     .from("post")
     // Post columns from the ONE shared constant (ENG-794) — see the note in
     // app/api/horses/[id]/feed/route.ts and on the constant itself. The
@@ -45,9 +52,17 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     // Pinned by test/trainers-route.test.ts.
     .select(`${POST_INTRINSIC_COLUMNS}, horse:horse_id(display_name, racing_name, photo_url)`)
     .eq("source_trainer_id", id)
-    .eq("status", "published")
+    .eq("status", "published");
+  if (cursor) query = query.or(profileCursorFilter(cursor));
+  const { data: posts, error } = await query
     .order("published_at", { ascending: false })
-    .limit(20);
+    .order("id", { ascending: false })
+    .limit(PROFILE_FEED_PAGE_SIZE);
 
-  return ok(posts ?? []);
+  // A rejected read (e.g. a filter PostgREST refused) is a 5xx, never an empty
+  // page with `hasMore: false` — that would silently end the list (ENG-1633).
+  if (error) return fail("feed_failed", "Couldn't load these updates.", 500);
+
+  const rows = (posts ?? []) as { id?: string | null; published_at?: string | null }[];
+  return ok(rows, profileFeedMeta(rows));
 }

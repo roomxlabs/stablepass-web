@@ -6,9 +6,17 @@
 // The trainer profile additionally SUPPRESSES the Follow pill: offering "Follow"
 // on the page you are already reading is noise.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import { installIntersectionObserver, intersect, liveObservers } from "./support/intersection-observer";
 import { HorsePosts } from "@/app/(member)/horses/[id]/horse-posts";
 import { TrainerPosts } from "@/app/(member)/trainers/[id]/trainer-posts";
+import { resetSpy } from "./support/playback-reset-spy";
+
+// The real player hook, with `reset()` observable (ENG-1633 M1: a gated page 2+
+// must drop every held playback url, not just end the list).
+vi.mock("@/lib/feed/use-feed-playback", async (importOriginal) =>
+  (await import("./support/playback-reset-spy")).withResetSpy(await importOriginal()),
+);
 
 const VIEWER_ID = "8f3c1a2b-1234-4abc-9def-0123456789ab";
 
@@ -593,5 +601,173 @@ describe("profile post feeds — ENG-799 post-media mint", () => {
     await screen.findByText("Trackwork.");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(container.querySelector(".post-media-web img")).toBeNull();
+  });
+});
+
+// ===========================================================================
+// ENG-1633 — the profile feeds now PAGE (`?cursor=`), starting page N+1 when the
+// 5th-from-last card comes into view, once. A failed LATER page keeps the posts.
+// ===========================================================================
+describe.each([
+  {
+    name: "HorsePosts",
+    base: "/api/horses/h1/feed",
+    ui: () => <HorsePosts horseId="h1" horseName="Mahogany" trainerName="Tom Alcott" viewerId={VIEWER_ID} />,
+  },
+  {
+    name: "TrainerPosts",
+    base: "/api/trainers/t1/feed",
+    ui: () => <TrainerPosts trainerId="t1" trainerName="Tom Alcott" viewerId={VIEWER_ID} />,
+  },
+])("$name — ENG-1633 paging", ({ base, ui }) => {
+  const rows = Array.from({ length: 8 }, (_, i) => ({ ...TEXT_ROW, id: `pp${i + 1}` }));
+
+  it("requests page 2 ONCE, with ?cursor=<nextCursor>, at the 5th-from-last card; firing again adds none", async () => {
+    const inner = global.fetch;
+    const fetchMock = vi.fn((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === base) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: rows, meta: { nextCursor: "2026-07-01T00:00:00.000Z", hasMore: true } }) });
+      }
+      if (url.startsWith(`${base}?`)) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [], meta: { nextCursor: null, hasMore: false } }) });
+      }
+      return (inner as unknown as (i: string | URL, n?: RequestInit) => Promise<unknown>)(input, init);
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const restoreIO = installIntersectionObserver();
+    try {
+      render(ui());
+      await waitFor(() => expect(document.querySelectorAll("article.post-web")).toHaveLength(8));
+      await waitFor(() => expect(liveObservers().length).toBeGreaterThan(0));
+
+      const articles = Array.from(document.querySelectorAll("article.post-web"));
+      expect(intersect(articles[3])).toBeGreaterThan(0);
+      const pageTwo = () => fetchMock.mock.calls.filter((c) => String(c[0]).startsWith(`${base}?`));
+      await waitFor(() => expect(pageTwo()).toHaveLength(1));
+      expect(String(pageTwo()[0][0])).toBe(`${base}?cursor=2026-07-01T00%3A00%3A00.000Z`);
+
+      intersect(articles[3]);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(pageTwo()).toHaveLength(1);
+    } finally {
+      restoreIO();
+    }
+  });
+
+  it("a FAILING page 2 keeps the page-1 posts on screen and stops paging", async () => {
+    const inner = global.fetch;
+    const fetchMock = vi.fn((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === base) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: rows, meta: { nextCursor: "2026-07-01T00:00:00.000Z", hasMore: true } }) });
+      }
+      if (url.startsWith(`${base}?`)) {
+        return Promise.resolve({ ok: false, status: 500, json: async () => ({ error: { code: "boom" } }) });
+      }
+      return (inner as unknown as (i: string | URL, n?: RequestInit) => Promise<unknown>)(input, init);
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const restoreIO = installIntersectionObserver();
+    try {
+      const { container } = render(ui());
+      await waitFor(() => expect(document.querySelectorAll("article.post-web")).toHaveLength(8));
+      await waitFor(() => expect(liveObservers().length).toBeGreaterThan(0));
+
+      const articles = Array.from(document.querySelectorAll("article.post-web"));
+      intersect(articles[3]);
+      const pageTwo = () => fetchMock.mock.calls.filter((c) => String(c[0]).startsWith(`${base}?`));
+      await waitFor(() => expect(pageTwo()).toHaveLength(1));
+      await new Promise((r) => setTimeout(r, 20));
+
+      expect(document.querySelectorAll("article.post-web")).toHaveLength(8);
+      expect(screen.queryByText(/couldn.t load/i)).not.toBeInTheDocument();
+      // Paging stopped: nothing left watching for the next page.
+      const sentinel = container.lastElementChild!;
+      expect(liveObservers().some((o) => o.targets.has(sentinel))).toBe(false);
+    } finally {
+      restoreIO();
+    }
+  });
+
+  // M1 — a member who lapses mid-session and scrolls: page 2 answers 402. That
+  // is the gated/error state (guardrail 3), with every held playback url
+  // dropped — never the silent end-of-list a 5xx gets.
+  it.each([
+    { label: "the page-2 feed read answers 402", feed402: true },
+    { label: "the page-2 media batch answers 402 (PostMediaError gated)", feed402: false },
+  ])("a GATED page 2 ($label) goes to the error state and resets playback", async ({ feed402 }) => {
+    const inner = global.fetch;
+    const page2 = Array.from({ length: 3 }, (_, i) => ({
+      ...TEXT_ROW,
+      id: `pg${i + 1}`,
+      type: "photo",
+      title: null,
+      media_url: `posts/pg${i + 1}.jpg`,
+    }));
+    const fetchMock = vi.fn((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === base) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: rows, meta: { nextCursor: "2026-07-01T00:00:00.000Z|00000000-0000-4000-8000-000000000001", hasMore: true } }) });
+      }
+      if (url.startsWith(`${base}?`)) {
+        if (feed402) return Promise.resolve({ ok: false, status: 402, json: async () => ({ error: { code: "subscription_required" } }) });
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: page2, meta: { nextCursor: null, hasMore: false } }) });
+      }
+      if (url === "/api/posts/media" && String(init?.body ?? "").includes("pg1")) {
+        return Promise.resolve({ ok: false, status: 402, json: async () => ({ error: { code: "subscription_required" } }) });
+      }
+      return (inner as unknown as (i: string | URL, n?: RequestInit) => Promise<unknown>)(input, init);
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const restoreIO = installIntersectionObserver();
+    try {
+      render(ui());
+      await waitFor(() => expect(document.querySelectorAll("article.post-web")).toHaveLength(8));
+      await waitFor(() => expect(liveObservers().length).toBeGreaterThan(0));
+      const resetsAfterPageOne = resetSpy.mock.calls.length;
+      expect(resetsAfterPageOne).toBeGreaterThan(0); // page 1 resets too — the baseline
+
+      intersect(document.querySelectorAll("article.post-web")[3]);
+      const pageTwo = () => fetchMock.mock.calls.filter((c) => String(c[0]).startsWith(`${base}?`));
+      await waitFor(() => expect(pageTwo()).toHaveLength(1));
+
+      // Positive anchor first: the error state RENDERED (not a blank screen).
+      expect(await screen.findByText(/couldn.t load/i)).toBeInTheDocument();
+      expect(document.querySelectorAll("article.post-web")).toHaveLength(0);
+      expect(resetSpy.mock.calls.length).toBeGreaterThan(resetsAfterPageOne);
+      // And no further page is asked for.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(pageTwo()).toHaveLength(1);
+    } finally {
+      restoreIO();
+    }
+  });
+
+  it("a 500 on page 2 does NOT reset playback (only a 402 drops held urls)", async () => {
+    const inner = global.fetch;
+    const fetchMock = vi.fn((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === base) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: rows, meta: { nextCursor: "2026-07-01T00:00:00.000Z|00000000-0000-4000-8000-000000000001", hasMore: true } }) });
+      }
+      if (url.startsWith(`${base}?`)) return Promise.resolve({ ok: false, status: 500, json: async () => ({}) });
+      return (inner as unknown as (i: string | URL, n?: RequestInit) => Promise<unknown>)(input, init);
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const restoreIO = installIntersectionObserver();
+    try {
+      render(ui());
+      await waitFor(() => expect(document.querySelectorAll("article.post-web")).toHaveLength(8));
+      await waitFor(() => expect(liveObservers().length).toBeGreaterThan(0));
+      const before = resetSpy.mock.calls.length;
+      intersect(document.querySelectorAll("article.post-web")[3]);
+      await waitFor(() => expect(fetchMock.mock.calls.some((c) => String(c[0]).startsWith(`${base}?`))).toBe(true));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(document.querySelectorAll("article.post-web")).toHaveLength(8);
+      expect(resetSpy.mock.calls.length).toBe(before);
+    } finally {
+      restoreIO();
+    }
   });
 });

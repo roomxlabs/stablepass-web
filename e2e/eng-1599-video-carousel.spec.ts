@@ -237,7 +237,12 @@ test("an entitled member pages, plays, auto-advances and gets one player at a ti
     await expect(img).toHaveCount(1);
     await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
   }
-  expect(mints.streams).toEqual([]); // no autoplay on load
+  // No autoplay on load. Since ENG-1633 the feed PRE-MINTS the on-screen
+  // cards' stream urls into memory (so `mints.streams` is no longer empty), but
+  // nothing is PLAYED until a tap: no <video> element exists anywhere yet, and
+  // no slide past the one on screen has been asked for.
+  expect(mints.streams.filter((u) => /videoIndex=[12]/.test(u))).toEqual([]);
+  await expect(page.locator("video")).toHaveCount(0);
   await expect(media.locator("video")).toHaveCount(0);
 
   await card.scrollIntoViewIfNeeded();
@@ -346,7 +351,9 @@ test("the slide's stream goes through hls.js with exactly the url minted for its
   await media.getByRole("button", { name: "Go to video 2 of 3" }).click();
   await media.getByRole("button", { name: "Play video 2 of 3" }).click();
 
-  await expect.poll(() => mints.streams).toEqual([`/api/posts/${s.carouselId}/playback?videoIndex=1`]);
+  // Contains, not equals: since ENG-1633 the on-screen cards' index-0 urls are
+  // pre-minted too, and moving to slide 2 pre-mints ITS url before the tap.
+  await expect.poll(() => mints.streams).toContain(`/api/posts/${s.carouselId}/playback?videoIndex=1`);
   // hls.js (an XHR, not the element) fetched the manifest — the MSE transport.
   await expect.poll(() => manifestFetches.length, { timeout: 15_000 }).toBeGreaterThan(0);
   // No H.264 in this browser build: the transport fails honestly with the
