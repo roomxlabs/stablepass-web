@@ -53,6 +53,11 @@ const BANNED = [
   // point — it steps over the `<small>` in `$19<small>/month</small>`, so the
   // price card is caught twice over rather than not at all.
   /\b19(?:\.\d{2})?\s*(?:<[^>]*>)?\s*(?:\/\s*|per |a )month/i,
+  // ENG-1337: the promo's price as the LEGAL copy wrote it — "$9.00 AUD per
+  // month … for their first six (6) consecutive monthly billing periods". That
+  // sentence dodges the phrase pattern above, so the cents are the anchor.
+  // `A$9.99` cannot collide with it.
+  /A?U?\$\s*9\.00\b/,
 ];
 
 // Every root that renders a price to a member or a visitor. The bar is ZERO
@@ -70,7 +75,12 @@ const BANNED = [
 // silently in both directions) and promote it back to zero when the owner
 // lands — deleting an entry without promoting the root silently stops covering
 // it.
-const PRICED_ROOTS = ["app/(marketing)", "app/start", "app/signin", "app/(member)", "components"];
+//
+// ENG-1337: `content/legal` renders as prerendered pages linked from the signup
+// form, and was scanned by nothing — which is how /legal/cancellation kept
+// selling the retired $19 price and promo after the funnel had moved on. Its
+// `.md` files are the copy; `.ts`/`.tsx` alone would walk an empty tree there.
+const PRICED_ROOTS = ["app/(marketing)", "app/start", "app/signin", "app/(member)", "components", "content/legal"];
 
 function filesUnder(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -80,7 +90,7 @@ function filesUnder(dir: string): string[] {
 }
 
 function sourceFiles(root: string): string[] {
-  return filesUnder(resolve(process.cwd(), root)).filter((f) => /\.(ts|tsx)$/.test(f));
+  return filesUnder(resolve(process.cwd(), root)).filter((f) => /\.(ts|tsx|md)$/.test(f));
 }
 
 /** Every line of member-visible copy matching a banned pattern. */
@@ -110,7 +120,7 @@ function offendersUnder(root: string): { at: string; text: string }[] {
 
 describe("no A$19 price literal survives anywhere a member can read one", () => {
   for (const root of PRICED_ROOTS) {
-    it(`scans every .ts/.tsx file under ${root}`, () => {
+    it(`scans every .ts/.tsx/.md file under ${root}`, () => {
       expect(
         offendersUnder(root).map((h) => `${h.at}: ${h.text}`),
         `the price is A$9.99 after a 30-day trial (ENG-1321) — and a checkout screen must read it from Stripe, not print a literal`,
@@ -148,6 +158,10 @@ describe("the guard itself still bites", () => {
     ["19 per month"],
     ["Launch Offer \u2014 $9/month for your first 6 months."],
     ["pay $9 per month for their first six months"],
+    // ENG-1337: the retired clause in content/legal/cancellation.md, verbatim.
+    ["## 8. Introductory Subscription Offer \u2013 $9 per Month for First 6 Months"],
+    ["Stablepass may offer eligible new subscribers an introductory subscription price of $9.00 AUD per month (including GST) for their first six (6) consecutive monthly billing periods"],
+    ["- After the Introductory Offer ends, the subscription continues at $19.00 AUD per month (including GST)"],
   ])("catches the retired price literal: %s", (line) => {
     expect(matches(line)).toBe(true);
   });
@@ -166,13 +180,16 @@ describe("the guard itself still bites", () => {
     // The live price must never collide with the promo pattern above.
     ["A$9.99 per month, billed monthly"],
     ["30 days free, then A$9.99"],
+    // ENG-1337: the proposed Pricing v2 legal wording must stay green.
+    ["The standard Stablepass subscription price is A$9.99 per month (including GST)."],
+    ["- the subscription fees paid by the User in the six months preceding the event giving rise to the claim; or"],
   ])("leaves legitimate copy and code alone: %s", (line) => {
     expect(matches(line)).toBe(false);
   });
 
   it("actually walked the tree — every scanned root yielded source files", () => {
     for (const root of PRICED_ROOTS) {
-      expect(sourceFiles(root).length, `no .ts/.tsx found under ${root} — the walk is broken`).toBeGreaterThan(0);
+      expect(sourceFiles(root).length, `no .ts/.tsx/.md found under ${root} — the walk is broken`).toBeGreaterThan(0);
     }
   });
 });
