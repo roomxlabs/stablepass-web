@@ -109,13 +109,13 @@ describe("CheckoutPage — active member redirect (ENG-1027)", () => {
     expect(await screen.findByText("Order summary")).toBeInTheDocument();
   });
 
-  it("selects only status — the coupon counter is not a second source of truth here", async () => {
+  it("selects only status — trial eligibility is not a second source of truth here", async () => {
     await CheckoutPage();
     expect(selectMock).toHaveBeenCalledWith("status");
-    expect(selectMock.mock.calls.some((c) => String(c[0]).includes("intro_months_used"))).toBe(false);
+    expect(selectMock.mock.calls.some((c) => String(c[0]).includes("trial_used_at"))).toBe(false);
   });
 
-  it("passes no trialDaysLeft — the free trial is retired (ENG-999)", async () => {
+  it("passes no trialDaysLeft — trial eligibility is decided server-side by the checkout route (ENG-1328)", async () => {
     const element = await CheckoutPage();
     expect(Object.keys(element.props)).not.toContain("trialDaysLeft");
   });

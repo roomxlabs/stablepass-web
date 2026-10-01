@@ -1,16 +1,16 @@
 // Checkout screen (04-checkout.html) — embedded Stripe Elements, no hosted
 // redirect (.rx/guardrails.md #4).
 //
-// There is no free trial any more (ENG-999 retired it). This page therefore
-// does not read `trial_ends_at` and does not pass a `trialDaysLeft` down.
+// Pricing v2 (ENG-1328) brings back a one-time 30-day free trial, but this
+// page still reads only `status`. Whether THIS member gets the trial is decided
+// SERVER-SIDE by /api/subscription/checkout from their own
+// `subscription.trial_used_at`, and arrives with the clientSecret (with the
+// list price and what is due today). Reading it here too would just create a
+// second, drift-prone source of truth for a flag that decides what someone is
+// charged.
 //
-// An already-active member has nothing to buy: the pass now auto-renews, so
+// An already-active member has nothing to buy: the membership auto-renews, so
 // early renewal is gone. Redirect to /account (R4 owns managing a live sub).
-// Only `status` is read here — the coupon, the list price and the remaining
-// intro months are decided SERVER-SIDE by /api/subscription/checkout from
-// `subscription.intro_months_used` and arrive with the clientSecret. Reading
-// the counter here too would just create a second, drift-prone source of truth
-// for a number that decides what someone is charged.
 //
 // Do not import `lib/api/access.ts` or `readSubscriptionState` — those are
 // R5 / shared entitlement, not this slice. A bare `status === "active"` is

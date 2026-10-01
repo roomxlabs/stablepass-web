@@ -13,8 +13,19 @@
 // `.settings-card` / `.settings-card-head` / `.settings-row` / `.plan-row` /
 // `.btn` already on this screen. No new colours, no new component family.
 //
-// ENG-999 retired the free trial, so there is no trial wording anywhere on this
-// screen any more — not as a pill, not as a plan name, not as a day count.
+// ENG-1192 (IAP via RevenueCat) branches the card on `subscription.provider`.
+// Entitlement is still decided first by `hasAccess()`; the provider only picks
+// wording and which affordances exist. A row billed by the App Store / Google
+// Play gets no Manage card, no Cancel and no Stripe amount (we do not know the
+// store price); a `promotional` row is complimentary access. The mockup has no
+// managed-elsewhere state — a documented design gap, composed from the same
+// `.settings-row` / `.plan-row` / muted-copy styles, no new colour.
+//
+// Pricing v2 (ENG-1328) brings back a one-time 30-day free trial. A trialling
+// row is still `status = 'active'` (so the pill stays "Active" and entitlement
+// is untouched); `period_type = 'trial'` only switches the wording to
+// "Free until <date>, then <Stripe price> per month". The intro discount is
+// gone: no coupon read, no remaining-months line, no computed change-over date.
 import { getStripe } from "@/lib/stripe";
 import { supabaseServer } from "@/lib/supabase/server";
 import { hasAccess, type AccessRow } from "@/lib/api/access";
@@ -23,9 +34,12 @@ import { CancelCard } from "./cancel-card";
 import {
   ACCOUNT_SUB_COLUMNS,
   formatMoney,
+  isComplimentary,
   isFailedRenewal,
-  nextChargeAmount,
-  remainingIntroMonths,
+  isStoreManaged,
+  isTrialling,
+  providerLabel,
+  storeManageCopy,
   type AccountSubRow,
   type StripePricing,
 } from "./billing";
@@ -141,27 +155,20 @@ function statusPill(sub: AccessRow | null, entitled: boolean): { label: string; 
   return { label: "Ended", colour: "var(--red)" };
 }
 
-async function readStripePricing(remaining: number): Promise<StripePricing | null> {
+async function readStripePricing(): Promise<StripePricing | null> {
   const stripe = getStripe();
   const priceId = process.env.STRIPE_PRICE_ID_STANDARD;
   if (!stripe || !priceId) return null;
   try {
     const price = await stripe.prices.retrieve(priceId);
     if (price.unit_amount == null) return null;
-    let discountAmount = 0;
-    if (remaining > 0) {
-      const coupon = await stripe.coupons.retrieve(`intro_${remaining}`);
-      if (typeof coupon.amount_off !== "number") return null;
-      discountAmount = coupon.amount_off;
-    }
     return {
       unitAmount: price.unit_amount,
-      discountAmount,
       currency: price.currency ?? "aud",
     };
   } catch (err) {
     console.error(
-      "[account] Stripe price/coupon retrieve failed — omitting amounts rather than guessing: %s",
+      "[account] Stripe price retrieve failed — omitting amounts rather than guessing: %s",
       err instanceof Error ? err.message : String(err),
     );
     return null;
@@ -178,7 +185,7 @@ export default async function AccountPage() {
       .select("first_name,last_name,email,phone,pref_new_post,pref_race_day,pref_race_result,pref_milestone")
       .eq("id", userId).maybeSingle(),
     // ACCOUNT_SUB_COLUMNS, not a hand-written list: this row is fed to
-    // `hasAccess()` plus the intro / portal / payment-failed branches, and a
+    // `hasAccess()` plus the trial / portal / payment-failed branches, and a
     // select that drifts from what those helpers read is invisible to `tsc`
     // (`sb` is untyped) — it just fails CLOSED at runtime.
     sb.from("subscription").select(ACCOUNT_SUB_COLUMNS).eq("user_id", userId).maybeSingle(),
@@ -208,8 +215,13 @@ export default async function AccountPage() {
   const canceled = sub?.status === "canceled";
   const endedInPast = hasPassed(sub?.current_period_end ?? null);
   const paymentFailed = !entitled && isFailedRenewal(sub);
-  const remaining = remainingIntroMonths(sub?.intro_months_used);
+  // A live (not cancelled) free trial. Wording only — never entitlement.
+  const trialling = entitled && !canceled && isTrialling(sub);
   const hasCustomer = (sub?.stripe_customer_id ?? null) !== null;
+  // ENG-1192: who bills the row. Never consulted for `entitled` above.
+  const storeManaged = isStoreManaged(sub);
+  const complimentary = isComplimentary(sub);
+  const stripeBilled = !storeManaged && !complimentary;
 
   // Who is offered the Cancel control (ENG-1002). All three clauses are
   // load-bearing:
@@ -225,23 +237,47 @@ export default async function AccountPage() {
   //     coalesce(current_period_end, now())`. Cancelling in that window
   //     revokes access IMMEDIATELY. The window is seconds long; the control
   //     waits for the period to land.
-  const canCancel = entitled && sub?.status === "active" && sub.current_period_end !== null;
+  //   * `stripeBilled` (ENG-1192) — a store row is cancelled in the store (the
+  //     route answers 409 managed_by_store), and complimentary access has
+  //     nothing billed to cancel.
+  const canCancel =
+    entitled && sub?.status === "active" && sub.current_period_end !== null && stripeBilled;
 
-  // Amounts come from Stripe (standard price + intro coupon) or we omit them.
+  // Amounts come from the Stripe standard price or we omit them.
   // Never a literal that can disagree with what Stripe will charge.
-  const pricing = entitled && !canceled ? await readStripePricing(remaining) : null;
+  // Only for a Stripe-billed row: the Stripe price is not what Apple / Google
+  // charge, and a complimentary member is charged nothing.
+  const pricing = entitled && !canceled && stripeBilled ? await readStripePricing() : null;
   const standardLabel = pricing ? formatMoney(pricing.unitAmount, pricing.currency) : null;
-  const nextLabel = pricing ? formatMoney(nextChargeAmount(pricing, remaining), pricing.currency) : null;
+  // After a trial the price is flat: "then <price> per month", never a date.
+  const thenLabel = standardLabel ? `${standardLabel} per month` : "the standard monthly price";
 
-  const showNextCharge = entitled && !canceled && !!endDate;
-  const showChangeOver = entitled && !canceled && remaining > 0;
+  // A trial replaces "Next charge" with "Free trial: Free until <date>" + "Then".
+  const showNextCharge = entitled && !canceled && !complimentary && !trialling && !!endDate;
+  const showTrial = trialling && !complimentary;
+  const showChangeOver = trialling && stripeBilled;
 
   const planName = entitled
-    ? "Monthly membership"
+    ? complimentary
+      ? "Complimentary access"
+      : "Monthly membership"
     : paymentFailed
       ? "Payment failed"
       : "No active subscription";
-  const planMeta = entitled
+  const managedMeta = storeManaged
+    ? `Managed through ${sub?.provider === "play_store" ? "" : "the "}${providerLabel(sub?.provider)}`
+    : null;
+  const planMeta = entitled && managedMeta
+    ? managedMeta
+    : entitled && complimentary
+    ? endDate
+      ? `Access until ${endDate}`
+      : "Access active"
+    : trialling
+    ? endDate
+      ? `Free until ${endDate}`
+      : "Free trial"
+    : entitled
     ? canceled
       ? endDate
         ? `Access until ${endDate}`
@@ -256,7 +292,23 @@ export default async function AccountPage() {
         : "Access ended";
 
   let planCopy: string;
-  if (entitled && canceled) {
+  if (entitled && storeManaged) {
+    const biller = sub?.provider === "play_store" ? "Google" : "Apple";
+    const lead = canceled
+      ? endDate
+        ? `You've cancelled. Your access continues until ${endDate}. You won't be charged again.`
+        : "You've cancelled. Your access continues to the end of this period. You won't be charged again."
+      : `Your membership is billed by ${biller}.`;
+    planCopy = `${lead} ${storeManageCopy(sub?.provider)}`;
+  } else if (entitled && complimentary) {
+    planCopy = endDate
+      ? `You have complimentary access until ${endDate}. There's nothing to pay.`
+      : "You have complimentary access. There's nothing to pay.";
+  } else if (trialling) {
+    planCopy = endDate
+      ? `You're on a free trial until ${endDate}, then ${thenLabel}. Cancel any time before then and you won't be charged.`
+      : `You're on a free trial, then ${thenLabel}. Cancel any time before it ends and you won't be charged.`;
+  } else if (entitled && canceled) {
     planCopy = endDate
       ? `You've cancelled. Your access continues until ${endDate}. You won't be charged again.`
       : "You've cancelled. Your access continues to the end of this period. You won't be charged again.";
@@ -266,13 +318,18 @@ export default async function AccountPage() {
       : "Your membership is active. Cancel any time — you'll keep access to the end of the period you've paid for.";
   } else if (paymentFailed) {
     planCopy = "Your payment didn't go through. Update your card to keep your membership.";
+  } else if (storeManaged && (sub?.canceled_at ?? null) === null && endedInPast) {
+    // A store subscription that ran out without a cancel. They may re-subscribe
+    // here on the web, so the Subscribe CTA stays — but never "update your
+    // card": there is no card of ours to update.
+    planCopy = "Your store subscription has ended. Subscribe to pick up where you left off.";
   } else {
     planCopy = "Your access has ended. Subscribe to pick up where you left off.";
   }
 
   const headCta = paymentFailed || !entitled
     ? { href: "/checkout", label: "Subscribe" }
-    : hasCustomer
+    : hasCustomer && stripeBilled
       ? { href: "/api/subscription/portal", label: "Manage card" }
       : null;
 
@@ -301,23 +358,42 @@ export default async function AccountPage() {
           <div className="settings-row" data-testid="next-charge">
             <span className="label">Next charge</span>
             <span className="value">
-              {nextLabel ? `${nextLabel} on ${endDate}` : `On ${endDate}`}
+              {storeManaged
+                ? `Renews on ${endDate}`
+                : standardLabel
+                  ? `${standardLabel} on ${endDate}`
+                  : `On ${endDate}`}
             </span>
+          </div>
+        )}
+        {showTrial && (
+          <div className="settings-row" data-testid="trial-until">
+            <span className="label">Free trial</span>
+            <span className="value">{endDate ? `Free until ${endDate}` : "Active"}</span>
           </div>
         )}
         {showChangeOver && (
           <div className="settings-row" data-testid="change-over">
             <span className="label">Then</span>
-            <span className="value">
-              {standardLabel ? `${standardLabel} per month` : "the standard monthly price"}
-            </span>
+            <span className="value">{thenLabel}</span>
           </div>
         )}
         <div className="plan-card-inner">
           <div className="plan-row">
             <div>
               <p className="plan-name">{planName}</p>
-              <div className="plan-meta">{planMeta}</div>
+              <div
+                className="plan-meta"
+                data-testid={
+                  entitled && storeManaged
+                    ? "managed-by-store"
+                    : entitled && complimentary
+                      ? "complimentary"
+                      : undefined
+                }
+              >
+                {planMeta}
+              </div>
             </div>
           </div>
           <p

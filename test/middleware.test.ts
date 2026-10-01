@@ -37,6 +37,10 @@ function run(call: Call) {
   return {
     status: response.status,
     location: response.headers.get("location"),
+    // ENG-1593 — the app-host root with an auth cookie is now a REWRITE, not a
+    // redirect: this is the ONLY header that shows where it served the request
+    // FROM. A rewrite is a 200 with no Location at all.
+    rewrite: response.headers.get("x-middleware-rewrite"),
     robots: response.headers.get("x-robots-tag"),
     cacheControl: response.headers.get("cache-control"),
     vary: response.headers.get("vary"),
@@ -71,10 +75,14 @@ describe("host routing — the contract table", () => {
     expect(location).toBe(`https://${APP}/explore`);
   });
 
-  it("redirects the app host root to /explore when an auth cookie is present", () => {
-    const { status, location } = run({ host: APP, path: "/", cookies: SIGNED_IN });
-    expect(status).toBe(307);
-    expect(location).toBe(`https://${APP}/explore`);
+  // ENG-1593 — a signed-in visit to the app-host root is now REWRITTEN to
+  // /explore (no extra round trip), not redirected: the address bar keeps `/`,
+  // the response is a 200, and there is no `location` at all.
+  it("rewrites the app host root to /explore when an auth cookie is present", () => {
+    const { status, location, rewrite } = run({ host: APP, path: "/", cookies: SIGNED_IN });
+    expect(status).toBe(200);
+    expect(location).toBeNull();
+    expect(rewrite).toBe(`https://${APP}/explore`);
   });
 
   it("redirects the app host root to /signin when there is no auth cookie", () => {
@@ -159,18 +167,25 @@ describe("the public host comes from one source", () => {
 });
 
 describe("the chunked auth cookie — decision 2, the trap", () => {
+  // ENG-1593 — these three now assert the REWRITE header, not `location`: the
+  // app-host root with a recognised cookie serves /explore directly (a 200),
+  // it does not redirect there.
   it("detects a session chunked across .0 and .1", () => {
-    expect(run({ host: APP, path: "/", cookies: CHUNKED }).location).toBe(`https://${APP}/explore`);
+    const { status, rewrite } = run({ host: APP, path: "/", cookies: CHUNKED });
+    expect(status).toBe(200);
+    expect(rewrite).toBe(`https://${APP}/explore`);
   });
 
   it("detects a chunked session even when only .0 is present", () => {
-    expect(run({ host: APP, path: "/", cookies: [`${AUTH_COOKIE_NAME}.0`] }).location).toBe(
-      `https://${APP}/explore`,
-    );
+    const { status, rewrite } = run({ host: APP, path: "/", cookies: [`${AUTH_COOKIE_NAME}.0`] });
+    expect(status).toBe(200);
+    expect(rewrite).toBe(`https://${APP}/explore`);
   });
 
   it("detects the unchunked cookie too", () => {
-    expect(run({ host: APP, path: "/", cookies: SIGNED_IN }).location).toBe(`https://${APP}/explore`);
+    const { status, rewrite } = run({ host: APP, path: "/", cookies: SIGNED_IN });
+    expect(status).toBe(200);
+    expect(rewrite).toBe(`https://${APP}/explore`);
   });
 
   it("does NOT treat the PKCE code-verifier as a session", () => {
@@ -220,9 +235,24 @@ describe("no redirect loop within middleware — chain followed to completion", 
     throw new Error(`redirect loop: ${[start.path, ...chain].join(" -> ")}`);
   }
 
-  it("settles the app-host root for a signed-in member", () => {
+  // ENG-1593 — this is now a REWRITE (a 200), not a redirect: `follow()` only
+  // ever chases a 307/308 `location`, so a rewrite gives it nothing to follow
+  // and `chain` is empty on the very first hop. That IS the loop-guard intent
+  // restated for the new mechanism: whatever `/` resolves to must not be a hop
+  // that could re-enter `/`, and a same-request rewrite (no second request at
+  // all) satisfies that even more strongly than the old redirect did.
+  it("settles the app-host root for a signed-in member — a rewrite, so there is no hop to follow", () => {
     const { chain, status } = follow({ host: APP, path: "/", cookies: SIGNED_IN });
-    expect(chain).toEqual([`https://${APP}/explore`]);
+    expect(chain).toEqual([]);
+    expect(status).toBe(200);
+  });
+
+  // `/explore` itself, requested directly on the app host, is SERVED — not
+  // redirected anywhere, including back to `/`. This is the other half of the
+  // loop-guard intent: the rewrite's target is a real, terminal page.
+  it("serves /explore directly when it is the request itself, not a bounce back to /", () => {
+    const { chain, status } = follow({ host: APP, path: "/explore", cookies: SIGNED_IN });
+    expect(chain).toEqual([]);
     expect(status).toBe(200);
   });
 

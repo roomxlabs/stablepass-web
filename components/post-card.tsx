@@ -22,6 +22,8 @@ import { ReactionBar } from "./reaction-bar";
 import { PostOverlay } from "./post-overlay";
 import { FollowPill } from "./follow-pill";
 import { MediaPhotoChip, PhotoCarousel } from "./photo-carousel";
+import { VideoCarousel } from "./video-carousel";
+import { isVideoCarouselPost, type FeedPlayback } from "@/lib/feed/use-feed-playback";
 import { PostMediaImage } from "./post-media-image";
 import { PostAvatar, PostHead } from "./post-head";
 import type { FeedPost, PostMedia, ReactionEmoji } from "./types";
@@ -537,6 +539,12 @@ export interface PostCardProps {
   onBookmark: () => void;
   onPlay?: () => void; // consumer mints the signed URL via the media-player
   /**
+   * The feed's shared player (ENG-1599). Only a VIDEO CAROUSEL reads it — its
+   * slides play in place, keyed `postId:videoIndex` — while a single-video card
+   * keeps calling `onPlay` exactly as before.
+   */
+  playback?: FeedPlayback;
+  /**
    * Whether to offer the Follow pill on this card's media. The SCREEN decides,
    * from a single screen-level read of the viewer's follows — never a per-card
    * read. False (the default) is what suppresses the pill on a trainer's own
@@ -564,6 +572,7 @@ export function PostCard({
   onReact,
   onBookmark,
   onPlay,
+  playback,
   canFollow = false,
   onFollow,
 }: PostCardProps) {
@@ -606,6 +615,10 @@ export function PostCard({
   // makes `needs-spec`, not part of this ticket. `PhotoCarousel` is shared, so
   // the day that screen exists it mounts in one line. Flagged on the issue.
   const isCarousel = isCarouselPost(post);
+  // ENG-1599 — 2+ READY videos. The carousel draws its own per-slide play
+  // buttons and its own counted chip, so the card's single play button and
+  // duration chip stand down for it; a one-video post is untouched.
+  const isVideoCarousel = isVideoCarouselPost(post);
 
   return (
     <article className="post-web">
@@ -621,7 +634,14 @@ export function PostCard({
 
       {hasMedia && (
         <div {...mediaBox}>
-          {isCarousel ? (
+          {isVideoCarousel ? (
+            <VideoCarousel
+              postId={post.id}
+              videoCount={post.videoCount ?? 1}
+              firstPoster={post.media.posterUrl ?? null}
+              playback={playback}
+            />
+          ) : isCarousel ? (
             // The carousel REPLACES the single poster image and brings its own
             // chip + dots. The box, the Follow pill, the watermark overlay and
             // the aspect ratio all stay exactly where they were.
@@ -650,10 +670,10 @@ export function PostCard({
               {canFollow && <FollowPill trainerName={post.trainerName} onFollow={onFollow} />}
             </PostHead>
           )}
-          {isVideo && (
+          {isVideo && !isVideoCarousel && (
             <button className="media-play" type="button" aria-label="Play video" onClick={onPlay}><Play /></button>
           )}
-          {isVideo && post.media.duration && <div className="media-duration">{post.media.duration}</div>}
+          {isVideo && !isVideoCarousel && post.media.duration && <div className="media-duration">{post.media.duration}</div>}
           {/* The photo's answer to the duration chip: same corner, same scrim.
               A CAROUSEL draws its own chip (it owns the index the chip counts),
               so the card only draws the plain one when there is no carousel. */}

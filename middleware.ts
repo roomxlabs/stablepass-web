@@ -200,6 +200,29 @@ function redirectRoot(request: NextRequest, host: string, pathname: string): Nex
   return response;
 }
 
+/**
+ * Same host, SERVE a different path — no round trip (ENG-1593).
+ *
+ * A signed-in member opening `app.stablepass.co` used to pay a full 307 hop
+ * (`/` → `/explore`) before the first byte of the app. A rewrite serves the
+ * Explore page directly at `/`: the address bar keeps `/`, and the member
+ * layout's own session check still runs (a stale cookie still ends on
+ * `/signin`, via the layout's redirect).
+ *
+ * `no-store` + `Vary: Cookie` for the same reason as `redirectRoot`: the answer
+ * at `/` depends on the cookie, so no cache may replay one visitor's answer to
+ * the next. The app space is noindex, as `serve()` marks every other app path.
+ */
+function rewriteRoot(request: NextRequest, pathname: string): NextResponse {
+  const url = request.nextUrl.clone();
+  url.pathname = pathname;
+  const response = NextResponse.rewrite(url);
+  response.headers.set("Cache-Control", "no-store");
+  response.headers.set("Vary", "Cookie");
+  response.headers.set("X-Robots-Tag", "noindex, nofollow");
+  return response;
+}
+
 /** Different host, same path and query. */
 function redirectHost(
   request: NextRequest,
@@ -274,7 +297,10 @@ export function middleware(request: NextRequest): NextResponse {
   // serve `/` the way localhost does.
   if (pathname === "/") {
     if (host !== APP_HOST) return serve("marketing", pathname);
-    return redirectRoot(request, host, hasAuthCookie(request) ? "/explore" : "/signin");
+    // Signed in → SERVE Explore at `/` (a rewrite, no extra round trip).
+    // Signed out → a real redirect: `/signin` must own its URL, because the
+    // sign-in form, its `?reason=` notices and password managers all key on it.
+    return hasAuthCookie(request) ? rewriteRoot(request, "/explore") : redirectRoot(request, host, "/signin");
   }
 
   return serve(space, pathname);

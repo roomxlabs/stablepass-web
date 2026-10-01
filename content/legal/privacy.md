@@ -123,6 +123,19 @@ Stablepass retains personal information only as long as reasonably necessary for
 
 Information is securely deleted, destroyed or de-identified when no longer required. Account deletion requests remain subject to lawful retention requirements.
 
+<!-- LEGAL REVIEW REQUIRED (ENG-1337): proposed wording drafted by an agent, not approved. Do not ship without client/legal sign-off. -->
+
+When you change the email address you sign in with, Stablepass keeps a one-way, irreversible form of the previous email address with your account. If your account has used a free trial, or later uses one, that one-way form, together with the date the free trial was first used, is kept indefinitely, including after the account is deleted, so that a new account registered with the previous email address is not offered another free trial. If your account never uses a free trial, it is deleted together with your account.
+
+When an account is deleted, Stablepass keeps:
+
+- if the account used a free trial, a one-way, irreversible form of its email address and of any email address it previously signed in with, together with the date the free trial was first used, so that a new account registered with that email address is not offered another free trial
+- if the account had a phone number, a one-way, irreversible form of that phone number, so that a new account registered with that number does not have it stored against it
+
+Each is produced with a keyed one-way function, so the email address or phone number itself is not stored and cannot be read back from it. They are used only for the purposes above, are not used to contact anyone, and are not used for anything else. Because they can still be matched against an email address or phone number given at sign-up, Stablepass treats them as personal information.
+
+They are kept indefinitely. Payment card details are not used for this. The Delete Your Account page sets out everything else that is retained when an account is deleted.
+
 ## 11. Access and Correction
 
 You may request:

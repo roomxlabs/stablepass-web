@@ -329,16 +329,20 @@ describe("TrialStartForm", () => {
 
   // The `.trial-banner-web` block above the fields was dropped on client
   // instruction (17 Aug 2026), before the trial itself was retired (ENG-1003).
-  // Both reasons now hold, so this pins the class's absence permanently.
+  // ENG-1324 reinstated the trial, which retires the second reason but not the
+  // first, and adds a third: eligibility is per person (`trial_used_at`), so a
+  // banner promising every visitor 30 days would be false for a returner.
   it("does not render the trial banner", () => {
     const { container } = render(<TrialStartForm />);
 
     expect(container.querySelector(".trial-banner-web")).toBeNull();
   });
 
-  // ENG-1003 retired the trial from this screen entirely: no pitch, no
-  // duration, nothing left to advertise here — the price is quoted at
-  // /checkout, from Stripe.
+  // DO NOT DELETE THIS AS OBSOLETE. ENG-1324 brought the trial back, so the
+  // original reason (ENG-1003 retired it) no longer applies — but the assertion
+  // stands on its own: trial eligibility is per person (`trial_used_at`, W3), so
+  // this screen, which every signup passes through, must not promise a duration
+  // it cannot guarantee. The real figure is quoted at /checkout, from Stripe.
   it("carries no trial or '30 days' copy anywhere in the form", () => {
     const { container } = render(<TrialStartForm />);
 

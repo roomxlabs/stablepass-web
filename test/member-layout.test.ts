@@ -18,6 +18,16 @@ vi.mock("@/lib/supabase/server", () => ({
   })),
 }));
 
+// ENG-1593 — the layout calls react-dom's `preconnect()` for the Supabase
+// origin. It is a real export of the installed react-dom and is documented as
+// safe to call outside an actual request (a no-op hint), but this suite stubs
+// it anyway: it is otherwise the one call in this file that reaches outside
+// the mocked surface, and nothing here is testing that it fires.
+vi.mock("react-dom", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-dom")>();
+  return { ...actual, preconnect: vi.fn() };
+});
+
 import MemberLayout from "@/app/(member)/layout";
 
 describe("MemberLayout", () => {
@@ -27,19 +37,57 @@ describe("MemberLayout", () => {
   });
 });
 
+/**
+ * Finds the first element of the given `type` in a returned React element
+ * tree, walking `props.children` (arrays included) at every level. Used below
+ * to reach the `ExpiryBanner` element without hardcoding the shell's exact
+ * nesting (`div.app-shell > main > ExpiryBanner`), which is incidental to what
+ * this test actually pins.
+ */
+function findByType(
+  node: unknown,
+  type: unknown,
+): { props: Record<string, unknown> } | null {
+  if (node == null) return null;
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findByType(child, type);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof node !== "object" || !("type" in (node as Record<string, unknown>))) return null;
+  const el = node as { type: unknown; props?: { children?: unknown } };
+  if (el.type === type) return el as { props: Record<string, unknown> };
+  return findByType(el.props?.children, type);
+}
+
 // A separate describe block with its own signed-in-user mocks — a chainable
 // from() stub (mirrors the me-route.test.ts makeChain convention) so the
 // subscription `.select()` spy can be asserted on directly.
 describe("MemberLayout — subscription select", () => {
-  it("selects the SHARED ACCESS_COLUMNS on the subscription table", async () => {
+  // ENG-1593 — the layout now reads through `readSubscriptionState`, which
+  // selects the WIDER `SUBSCRIPTION_COLUMNS` (a superset of the old
+  // `ACCESS_COLUMNS`, carrying `stripe_customer_id` too) so the page under this
+  // layout can share the same `cache()`d read. `hasAccess()` and the sidebar
+  // chip still only ever see the ACCESS_COLUMNS subset of that row.
+  it("selects the SHARED SUBSCRIPTION_COLUMNS on `subscription`, exactly once, and never hands stripe_customer_id to ExpiryBanner", async () => {
     vi.resetModules();
 
-    const { ACCESS_COLUMNS } = await import("@/lib/api/access");
+    const { SUBSCRIPTION_COLUMNS } = await import("@/lib/api/access");
+    const { ExpiryBanner } = await import("@/app/(member)/expiry-banner");
 
     const selectMock = vi.fn();
     const eqMock = vi.fn();
     const maybeSingleMock = vi.fn(async () => ({
-      data: { status: "trial", trial_ends_at: null, current_period_end: null },
+      data: {
+        status: "trial",
+        trial_ends_at: null,
+        current_period_end: null,
+        // The one column ONLY this select is allowed to widen for — and the
+        // one value that must never reach the client island below.
+        stripe_customer_id: "cus_123",
+      },
     }));
     const chain = { select: selectMock, eq: eqMock, maybeSingle: maybeSingleMock };
     selectMock.mockImplementation(() => chain);
@@ -71,12 +119,30 @@ describe("MemberLayout — subscription select", () => {
 
     const { default: SignedInMemberLayout } = await import("@/app/(member)/layout");
 
-    await SignedInMemberLayout({ children: null });
+    const element = await SignedInMemberLayout({ children: null });
 
     expect(selectMock).toHaveBeenCalledWith(expect.stringContaining("status"));
     expect(selectMock).toHaveBeenCalledWith(expect.stringContaining("trial_ends_at"));
     expect(selectMock).toHaveBeenCalledWith(expect.stringContaining("current_period_end"));
-    expect(selectMock).toHaveBeenCalledWith(ACCESS_COLUMNS);
+    expect(selectMock).toHaveBeenCalledWith(SUBSCRIPTION_COLUMNS);
+
+    // Exactly ONE read of `subscription` for the whole render — the profile
+    // and subscription reads run together (Promise.all), and the page under
+    // this layout reuses this same `cache()`d answer rather than re-querying.
+    const subscriptionCalls = fromMock.mock.calls.filter((c) => c[0] === "subscription");
+    expect(subscriptionCalls).toHaveLength(1);
+
+    // The narrowed row, not the raw one: `stripe_customer_id` must never reach
+    // this client island (.rx/guardrails.md #1) even though the SELECT above
+    // fetched it.
+    const banner = findByType(element, ExpiryBanner);
+    expect(banner).not.toBeNull();
+    expect(banner!.props.subscription).toEqual({
+      status: "trial",
+      trial_ends_at: null,
+      current_period_end: null,
+    });
+    expect(Object.keys(banner!.props.subscription as object)).not.toContain("stripe_customer_id");
 
     vi.doUnmock("next/navigation");
     vi.doUnmock("@/lib/supabase/server");

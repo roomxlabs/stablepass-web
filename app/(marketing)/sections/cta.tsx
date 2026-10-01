@@ -25,12 +25,12 @@ export default function CtaBand({ joined, reason }: { joined?: string | null; re
           <p>
             Join stablepass. and follow the stories, stables, horses, and race day moments that make racing exciting.
           </p>
-          <p className="cta-trial-line launch-only">Join stablepass. $9/month for your first 6 months, then $19/month.</p>
+          <p className="cta-trial-line launch-only">Join stablepass. 30 days free, then A$9.99 per month.</p>
           <div className="cta-waitlist wl-mount">
             <WaitlistForm initialJoined={joined} initialReason={reason} />
           </div>
           <a className="btn btn-cream cta-trial" href="/start">
-            Get the $9/month offer
+            Start your 30 days free
           </a>
           <a className="btn btn-cream cta-join" href="/start">
             Join stablepass.

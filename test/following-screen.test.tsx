@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import { installIntersectionObserver, intersect, liveObservers } from "./support/intersection-observer";
 import userEvent from "@testing-library/user-event";
 import { FollowingScreen } from "@/app/(member)/following/following-screen";
+import { resetSpy } from "./support/playback-reset-spy";
+
+// The real player hook, with `reset()` observable (ENG-1633 S3).
+vi.mock("@/lib/feed/use-feed-playback", async (importOriginal) =>
+  (await import("./support/playback-reset-spy")).withResetSpy(await importOriginal()),
+);
 import { WALL_COPY } from "@/components/access-wall";
 
 const VIEWER_ID = "8f3c1a2b-1234-4abc-9def-0123456789ab";
@@ -521,5 +528,76 @@ describe("FollowingScreen — ENG-1270 a rejected identity read never paints", (
     expect(await screen.findByText(/couldn.t load the feed/i)).toBeInTheDocument();
     expect(screen.queryByText("Unknown horse")).not.toBeInTheDocument();
     expect(document.querySelector("article.post-web")).toBeNull();
+  });
+});
+
+describe("FollowingScreen — ENG-1633 next page at <= 5 cards left", () => {
+  it("requests page 2 ONCE, with the server's cursor, when the 5th-from-last card appears", async () => {
+    const posts = Array.from({ length: 8 }, (_, i) => ({ ...FEED_POSTS[0], id: `fp${i + 1}` }));
+    const base = fetchImpl();
+    const fetchMock = vi.fn((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/feed/following") && !url.includes("cursor=")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: posts, meta: { nextCursor: "c1", hasMore: true } }) });
+      }
+      if (url.startsWith("/api/feed/following")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [], meta: { nextCursor: null, hasMore: false } }) });
+      }
+      if (url === "/api/posts/media") {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: { items: [], expiresAt: "x" } }) });
+      }
+      return base(input, init);
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const restoreIO = installIntersectionObserver();
+    try {
+      render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+      await waitFor(() => expect(document.querySelectorAll("article.post-web")).toHaveLength(8));
+      await waitFor(() => expect(liveObservers().length).toBeGreaterThan(0));
+
+      const articles = Array.from(document.querySelectorAll("article.post-web"));
+      expect(intersect(articles[3])).toBeGreaterThan(0);
+      const pageTwo = () => fetchMock.mock.calls.filter((c) => String(c[0]).includes("cursor=c1"));
+      await waitFor(() => expect(pageTwo()).toHaveLength(1));
+      expect(String(pageTwo()[0][0])).toMatch(/^\/api\/feed\/following\?.*cursor=c1/);
+
+      intersect(articles[3]);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(pageTwo()).toHaveLength(1);
+    } finally {
+      restoreIO();
+    }
+  });
+
+  it("S3: page 2 answering 402 draws the wall AND resets playback", async () => {
+    const posts = Array.from({ length: 8 }, (_, i) => ({ ...FEED_POSTS[0], id: `fg${i + 1}` }));
+    const base = fetchImpl();
+    const fetchMock = vi.fn((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/feed/following") && !url.includes("cursor=")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: posts, meta: { nextCursor: "c1", hasMore: true } }) });
+      }
+      if (url.startsWith("/api/feed/following")) {
+        return Promise.resolve({ ok: false, status: 402, json: async () => ({ error: { code: "subscription_required" } }) });
+      }
+      if (url === "/api/posts/media") {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: { items: [], expiresAt: "x" } }) });
+      }
+      return base(input, init);
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const restoreIO = installIntersectionObserver();
+    try {
+      render(<FollowingScreen viewerId={VIEWER_ID} everSubscribed={false} />);
+      await waitFor(() => expect(document.querySelectorAll("article.post-web")).toHaveLength(8));
+      await waitFor(() => expect(liveObservers().length).toBeGreaterThan(0));
+      const before = resetSpy.mock.calls.length;
+
+      intersect(document.querySelectorAll("article.post-web")[3]);
+      expect(await screen.findByText(WALL_COPY.neverSubscribed.title)).toBeInTheDocument();
+      expect(resetSpy.mock.calls.length).toBeGreaterThan(before);
+    } finally {
+      restoreIO();
+    }
   });
 });

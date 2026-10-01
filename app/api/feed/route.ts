@@ -1,16 +1,26 @@
 import { supabaseServer } from "@/lib/supabase/server";
 import { ok, UNAUTH, GATED, fail } from "@/lib/api/envelope";
-import { hasAccess, ACCESS_COLUMNS } from "@/lib/api/access";
 import { edgeFetch } from "@/lib/api/edge";
 
 // GET /api/feed?cursor=&limit= — ranked (like-weight + recency + unseen-first).
 // RLS returns only published + gated rows; ranking + impressions via be `feed` fn.
+//
+// THE GATE IS THE EDGE FUNCTION (ENG-1593). This route used to read the
+// member's `subscription` row and run `hasAccess()` before forwarding — a
+// second copy of a check the be `feed` function makes anyway, as its FIRST
+// step, against the same row under the member's own RLS, and answers with 402.
+// That copy cost a database round trip on every page. It is gone; the edge
+// 402 below is what a lapsed member gets, and the relay is pinned by
+// test/feed-route.test.ts.
+//
+// `getUser()` STAYS, deliberately (not `getClaims()`): it is the verified
+// session check that turns a revoked single-device session into the 401 that
+// `apiFetch` signs the tab out on (ENG-961). A local JWT check would keep an
+// evicted tab reading the feed until its token expired.
 export async function GET(req: Request) {
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return UNAUTH();
-  const { data: sub } = await sb.from("subscription").select(ACCESS_COLUMNS).eq("user_id", user.id).single();
-  if (!hasAccess(sub)) return GATED();
   const url = new URL(req.url);
   const cursor = url.searchParams.get("cursor");
   const limit = Math.min(Number(url.searchParams.get("limit") ?? 20), 50);

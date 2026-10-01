@@ -9,10 +9,14 @@
 // Deviations from that mockup, so do not reinstate either as a fidelity fix:
 //   - the `.trial-banner-web` block above the fields is gone. It was dropped on
 //     client instruction (17 Aug 2026) because the h1 and sub-heading already
-//     said it; ENG-1003 makes it doubly wrong, because what it said was the
-//     free-trial offer. Nothing replaces it here: the figure the member is
-//     actually charged is quoted at /checkout, formatted from Stripe's
-//     `unitAmount`, and this screen must not hardcode a second one.
+//     said it. ENG-1324 reinstates a 30-day trial (ENG-1321), so the banner's
+//     claim is no longer false — but it still does not come back, for the
+//     reason that outlives the offer: eligibility is per person, decided from
+//     `trial_used_at`, and a returning member who has already used their trial
+//     pays immediately. A banner here would promise the whole funnel something
+//     only some of it gets. The figure the member is actually charged is quoted
+//     at /checkout, formatted from Stripe's `unitAmount`, and this screen must
+//     not hardcode a second one.
 //   - the phone field formats to '+61 400 000 000' as you type and is validated
 //     as a real AU number, where the mockup had a plain free-text field.
 //
@@ -224,8 +228,9 @@ export function TrialStartForm() {
       return;
     }
     const body = await res.json().catch(() => null);
-    // No wall and no navigation on failure any more (ENG-1003). The trial is
-    // retired, so a duplicate email is no longer a dead end — it is a plain
+    // No wall and no navigation on failure any more (ENG-1003). There is no
+    // per-phone trial gate on this screen, so a duplicate email is not a dead
+    // end — it is a plain
     // "you already have an account, sign in" that belongs inline next to the
     // field the member can fix, with the "Already a member? Sign in" link
     // already at the foot of this form. The route's 409 `account_exists`

@@ -1,8 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { installIntersectionObserver, intersect, liveObservers } from "./support/intersection-observer";
 import { ExploreFeed } from "@/app/(member)/explore/explore-feed";
+import { resetSpy } from "./support/playback-reset-spy";
+
+// The real player hook, with `reset()` observable (ENG-1633 S3).
+vi.mock("@/lib/feed/use-feed-playback", async (importOriginal) =>
+  (await import("./support/playback-reset-spy")).withResetSpy(await importOriginal()),
+);
 import { WALL_COPY } from "@/components/access-wall";
+import type { FeedPost } from "@/components/types";
+import type { ExploreInitialPage } from "@/lib/feed/explore-page";
 // The real bucket constant, not a retyped string: ENG-1063's guard asserts
 // `storage.from` was called with it (and, in the lapsed case, not at all), and
 // a stale literal here would quietly weaken both.
@@ -152,20 +161,18 @@ describe("ExploreFeed", () => {
     expect(screen.getByText("Winx")).toBeInTheDocument();
   });
 
-  it("records impressions for the fetched page via POST /api/feed/seen", async () => {
+  // ENG-1593 — the be `feed` fn now records the impressions for every unseen
+  // row it serves, so the second client-side write here was a guaranteed
+  // duplicate (a plain INSERT failing on 23505 for the whole batch). Positive
+  // anchor first: the page really did render, so the absence below is real.
+  it("never calls POST /api/feed/seen any more (the be feed fn records impressions itself)", async () => {
     const fetchMock = fetchImpl(200);
     global.fetch = fetchMock as unknown as typeof fetch;
 
     render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
     await screen.findByText("Mahogany");
 
-    await waitFor(() => {
-      const call = fetchMock.mock.calls.find((c) => String(c[0]) === "/api/feed/seen");
-      expect(call).toBeTruthy();
-      const init = call?.[1];
-      expect(init?.method).toBe("POST");
-      expect(JSON.parse(String(init?.body))).toEqual({ postIds: ["p1", "p2"] });
-    });
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).startsWith("/api/feed/seen"))).toBe(false);
   });
 
   it("shows the no-pass-yet wall (no posts) when the feed is gated (402) and the member never subscribed", async () => {
@@ -1121,5 +1128,269 @@ describe("ExploreFeed — ENG-1270 subject-aware identity", () => {
     expect(screen.queryByText("Unknown horse")).not.toBeInTheDocument();
     expect(document.querySelector("article.post-web")).toBeNull();
     expect(document.querySelector(".post-panel")).toBeNull();
+  });
+});
+
+// ===========================================================================
+// ENG-1593 — page 1 arrives SERVER-RENDERED. `initialPage` seeds the island's
+// state directly and SKIPS the mount fetch of /api/feed; `null`/absent keeps
+// the old client-fetch behaviour. Also covers the per-card load priority
+// (MediaLoadPriority) and the parallel identity/media reads.
+// ===========================================================================
+describe("ExploreFeed — ENG-1593 server-rendered initialPage", () => {
+  beforeEach(() => {
+    fromMock.mockReset();
+    fromMock.mockImplementation((table: string) => {
+      if (table === "horse") return chainable({ data: HORSES, error: null });
+      return chainable({ data: [], error: null });
+    });
+  });
+
+  const SEEDED_POST_1: FeedPost = {
+    id: "sp1",
+    horseId: "h1",
+    horseName: "Server Horse One",
+    trainerName: "Chris Waller",
+    postedAgo: "2h ago",
+    label: null,
+    body: "First server-rendered post.",
+    media: { type: "photo", posterUrl: "https://sb.local/p1?token=abc" },
+    watermarked: false,
+    count: 3,
+    reacted: null,
+    bookmarked: false,
+  };
+  const SEEDED_POST_2: FeedPost = {
+    ...SEEDED_POST_1,
+    id: "sp2",
+    horseId: "h2",
+    horseName: "Server Horse Two",
+    body: "Second server-rendered post.",
+    media: { type: "photo", posterUrl: "https://sb.local/p2?token=abc" },
+  };
+
+  it("an 'ok' initialPage renders its posts and never fetches /api/feed on mount", async () => {
+    const fetchMock = vi.fn((_input: string | URL) =>
+      Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) }),
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const initialPage: ExploreInitialPage = {
+      kind: "ok",
+      posts: [SEEDED_POST_1, SEEDED_POST_2],
+      nextCursor: null,
+      hasMore: false,
+    };
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} initialPage={initialPage} />);
+
+    expect(await screen.findByText("Server Horse One")).toBeInTheDocument();
+    expect(screen.getByText("Server Horse Two")).toBeInTheDocument();
+
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).startsWith("/api/feed"))).toBe(false);
+  });
+
+  it("infinite scroll continues from the SERVER's cursor", async () => {
+    const fetchMock = vi.fn((_input: string | URL) =>
+      Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [], meta: { nextCursor: null, hasMore: false } }) }),
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+    // Two observers now watch the feed (paging + card visibility); the mock keeps
+    // every one, and the sentinel is fired through whichever observes it.
+    const restoreIO = installIntersectionObserver();
+    try {
+      const initialPage: ExploreInitialPage = { kind: "ok", posts: [SEEDED_POST_1], nextCursor: "c1", hasMore: true };
+      render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} initialPage={initialPage} />);
+      expect(await screen.findByText("Server Horse One")).toBeInTheDocument();
+      await waitFor(() => expect(liveObservers().length).toBeGreaterThan(0));
+      const sentinel = document.querySelector(".post-web")!.parentElement!.lastElementChild!;
+      expect(intersect(sentinel)).toBeGreaterThan(0);
+      await waitFor(() =>
+        expect(fetchMock.mock.calls.map((c) => String(c[0]))).toContain("/api/feed?limit=10&cursor=c1"),
+      );
+      // Page 1 was never re-fetched.
+      expect(fetchMock.mock.calls.some((c) => String(c[0]) === "/api/feed?limit=10")).toBe(false);
+    } finally {
+      restoreIO();
+    }
+  });
+
+  it("ENG-1633: page 2 is requested ONCE when the 5th-from-last card comes into view (not again)", async () => {
+    const fetchMock = vi.fn((_input: string | URL) =>
+      Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [], meta: { nextCursor: null, hasMore: false } }) }),
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const restoreIO = installIntersectionObserver();
+    try {
+      const seeded = Array.from({ length: 8 }, (_, i) => ({ ...SEEDED_POST_1, id: `sp${i + 1}`, horseName: `Seed ${i + 1}` }));
+      const initialPage: ExploreInitialPage = { kind: "ok", posts: seeded, nextCursor: "c1", hasMore: true };
+      render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} initialPage={initialPage} />);
+      expect(await screen.findByText("Seed 1")).toBeInTheDocument();
+      await waitFor(() => expect(liveObservers().length).toBeGreaterThan(0));
+
+      const articles = Array.from(document.querySelectorAll("article.post-web"));
+      expect(articles).toHaveLength(8);
+      // 8 posts -> the trigger is index 3 (5th from last).
+      expect(intersect(articles[3])).toBeGreaterThan(0);
+      const pageTwo = () => fetchMock.mock.calls.filter((c) => String(c[0]) === "/api/feed?limit=10&cursor=c1");
+      await waitFor(() => expect(pageTwo()).toHaveLength(1));
+
+      intersect(articles[3]);
+      intersect(document.querySelector("article.post-web")!.parentElement!.lastElementChild!);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(pageTwo()).toHaveLength(1);
+    } finally {
+      restoreIO();
+    }
+  });
+
+  it("a 'gated' initialPage renders the AccessWall and makes no /api/feed or /api/posts/media request", async () => {
+    const fetchMock = vi.fn((_input: string | URL) =>
+      Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) }),
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const initialPage: ExploreInitialPage = { kind: "gated" };
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} initialPage={initialPage} />);
+
+    expect(await screen.findByText(WALL_COPY.neverSubscribed.title)).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(
+        (c) => String(c[0]).startsWith("/api/feed") || String(c[0]).startsWith("/api/posts/media"),
+      ),
+    ).toBe(false);
+  });
+
+  it("ENG-1633 S3: page 2 answering 402 draws the wall AND resets playback (held urls dropped now)", async () => {
+    const fetchMock = vi.fn((input: string | URL) => {
+      if (String(input) === "/api/feed?limit=10&cursor=c1") {
+        return Promise.resolve({ ok: false, status: 402, json: async () => ({ error: { code: "subscription_required" } }) });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const restoreIO = installIntersectionObserver();
+    try {
+      const seeded = Array.from({ length: 8 }, (_, i) => ({ ...SEEDED_POST_1, id: `sg${i + 1}`, horseName: `Gate ${i + 1}` }));
+      render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} initialPage={{ kind: "ok", posts: seeded, nextCursor: "c1", hasMore: true }} />);
+      expect(await screen.findByText("Gate 1")).toBeInTheDocument();
+      await waitFor(() => expect(liveObservers().length).toBeGreaterThan(0));
+      const before = resetSpy.mock.calls.length;
+
+      intersect(document.querySelectorAll("article.post-web")[3]);
+      expect(await screen.findByText(WALL_COPY.neverSubscribed.title)).toBeInTheDocument();
+      expect(resetSpy.mock.calls.length).toBeGreaterThan(before);
+    } finally {
+      restoreIO();
+    }
+  });
+
+  it("ENG-1633 guardrail 3: a 'gated' initialPage makes NO /api/posts/*/playback request and draws no poster media", async () => {
+    const fetchMock = vi.fn((_input: string | URL) =>
+      Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) }),
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} initialPage={{ kind: "gated" }} />);
+
+    expect(await screen.findByText(WALL_COPY.neverSubscribed.title)).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetchMock.mock.calls.some((c) => /\/api\/posts\/[^/]+\/playback/.test(String(c[0])))).toBe(false);
+    expect(document.querySelector("video")).toBeNull();
+    expect(document.querySelector("img")).toBeNull();
+  });
+
+  it("the FIRST card loads eager/high-priority, every card after it stays lazy with no fetchpriority", async () => {
+    global.fetch = vi.fn(() =>
+      Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) }),
+    ) as unknown as typeof fetch;
+
+    const initialPage: ExploreInitialPage = {
+      kind: "ok",
+      posts: [SEEDED_POST_1, SEEDED_POST_2],
+      nextCursor: null,
+      hasMore: false,
+    };
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} initialPage={initialPage} />);
+    await screen.findByText("Server Horse One");
+
+    const imgs = document.querySelectorAll(".post-web img");
+    expect(imgs).toHaveLength(2);
+    expect(imgs[0]).toHaveAttribute("loading", "eager");
+    expect(imgs[0]).toHaveAttribute("fetchpriority", "high");
+    expect(imgs[1]).toHaveAttribute("loading", "lazy");
+    expect(imgs[1]).not.toHaveAttribute("fetchpriority");
+  });
+
+  // ENG-1593 — identity (the horse read), reactions, bookmarks and the media
+  // mint all start TOGETHER on the client-fetch path too. Holding the horse
+  // read open and asserting the mint fetch already fired is the only way to
+  // catch a regression back to the old serial "identity, THEN media" order.
+  it("mints the page's media WITHOUT waiting for the horse identity read to resolve (client-fetch path)", async () => {
+    let releaseHorses: (rows: unknown[]) => void = () => {};
+    const horseGate = new Promise<unknown[]>((resolve) => {
+      releaseHorses = resolve;
+    });
+
+    fromMock.mockImplementation((table: string) => {
+      if (table === "horse") {
+        const obj: Record<string, unknown> = {};
+        for (const m of ["select", "eq", "in", "not", "order"]) obj[m] = vi.fn(() => obj);
+        obj.then = (onF: (v: unknown) => unknown, onR?: (e: unknown) => unknown) =>
+          horseGate.then((rows) => ({ data: rows, error: null })).then(onF, onR);
+        return obj;
+      }
+      return chainable({ data: [], error: null });
+    });
+
+    const photoPosts = [
+      { ...POSTS[0], media_url: "media/p1.jpg", poster_url: null },
+      { ...POSTS[1], media_url: "media/p2.jpg", poster_url: null },
+    ];
+    const fetchMock = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/feed/seen")) {
+        return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
+      }
+      if (url === "/api/posts/media") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              items: [
+                { postId: "p1", mediaUrl: "https://sb.local/p1?token=abc" },
+                { postId: "p2", mediaUrl: "https://sb.local/p2?token=abc" },
+              ],
+              expiresAt: "2026-08-01T00:00:00.000Z",
+            },
+          }),
+        });
+      }
+      if (url.startsWith("/api/feed")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ data: photoPosts, meta: { nextCursor: null, hasMore: false } }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<ExploreFeed viewerId={VIEWER_ID} everSubscribed={false} />);
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some((c) => String(c[0]) === "/api/posts/media")).toBe(true);
+    });
+    // The horse read is STILL outstanding when the mint above already fired.
+    expect(screen.queryByText("Mahogany")).not.toBeInTheDocument();
+
+    releaseHorses(HORSES);
+
+    expect(await screen.findByText("Mahogany")).toBeInTheDocument();
+    expect(screen.getByText("Winx")).toBeInTheDocument();
   });
 });

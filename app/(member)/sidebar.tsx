@@ -129,7 +129,10 @@ export function Sidebar({ user }: { user: SidebarUser }) {
   const pathname = usePathname();
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
+  // `/` IS Explore on the app host: middleware REWRITES it there for a signed-in
+  // member (ENG-1593), so the address bar keeps `/` while Explore renders.
+  const current = pathname === "/" ? "/explore" : pathname;
+  const isActive = (href: string) => current === href || current.startsWith(href + "/");
   const unreadCount = useUnreadCount(pathname);
   const unreadBadge = formatUnreadBadge(unreadCount);
 

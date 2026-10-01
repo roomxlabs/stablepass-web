@@ -11,7 +11,8 @@ import { useRouter } from "next/navigation";
 import { ACCESS_COLUMNS, hasAccess, type AccessRow } from "@/lib/api/access";
 import { AccessWall } from "@/components/access-wall";
 import { HlsVideo } from "@/components/hls-video";
-import { useFeedVideoFailure } from "@/lib/feed/use-feed-video-failure";
+import { useFeedPlayback } from "@/lib/feed/use-feed-playback";
+import { useFeedPrefetch } from "@/lib/feed/use-feed-prefetch";
 import { PostCard, mediaBoxProps } from "@/components/post-card";
 import { PostHead } from "@/components/post-head";
 import { ReactionBar } from "@/components/reaction-bar";
@@ -104,12 +105,11 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [gated, setGated] = useState(false);
-  const [playing, setPlaying] = useState<Record<string, string>>({});
-  const [playError, setPlayError] = useState<Record<string, boolean>>({});
-  // The ONE fatal-transport handler, shared by all five feeds (ENG-1063).
-  // It was copy-pasted verbatim into each of them; see the hook for why that
-  // mattered even though nothing was wrong with the behaviour.
-  const onFatalVideo = useFeedVideoFailure(setPlaying, setPlayError);
+  // The ONE player state, shared by all five feeds (ENG-1599, grown from
+  // ENG-1063's failure hook): one playing `postId:videoIndex` feed-wide, the
+  // pill map, and the mint. See the hook for why a copy per feed was the bug.
+  const playback = useFeedPlayback();
+  const resetPlayback = playback.reset;
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const loadingRef = useRef(false);
@@ -177,13 +177,18 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
   const fetchPage = useCallback(async (forCursor: string | null) => {
     if (loadingRef.current) return;
     loadingRef.current = true;
+    // Gated on ANY page (a mid-session lapse on page N+1 included): the wall,
+    // and every held playback url dropped NOW, not at its next timer (ENG-1633).
+    const goGated = () => {
+      resetPlayback();
+      setGated(true);
+    };
     setLoading(true);
     setError(false);
     if (!forCursor) {
       setPosts([]);
       setGated(false);
-      setPlaying({});
-      setPlayError({});
+      resetPlayback();
     }
     try {
       const params = new URLSearchParams({ limit: String(LIMIT) });
@@ -191,7 +196,7 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
 
       const res = await apiFetch(`/api/feed/following?${params}`);
       if (res.status === 402) {
-        setGated(true);
+        goGated();
         return;
       }
       if (!res.ok) {
@@ -250,7 +255,7 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
         media = await resolvePostDisplayUrls(rows);
       } catch (e) {
         if (e instanceof PostMediaError && e.reason === "gated") {
-          setGated(true);
+          goGated();
           return;
         }
         media = { urls: new Map(), slideCounts: new Map() };
@@ -276,25 +281,24 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
       loadingRef.current = false;
       setLoading(false);
     }
-  }, []);
+  }, [resetPlayback]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial data fetch, not derived state
     fetchPage(null);
   }, [fetchPage]);
 
-  // Infinite scroll.
-  useEffect(() => {
-    if (typeof IntersectionObserver === "undefined") return;
-    if (!hasMore || loading || gated || error) return;
-    const el = sentinelRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver((entries) => {
-      if (entries[0]?.isIntersecting) fetchPage(cursor);
-    }, { rootMargin: "200px" });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [hasMore, loading, gated, error, cursor, fetchPage]);
+  // Infinite scroll, EARLY (ENG-1633): page N+1 starts with <= 5 cards left
+  // below the viewport (the sentinel is the fallback), one request per page;
+  // the same observer pass pre-mints playback for the card on screen + the next.
+  useFeedPrefetch({
+    sentinelRef,
+    posts,
+    playback,
+    canLoadMore: hasMore && !loading && !gated && !error,
+    cursor,
+    loadMore: () => void fetchPage(cursor),
+  });
 
   async function react(postId: string, emoji: ReactionEmoji) {
     const target = posts.find((p) => p.id === postId);
@@ -342,20 +346,6 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
     return false;
   }
 
-  async function play(postId: string) {
-    setPlayError((prev) => ({ ...prev, [postId]: false }));
-    try {
-      const res = await apiFetch(`/api/posts/${postId}/playback`);
-      if (res.status !== 200) { setPlayError((prev) => ({ ...prev, [postId]: true })); return; }
-      const body = await res.json().catch(() => null);
-      const url = body?.data?.playbackUrl as string | undefined;
-      if (!url) { setPlayError((prev) => ({ ...prev, [postId]: true })); return; }
-      setPlaying((prev) => ({ ...prev, [postId]: url }));
-    } catch {
-      setPlayError((prev) => ({ ...prev, [postId]: true }));
-    }
-  }
-
   const noFollows = followsLoaded && horses.length === 0 && trainers.length === 0;
   const showEmptyFeed = !gated && !error && !loading && posts.length === 0 && !noFollows;
   const showSkeleton = !gated && !error && loading && posts.length === 0;
@@ -400,7 +390,7 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
             {posts.length > 0 && (
               <>
                 {posts.map((p) => {
-                  const playbackUrl = playing[p.id];
+                  const playbackUrl = playback.inlineUrl(p);
                   if (playbackUrl) {
                     return (
                       <article className="post-web" key={p.id}>
@@ -419,7 +409,7 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
                             // Deliberately NO `autoPlay`: HlsVideo issues its own explicit play()
                             // once the transport is ready (ENG-1056), which is what Safari honours
                             // on a freshly-mounted, click-initiated element.
-                            onFatalError={() => onFatalVideo(p.id)}
+                            onFatalError={() => playback.onFatal(p.id)}
                           />
                         </div>
                         <ReactionBar count={p.count} reacted={p.reacted} bookmarked={p.bookmarked} onReact={(e) => react(p.id, e)} onBookmark={() => bookmark(p.id)} />
@@ -438,8 +428,8 @@ export function FollowingScreen({ viewerId, everSubscribed }: { viewerId: string
                           is deliberately not passed: there is nothing to
                           follow from, so this screen holds no follow-write
                           path at all. */}
-                      <PostCard post={p} viewerId={viewerId} onReact={(e) => react(p.id, e)} onBookmark={() => bookmark(p.id)} onPlay={() => play(p.id)} canFollow={canFollowTrainer()} />
-                      {playError[p.id] && (
+                      <PostCard post={p} viewerId={viewerId} onReact={(e) => react(p.id, e)} onBookmark={() => bookmark(p.id)} onPlay={() => void playback.play(p.id)} playback={playback} canFollow={canFollowTrainer()} />
+                      {playback.failed(p.id) && (
                         <p role="alert" style={{ color: "var(--red)", marginTop: -16, marginBottom: 24, fontSize: 13.5 }}>Couldn&rsquo;t load the video.</p>
                       )}
                     </Fragment>

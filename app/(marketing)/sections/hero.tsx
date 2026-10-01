@@ -37,14 +37,15 @@ export default function Hero({ joined, reason }: { joined?: string | null; reaso
                 <i />
                 RACING EXPERIENCE SUBSCRIPTION
               </span>
-              {/* Hidden pre-launch with the rest of the pricing: the badge
-                  advertises the launch offer, and waitlist mode does not sell a
-                  price. Marked `launch-only` rather than deleted — the copy
-                  freeze requires every hide in this mode to be CSS-only, so the
-                  text stays in the DOM and the launch switch-back needs no
-                  markup back. */}
+              {/* Hidden pre-launch with the rest of the pricing: the badge sells a
+                  price, and waitlist mode does not. Marked `launch-only` rather
+                  than deleted — the copy freeze requires every hide in this mode
+                  to be CSS-only, so the text stays in the DOM and the launch
+                  switch-back needs no markup back. `launch-only` means "only once
+                  we are live", not "the launch offer"; the offer itself is retired
+                  (ENG-1324), the mode is not. */}
               <span className="chip-sep launch-only">·</span>
-              <b className="launch-only">LAUNCH OFFER · $9/MONTH FOR YOUR FIRST 6 MONTHS</b>
+              <b className="launch-only">30 DAYS FREE · THEN A$9.99/MONTH</b>
             </span>
             {/* Justin, 1 Sep: "Experience needs to be on the second line", then
                 "made simple needs to be a new line" — so all three breaks are
@@ -64,17 +65,15 @@ export default function Hero({ joined, reason }: { joined?: string | null; reaso
               place.
             </p>
             {/*
-              Justin's wording, 1 Sep 2026: the standing price leads, and the
-              introductory price sits PROMINENTLY under it as a "Launch Offer"
-              rather than replacing it — so the $19 is what a subscriber reads
-              as the real price and the $9 is plainly temporary.
+              ENG-1324 (Pricing v2): the two-price structure Justin set on 1 Sep
+              2026 — a standing price with a temporary launch price under it — is
+              retired along with the offer itself. The shape of the block is kept
+              because the layout is not this ticket's to change: the trial now
+              leads in the slot the offer had, and the one standing price follows.
             */}
-            {/* Justin, 1 Sep: "Maybe take out the first $19 per month line" — it
-                repeated the "$19/month thereafter" line two rows below, so the
-                launch price now leads and the standing price follows it once. */}
-            <p className="hero-launch cta-trial">Launch Offer — $9/month for your first 6 months.</p>
+            <p className="hero-launch cta-trial">Start with 30 days free.</p>
             <p className="hero-price hero-price-sub cta-trial">
-              $19/month thereafter. Cancel anytime. No lock-in contract.
+              Then A$9.99 per month. Cancel anytime. No lock-in contract.
               <br />
               Follow the journey. Feel part of the action.
             </p>
@@ -90,7 +89,7 @@ export default function Hero({ joined, reason }: { joined?: string | null; reaso
             </div>
             <div className="hero-actions">
               <a className="btn btn-green cta-trial" href="/start">
-                Get the $9/month offer
+                Start your 30 days free
               </a>
               <a className="btn btn-green cta-join" href="/start">
                 Join stablepass.
@@ -104,7 +103,7 @@ export default function Hero({ joined, reason }: { joined?: string | null; reaso
               </a>
             </div>
             <p className="hero-fine cta-trial">
-              $9/month for your first 6 months when you sign up on or before 30 November 2026.
+              The same A$9.99 per month on the website, the App Store and Google Play.
             </p>
           </div>
           <div className="hero-vis">

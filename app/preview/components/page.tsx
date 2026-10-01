@@ -400,6 +400,18 @@ const FIXTURE_SLIDES: Record<string, (index: number) => string | null> = {
     slide(i % 2 ? "#F1ECE3" : "#1A1A1A", i % 2 ? "#1A1A1A" : "#FAF7F2", i + 1),
 };
 
+/**
+ * ENG-1599 — the VIDEO carousel's per-slide posters, stubbed the same way.
+ * `playback?posterOnly=1&videoIndex=i` answers the be's shape for the fixture
+ * ids only; `null` from the resolver is a 404 (nothing playable at that index),
+ * which the carousel answers by hiding the slide. Play is a no-op here — this
+ * gallery has no feed player and never mints a stream.
+ */
+const VIDEO_FIXTURE_POSTERS: Record<string, (index: number) => string | null> = {
+  "post-video-carousel": (i) => CAROUSEL_SLIDES[i] ?? null,
+  "post-video-carousel-gap": (i) => (i === 1 ? null : CAROUSEL_SLIDES[i] ?? null),
+};
+
 // The `NODE_ENV` guard is belt-and-braces: this module is only evaluated on
 // `/preview/components`, which is unlinked and a dev aid. It is here because the
 // patch is never removed once installed, so it would survive a client-side
@@ -413,6 +425,20 @@ if (
   const realFetch = window.fetch.bind(window);
   window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const poster = /^\/api\/posts\/([^/]+)\/playback\?posterOnly=1&videoIndex=(\d)$/.exec(url);
+    const resolvePoster = poster ? VIDEO_FIXTURE_POSTERS[decodeURIComponent(poster[1])] : undefined;
+    if (poster && resolvePoster) {
+      const posterUrl = resolvePoster(Number(poster[2]));
+      return posterUrl
+        ? new Response(
+            JSON.stringify({ data: { posterUrl, expiresAt: new Date(Date.now() + 300_000).toISOString() } }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          )
+        : new Response(JSON.stringify({ error: { code: "not_found" } }), {
+            status: 404,
+            headers: { "content-type": "application/json" },
+          });
+    }
     if (url === "/api/posts/media" && init?.body) {
       const body = JSON.parse(String(init.body)) as { postId?: string; slideIndex?: number };
       const resolve = body.postId ? FIXTURE_SLIDES[body.postId] : undefined;
@@ -433,6 +459,25 @@ if (
     return realFetch(input, init);
   }) as typeof window.fetch;
 }
+
+// ENG-1599 — a three-video post: dots, the counted chip with a play glyph, a play
+// button per slide, and prev/next arrows on hover.
+const VIDEO_CAROUSEL_POST: FeedPost = {
+  ...VIDEO_POST,
+  id: "post-video-carousel",
+  raceBadge: null,
+  body: "Three angles from this morning's gallop — swipe or use the arrows.",
+  media: { type: "video", posterUrl: CAROUSEL_SLIDES[0], duration: null },
+  videoCount: 3,
+};
+
+// The middle video answers 404 (still encoding after an admin edit): the slide is
+// hidden and the dots recompute to two once the carousel reaches it.
+const VIDEO_CAROUSEL_GAP_POST: FeedPost = {
+  ...VIDEO_CAROUSEL_POST,
+  id: "post-video-carousel-gap",
+  body: "The middle video is still processing — it drops out of the carousel.",
+};
 
 const CAROUSEL_POST: FeedPost = {
   ...PHOTO_POST,
@@ -522,6 +567,18 @@ export default function ComponentPreviewPage() {
         <PostCard post={SINGLE_PHOTO_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
         <PostCard post={DEGRADED_CAROUSEL_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
         <PostCard post={TEN_PHOTO_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
+      </div>
+
+      <h2 id="video-carousel">Multi-video carousel (ENG-1599)</h2>
+      <p style={{ color: "var(--muted)", marginBottom: 16 }}>
+        A video post with a <code>videoCount</code> above one pages exactly like the photo carousel:
+        the same dots, the same counted chip (with a play glyph), a play button per slide, and
+        prev/next arrows when the media is hovered. Posters arrive for the visible slide and one
+        ahead. A single-video post is unchanged.
+      </p>
+      <div style={{ maxWidth: 520, marginBottom: 40 }} data-testid="video-carousel-gallery">
+        <PostCard post={VIDEO_CAROUSEL_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
+        <PostCard post={VIDEO_CAROUSEL_GAP_POST} viewerId={VIEWER_ID} onReact={noop} onBookmark={noop} onPlay={noop} />
       </div>
 
       <h2 id="round8">Round 8 — head restack, boxy avatars, 8-line panel clamp (ENG-958)</h2>

@@ -2621,3 +2621,214 @@ a transport blip. `enrichFeedSubjects` therefore returns `{ identityById, error 
 and the three screens raise their existing error state on it. When you add a
 read here, carry its `error` out; a feed that paints "Unknown horse" over every
 card is indistinguishable from one that is simply quiet.
+## `subscription.provider` is a presentation switch — never a gate input (ENG-1192)
+**Symptom risk:** a store-billed row (`app_store` / `play_store`) reaching Stripe code: the
+portal 302s to a customer that no longer bills, cancel marks our row `canceled` while Apple
+bills on, `/account` says "update your card". **Rule:** `hasAccess()` still decides
+entitlement first; `isStoreManaged()` / `isComplimentary()` in `app/(member)/account/billing.ts`
+only pick wording and affordances, and both `/api/subscription/cancel` and `/portal` answer
+`409 managed_by_store` **before** any Stripe call (the portal now reads the row BEFORE it checks
+Stripe config, so an unconfigured Stripe cannot mask the honest 409). A store row can carry a
+leftover `stripe_customer_id` from a former web purchase — never key a Stripe affordance on
+`hasCustomer` alone. `provider IS NULL` = `stripe`. The e2e seed drops `provider` on retry and
+the store test `test.skip`s on `!providerApplied` — never let it pass as a plain Stripe row.
+
+## The cancel route's pre-Stripe gate is a DENYLIST; the RPC's is an allowlist (ENG-1276, 19 Sep 2026)
+`POST /api/subscription/cancel` exits `409 managed_by_store` (app_store/play_store) and
+`409 complimentary` (promotional) before Stripe; everything else reaches Stripe. ENG-1221's
+`cancel_own_subscription()` accepts ONLY `provider = 'stripe'` and raises `42501` +
+`not_self_cancellable` otherwise (mapped to `409 not_self_cancellable`). Safe today only because
+the BE CHECK limits `provider` to those four values. → **Adding a fifth provider means adding its
+exit in the route BEFORE the Stripe call**, or that row gets `cancel_at_period_end` in Stripe and
+is then refused by the RPC (the route logs `[cancel] RPC refused not_self_cancellable …` when that
+happens).
+
+## `npm test` on this box: 10 marketing reds are the fixture, not you (19 Sep 2026)
+`10-marketing-site/deploy/src/mockup.html` is absent from this machine, so
+`test/marketing-shell.test.tsx` (9) + `test/marketing-home.test.tsx` (1) fail via `mockupOrThrow`
+on an untouched `origin/feature/iap-v1` too. `test/marketing-marquee.test.ts` can add an 11th
+(5s timeout right after `npm run build`); re-run it alone before believing it. → Baseline with
+`git stash` in the SAME worktree and compare the failing set; disclose it in the PR.
+
+## Marketing copy has a TWO-LAYER freeze against a mockup that is not on this machine
+`test/marketing-home.test.tsx` diffs the rendered page against the committed
+`test/fixtures/marketing-copy.json` (layer 1), and diffs that fixture against the
+designer's `10-marketing-site/deploy/src/mockup.html` (layer 2). `marketing-shell.test.tsx`
+does the same for `marketing.css`.
+
+**The mockup is not in any checkout here** — `10-marketing-site/` does not exist under
+`~/Documents`, and the older `dev-handover/StablePass-mockups/` tree is NOT it. So
+**10 tests fail out of the box, on an untouched base**, all with "mockup fixture not
+found". Baseline before you conclude you broke something:
+
+```sh
+git stash push -u && npx vitest run test/marketing-home.test.tsx test/marketing-shell.test.tsx; git stash pop
+```
+
+`$STABLEPASS_MARKETING_MOCKUP` points the guard at the file if you ever have it.
+
+## Changing marketing copy on purpose: EXTEND the freeze, never regenerate the fixture
+When the product deliberately diverges from the signed-off mockup (ENG-1324 moved the
+site off A$19 to "30 days free, then A$9.99"), regenerating `marketing-copy.json` is the
+obvious move and is wrong twice: it makes layer 1 circular (the page checked against
+itself, freezing whatever drifted in alongside), and layer 2 goes red anyway because the
+mockup still says $19.
+
+The pattern the file already established for ENG-729 is the one to follow — a per-block
+table applied to the EXPECTED runs before the comparison, with a pin that fails if an
+entry stops matching so the list cannot rot into a permanent hole. ENG-1324 added
+`PRICING_V2_COPY` (replacements **and** `to: null` deletions) next to `WAITLIST_ADDITIONS`.
+Two hardcoded COUNTS sit outside that mechanism and must be updated by hand when an item
+is added or removed: `marketing-home.test.tsx` "builds the FAQ from native
+details/summary" (was 7) and `marketing-sheets.test.tsx` "opens the FAQ sheet …" (was 13).
+
+## The marketing site ships `data-cta-mode="waitlist"` — all pricing copy is CSS-hidden
+`app/(marketing)/layout.tsx` hardcodes `data-cta-mode="waitlist"`, and marketing.css hides
+`.price-sec`, every `.launch-only` and every `.cta-trial` in that mode. So a screenshot of
+`/` shows **none** of the price/trial copy, and a copy change there is invisible in
+production until someone flips that attribute to `"trial"`. Screenshot with the attribute
+flipped in the page (`e2e/eng-1324-pricing-copy.spec.ts` does this) and say so in the PR —
+otherwise the evidence looks like the change did not land. Flipping the mode is a separate,
+un-ticketed launch-day action; do not assume shipping the copy ships the price.
+
+## The funnel is deliberately copy-free about price and trial — two tests enforce it
+`/start` and `/signin` carry no offer, and it is not an oversight: `test/sign-in-form.test.tsx`
+asserts `.auth-foot` matches no `/trial|30 days|free/i` (a "Start 30 days free" tail there
+produced duplicate accounts, ENG-583/1) and `test/trial-start-form.test.tsx` asserts the form
+body has no `/trial/i` or `/30 days/i`. A ticket telling you to add "30 days free" to the
+funnel is asking you to turn both red. Eligibility is per-person (`trial_used_at`), so a
+blanket promise there over-promises to the returning member most likely to be reading it.
+The honest figure is quoted at `/checkout`, from Stripe.
+
+## `vitest --reporter=basic` is not a reporter in this repo
+vitest 4.x: `--reporter=basic` throws "Failed to load custom Reporter from basic" before any
+test runs, which reads like a broken suite. Use the default reporter, or `--reporter=dot`.
+
+## A Stripe trial must be CARD FIRST — creating it on page load grants free access (ENG-1328, 2026-09-23)
+
+**Symptom:** the $0-invoice note above says "a $0 invoice yields a SetupIntent secret". A trial
+checkout that creates `subscriptions.create({ trial_period_days })` on mount and reads that
+secret gets **null** (`latest_invoice.confirmation_secret` is null) — and, worse, entitles the
+member before any card is entered.
+**Cause (measured in the sandbox, 2026-06-24.dahlia):** a trial sub is `status: "trialing"` at
+birth, its first invoice is `{ status: "paid", amount_due: 0 }`, and its card is collected via
+`subscription.pending_setup_intent`. Stripe fires `invoice.paid` for that A$0 invoice (O2), and
+the be `stripe-webhook` → RevenueCat → B6 chain turns that into `active` + `trial_used_at`. So a
+page view = 30 days free with no card, and the trial is burnt. A `trialing` sub is also never
+`incomplete`, so an incomplete-only reuse list misses it.
+**Do this:** POST 1 returns a standalone `setupIntents.create({ customer, usage: "off_session",
+metadata: { app_user_id, purpose: "stablepass_trial" } })` secret (`intentType: "setup"`; the
+screen calls `confirmSetup` — `confirmPayment` rejects `seti_`). After confirm, POST 2 finds the
+SUCCEEDED SetupIntent and creates the sub with `default_payment_method` + `trial_period_days`
+(idempotency key = the SetupIntent id). List subs with `status: "all"`; any of ours
+`trialing`/`active`/`past_due` → 409, and any with `trial_start` → no second trial.
+
+## `/explore` IS e2e-able locally now — serve the be edge functions yourself (ENG-1593, 29 Sep 2026)
+**Supersedes "The local `feed` edge function is a STUB" above.** The local stack runs no
+edge runtime by default (`docker ps` shows no `supabase_edge_runtime_*`), so every
+`edgeFetch` 404s/401s and Explore looks empty. Serve the REAL functions from the be
+checkout on the ticket's base: `cd ../stablepass-be-release && ../stablepass-be/node_modules/.bin/supabase functions serve --no-verify-jwt`
+(background it). `feed`, `post-media` and `playback` then work end to end.
+Three traps once it is up:
+- **Signed urls point at `http://kong:8000`** (the edge runtime's own `SUPABASE_URL`),
+  which the browser cannot resolve — every minted photo/poster is a broken image. In
+  Playwright, `page.route(/^http:\/\/kong:8000\//, …)` + `route.fetch({ url: <rewritten to 127.0.0.1:54321> })` + `route.fulfill`.
+  (`route.continue({ url })` to a different host did not work.) Wrap it in try/catch —
+  a closing context throws "Fetch response has been disposed".
+- **The feed is unseen-first and every load writes impressions**, so your seeded posts
+  sink below the shared DB's fixtures after ONE load. Delete the member's `impression`
+  rows (service role) before each load you measure or assert on.
+- `feed_page` orders by `published_at desc` — seed with `now - n seconds`, not a future time.
+
+## `lsof` cannot see sockets in the agent sandbox — `playwright.config.ts` never reuses a `next start` (ENG-1593)
+`lsof -ti :<port>` returns nothing (even unsandboxed), so the config's ownership check
+always says "not mine" and tries to start its OWN dev server on your port. To drive a
+production build (`next build && next start --port N`), verify the server's cwd with
+`ls -l /proc/<pid>/cwd` (pid from `ss -ltnp`) and run with a throwaway config OUTSIDE the
+commit (`use.baseURL` only, no `webServer`). Perf numbers from a dev server are meaningless.
+
+## Streamed Suspense content is in the DOM BEFORE it is visible (ENG-1593)
+A server-rendered boundary arrives as `<div hidden id="S:0">…` and is swapped in later —
+and React 19.2 THROTTLES reveals (up to ~300ms after first paint, see `$RT` in the inline
+`$RC` script). So `querySelector(".post-web")`, an `<img>` `load` event, or even
+`naturalWidth > 0` can all fire for a card the member cannot see yet. Measure and assert
+VISIBILITY: `el.closest("[hidden]") === null` (sampled per animation frame), and in
+Playwright use `toBeVisible()`. The first cut of ENG-1593's perf spec credited the
+server render with ~250ms it had not earned this way.
+
+## A member-wide `loading.tsx` turns `notFound()` into HTTP 200 (ENG-1593)
+`app/(member)/loading.tsx` streams the shell before the page's data exists, so the status
+line is already sent when `horses/[id]` / `trainers/[id]` call `notFound()`: they now
+render the not-found UI with `<meta name="robots" content="noindex">` inside a **200**
+(verified: base 404, branch 200). The layout's `redirect("/signin")` is ABOVE the boundary
+and is still a real 307. If a ticket needs a real 404 status on a member page, it needs
+that page OUT of the member-wide loading boundary.
+
+## The marketing build guard reads COMMENTS through `.next` sourcemaps (ENG-1593)
+`test/marketing-marquee.test.ts` "ships no confirmation copy in the built output" scans
+`.next`, including `*.js.map` `sourcesContent` — so the phrase "on its way" in a code
+COMMENT anywhere in the app (ENG-1593's skeleton comment said "data is still on its
+way") reds it after a build. Grep your diff for the guard's banned phrases before
+building.
+
+## Local edge functions are NOT served by default — serve them from a be worktree (ENG-1599)
+With only `supabase start` running, `POST /functions/v1/post-media` and `/playback` answer
+**503**, so the BFF's batch/poster mints fail and every multi-slide card silently renders
+single. `npx supabase functions serve` (the CLI is not on PATH; npx works) from a be
+checkout on the branch whose contract you need (e.g. a `git worktree add --detach` of
+`origin/feature/release-v1`) brings them up on the running stack. `posterOnly` mints work
+without Mux keys; the STREAM mint does not (no signing key locally) — stub only that half.
+- **Trap:** locally-served functions sign Storage urls against the container-internal
+  `http://kong:8000/…`, which the browser cannot resolve — every minted poster is a broken
+  image, and `img.complete === true` still passes (a broken image is "complete"). Route
+  `http://kong:8000/**` to `http://127.0.0.1:54321` in the spec, and assert
+  `naturalWidth > 0`, never `complete`.
+
+## Playwright Firefox has NO H.264 decoder — it cannot PLAY a Mux stream (ENG-1599)
+`MediaSource.isTypeSupported('video/mp4; codecs="avc1.42E01E"')` is false in Playwright's
+Firefox build, and every Mux rendition is H.264, so a real HLS stream fatals into the pill.
+Firefox still proves the hls.js TRANSPORT (the manifest XHR). To test playback behaviour
+(ended → auto-advance, one player at a time) stub the mint with a VP8 WebM (plays natively;
+`e2e/fixtures/eng-1599-clip.webm`, made with sharp frames piped into Playwright's bundled
+`~/.cache/ms-playwright/ffmpeg-*/ffmpeg-linux -f image2pipe -c:v mjpeg -i pipe:0 -c:v vp8`).
+
+## `subscription.status` is `active | lapsed | canceled` — there is no `expired` (ENG-1599)
+A lapsed-member e2e must set `status: "lapsed"`; `"expired"` violates the CHECK.
+
+## The batch's `slideCounts` map carries `videoCount` for VIDEO posts (ENG-1599)
+`resolvePostDisplayUrls` now sends video post ids in the same `{postIds}` batch and puts
+the be's `{postId, videoCount}` into `PostDisplayMedia.slideCounts`; `postIntrinsics`
+splits it by `post.type` (`videoCount` for video, `slideCount` for photo). That is why no
+screen's plumbing changed — but a test asserting the batch body is PHOTO ids only is stale.
+
+## `next dev` StrictMode double-loads member lists — per-mount mint counts double (ENG-1599)
+Every profile/list feed fetches page 1 twice in dev (the page's own `?posterOnly=1` mints
+appear twice), so a carousel mounts twice and "mint index 1 exactly once" reads as twice.
+Assert WHICH indices were minted (a set), not how many requests; and never reset an
+`asked` ref unconditionally in an effect, or StrictMode's effect re-run re-arms it.
+
+## Perf e2e: SSR `posterOnly` mints are invisible to Playwright — count them in the edge-function log (ENG-1633)
+Explore page 1 is SSR'd (ENG-1593), so its poster mints go server → edge `playback`
+directly, and a browser request counter reads 0 on BOTH builds. To prove "0 posterOnly",
+serve the be functions yourself (`npx supabase functions serve` from a be worktree) and
+count `serving the request with supabase/functions/playback` lines per run window in its
+log. Measured: before 3 per load, after 0. Also note that the perf spec deletes its fixture in
+`finally`: a worker that dies mid-run leaves a `Perfpace <stamp>` horse and 16 posts in
+the local DB, and those re-rank every later explore screenshot.
+
+## Client-minted expiries are SERVER time — never compare them raw to `Date.now()` (ENG-1633)
+`/playback` returns `expiresAt` from the server clock. A member's clock a few minutes
+ahead made every pre-minted url look expired, and the re-mint timer spun at its 1 s
+floor. Convert to a local deadline with the response `Date` header
+(`Date.now() + (expiresAt - Date(header))`), and never store a url already inside the
+re-mint margin. Also, any hook that arms timers from an async result must invalidate
+in-flight work on UNMOUNT (a generation bump), not just clear the existing timers.
+
+## A marketing copy change touches FOUR copy freezes, not one (ENG-1707)
+Changing any string in the price card or the FAQ cost answer needs matching edits in
+`test/marketing-home.test.tsx` (`PRICING_V2_COPY` — `to` accepts `string[]` when one
+mockup run becomes several rendered runs), `test/marketing-sheets.test.tsx` (the sheet's
+verbatim cost answer), and `e2e/eng-1324-pricing-copy.spec.ts` (`.price-intro` is now TWO
+elements, asserted as an array). The ticket surface usually lists only the components.
+`matches the mockup block for block` and the `marketing-shell` CSS guards fail on any
+machine without `10-marketing-site/deploy/src/mockup.html` — pre-existing, not yours.
