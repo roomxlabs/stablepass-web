@@ -59,6 +59,10 @@ export default function Pricing() {
           </div>
           <p className="price-launch">Start with 30 days free.</p>
           <p className="price-intro">Then A$9.99 per month. Cancel anytime. No lock-in contract.</p>
+          {/* ENG-1707 (TG-W1): one free trial in total per member, across the web, the
+              App Store and Google Play, and across delete-and-re-register with the same
+              email. Said beside the trial so the offer never reads as unlimited. */}
+          <p className="price-intro">New members only · one free trial per member.</p>
           <ul className="price-list">
             {INCLUDED.map((item) => (
               <li key={item}>

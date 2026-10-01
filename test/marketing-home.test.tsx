@@ -451,7 +451,7 @@ describe("marketing home — copy matches the frozen fixture", () => {
  *   - the deviation is auditable in one place, in review, instead of being
  *     spread across five TSX files and invisible.
  */
-const PRICING_V2_COPY: Record<string, { from: string; to: string | null }[]> = {
+const PRICING_V2_COPY: Record<string, { from: string; to: string | string[] | null }[]> = {
   "header#top.hero": [
     { from: "LAUNCH OFFER \u00b7 $9/MONTH FOR YOUR FIRST 6 MONTHS", to: "30 DAYS FREE \u00b7 THEN A$9.99/MONTH" },
     { from: "Launch Offer \u2014 $9/month for your first 6 months.", to: "Start with 30 days free." },
@@ -475,9 +475,11 @@ const PRICING_V2_COPY: Record<string, { from: string; to: string | null }[]> = {
     // the mockup gives them as two runs. Both move.
     { from: "$19", to: "A$9.99" },
     { from: "Launch Offer \u2014 $9/month for your first 6 months.", to: "Start with 30 days free." },
+    // ENG-1707 (TG-W1): the run under the trial line now carries a second line,
+    // the one-trial-per-member qualifier, so this one mockup run becomes two.
     {
       from: "$19/month thereafter. Cancel anytime. No lock-in contract.",
-      to: "Then A$9.99 per month. Cancel anytime. No lock-in contract.",
+      to: ["Then A$9.99 per month. Cancel anytime. No lock-in contract.", "New members only · one free trial per member."],
     },
     { from: "Get the $9/month offer", to: "Start your 30 days free" },
     {
@@ -505,7 +507,8 @@ const PRICING_V2_COPY: Record<string, { from: string; to: string | null }[]> = {
     // a regression — and now carries the same-price-everywhere promise.
     {
       from: "stablepass. is $9 per month for your first 6 months, then $19 per month thereafter. Cancel anytime.",
-      to: "stablepass. is 30 days free, then A$9.99 per month. Cancel anytime. The price is the same on the website, the App Store and Google Play.",
+      // ENG-1707 (TG-W1) adds the one-trial-per-member sentence to the same answer.
+      to: "stablepass. is 30 days free, then A$9.99 per month. Cancel anytime. The price is the same on the website, the App Store and Google Play. The free trial is for new members — one per member, whether you start it on the web, the App Store or Google Play.",
     },
   ],
 };
@@ -530,7 +533,7 @@ function withPricingV2(signature: string, runs: string[]): { expected: string[];
       continue;
     }
     const [entry] = pending.splice(at, 1);
-    if (entry.to !== null) expected.push(entry.to);
+    if (entry.to !== null) expected.push(...(Array.isArray(entry.to) ? entry.to : [entry.to]));
   }
 
   return { expected, unused: pending.map((entry) => entry.from) };
