@@ -36,7 +36,7 @@ const FAQS = [
   {
     launchOnly: true,
     q: "How much does stablepass. cost?",
-    a: "stablepass. is 30 days free, then A$9.99 per month. Cancel anytime. The price is the same on the website, the App Store and Google Play.",
+    a: "stablepass. is 30 days free, then A$9.99 per month. Cancel anytime. The price is the same on the website, the App Store and Google Play. The free trial is for new members — one per member, whether you start it on the web, the App Store or Google Play.",
   },
   {
     q: "What do subscribers receive?",

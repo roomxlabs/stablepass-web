@@ -278,7 +278,7 @@ describe("dialog shell — the focus contract", () => {
     );
     expect(cost, "the sheet no longer answers what stablepass. costs").toBeDefined();
     expect(cost!.querySelector("p.a")?.textContent).toBe(
-      "stablepass. is 30 days free, then A$9.99 per month. Cancel anytime. The price is the same on the website, the App Store and Google Play.",
+      "stablepass. is 30 days free, then A$9.99 per month. Cancel anytime. The price is the same on the website, the App Store and Google Play. The free trial is for new members — one per member, whether you start it on the web, the App Store or Google Play.",
     );
 
     const all = sheet.textContent ?? "";

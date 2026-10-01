@@ -45,7 +45,11 @@ test("pricing card — the price, the trial and the same-price-everywhere line",
   // right, and a green pixel is not evidence. These pin the exact strings.
   await expect(card.locator(".price-num")).toContainText("A$9.99");
   await expect(card.locator(".price-launch")).toHaveText("Start with 30 days free.");
-  await expect(card.locator(".price-intro")).toHaveText("Then A$9.99 per month. Cancel anytime. No lock-in contract.");
+  // ENG-1707 added the one-trial qualifier as a second `.price-intro` line.
+  await expect(card.locator(".price-intro")).toHaveText([
+    "Then A$9.99 per month. Cancel anytime. No lock-in contract.",
+    "New members only · one free trial per member.",
+  ]);
   await expect(card.locator(".price-fine")).toContainText("the App Store and Google Play");
   await expect(card).not.toContainText("$19");
   await expect(card).not.toContainText("6 months");
@@ -79,7 +83,7 @@ test("FAQ — the promo question is gone, the cost answer carries the new price"
   const cost = faq.locator("details", { hasText: "How much does stablepass. cost?" });
   await cost.locator("summary").click();
   await expect(cost.locator("p.a")).toHaveText(
-    "stablepass. is 30 days free, then A$9.99 per month. Cancel anytime. The price is the same on the website, the App Store and Google Play.",
+    "stablepass. is 30 days free, then A$9.99 per month. Cancel anytime. The price is the same on the website, the App Store and Google Play. The free trial is for new members — one per member, whether you start it on the web, the App Store or Google Play.",
   );
 
   await faq.screenshot({ path: `${REVIEW}/eng-1324-faq.png` });

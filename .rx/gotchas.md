@@ -2823,3 +2823,12 @@ floor. Convert to a local deadline with the response `Date` header
 (`Date.now() + (expiresAt - Date(header))`), and never store a url already inside the
 re-mint margin. Also, any hook that arms timers from an async result must invalidate
 in-flight work on UNMOUNT (a generation bump), not just clear the existing timers.
+
+## A marketing copy change touches FOUR copy freezes, not one (ENG-1707)
+Changing any string in the price card or the FAQ cost answer needs matching edits in
+`test/marketing-home.test.tsx` (`PRICING_V2_COPY` — `to` accepts `string[]` when one
+mockup run becomes several rendered runs), `test/marketing-sheets.test.tsx` (the sheet's
+verbatim cost answer), and `e2e/eng-1324-pricing-copy.spec.ts` (`.price-intro` is now TWO
+elements, asserted as an array). The ticket surface usually lists only the components.
+`matches the mockup block for block` and the `marketing-shell` CSS guards fail on any
+machine without `10-marketing-site/deploy/src/mockup.html` — pre-existing, not yours.
