@@ -50,8 +50,9 @@ A small amount of information survives deletion because Stablepass is required t
 - Records of payments already made, including invoices, are retained by Stablepass and its payment provider to meet tax, accounting and financial record-keeping obligations. As part of deletion Stablepass asks its payment provider to unlink those records from your account, so that they are no longer connected to your profile.
 - A record that a deletion happened, with the date and an internal identifier for the deleted account, is retained so Stablepass can demonstrate the request was honoured. That identifier is not linked to any remaining profile and is not used to contact you.
 - A one-way, irreversible form of the phone number on the deleted account is retained, so that a new account registered with that number does not have it stored against it. It cannot be read back or used to contact you.
+- If the deleted account used a free trial, a one-way, irreversible form of its email address, together with the date the free trial was first used, is retained indefinitely, only so that a new account registered with that email address does not receive a second free trial. It is not used for anything else, it cannot be turned back into the email address, and it cannot be used to contact you. If the deleted account never used a free trial, this one-way form of its email address is not kept.
 
-The email address on the deleted account is released, and may be used to register again.
+The email address on the deleted account is released, and may be used to register again. If the deleted account used a free trial, a new account registered with that email address can still subscribe, but is not offered another free trial.
 
 <!-- LEGAL REVIEW REQUIRED (ENG-1337): proposed wording drafted by an agent, not approved. Do not ship without client/legal sign-off. -->
 
